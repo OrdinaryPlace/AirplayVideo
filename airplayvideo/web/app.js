@@ -248,6 +248,7 @@ function renderUsage(){
   for(const button of document.querySelectorAll('[data-stop]'))button.onclick=()=>act('stop',{receiver:button.dataset.stop},true);
   $('previewSection').hidden=mode!=='browser'||!runtime.browser_open;
   previewWanted=mode==='browser'&&runtime.browser_open&&!$('playback').hidden;
+  if(!previewWanted&&document.fullscreenElement===$('previewSection'))document.exitFullscreen().catch(()=>{});
   if(previewWanted&&!rfb&&!previewConnecting)connectPreview();
   if(!previewWanted&&rfb){rfb.disconnect();rfb=null;}
   updateButtons();

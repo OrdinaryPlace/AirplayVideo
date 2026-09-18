@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.1.3
+
+- Return to playback controls when an expanded browser preview closes.
+
 ## 0.1.2
 
 - Preserve unchanged source-mode buttons and TV controls during status polling,
