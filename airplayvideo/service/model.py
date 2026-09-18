@@ -181,7 +181,7 @@ def patch_setup(current, changes, expected):
         for key, value in fields.items():
             check(key in allowed[section], "Unknown setting")
             check(current[section][key] == expected[section][key] or current[section][key] == value,
-                  "This setting changed in another window. Reopen Settings before saving it again.")
+                  "This setting changed in another window. Use Reset this page, then make your edit again.")
             result[section][key] = copy.deepcopy(value)
     return validate_setup(result)
 

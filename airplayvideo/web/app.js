@@ -2,7 +2,7 @@ import RFB from '../novnc/core/rfb.js';
 
 const $ = id => document.getElementById(id);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let state, draft, setupBase, step = 0, mode = 'browser', busy = false, settingsSaving = false;
+let state, draft, setupBase, step = 0, mode = 'browser', busy = false, busyAction = '', settingsSaving = false;
 let chosenTVs = new Set(), selectionDirty = false, discoveredTVs = [], discoveredTuners = [];
 let rfb = null, previewConnecting = false, previewWanted = false, previewExpanded = false;
 const stepNames = ['Sources', 'Configure', 'Pair TVs', 'Picture & sound', 'Finish'];
@@ -366,24 +366,26 @@ function browserKindChanged(){
 function updateButtons(){
   if(!state)return;
   $('play').disabled=busy||!chosenTVs.size||!state.setup.complete;
-  $('play').textContent=busy?'Starting…':'Play on selected TVs';
+  $('play').textContent=busy&&busyAction==='play'?'Starting…':'Play on selected TVs';
   const names = state.receivers.filter(receiver=>chosenTVs.has(receiver.id)).map(receiver=>receiver.name);
   $('selectionHint').textContent = names.length ? 'Play on: ' + names.join(', ') : 'Choose one or more TVs above.';
   $('openBrowser').disabled=busy;
-  $('stopAll').disabled=!busy&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
+  $('openBrowser').textContent=busy&&busyAction==='open_browser'?'Opening browser…':'Open browser';
+  $('closeBrowser').textContent=busy&&busyAction==='close_browser'?'Closing browser…':'Close browser';
+  $('stopAll').disabled=!(busy&&busyAction==='play')&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
   if (draft && !$('wizard').hidden) settingsStatus();
 }
 
 async function act(action,body={},interrupt=false){
   message();
-  if(!interrupt){busy=true;updateButtons();}
+  if(!interrupt){busy=true;busyAction=action;updateButtons();}
   try{
     state=await api(`api/actions/${action}`,body);
     if(action==='play'){selectionDirty=false;chosenTVs=new Set(state.runtime.targets);}
     if(action==='stop'){if(body.receiver)chosenTVs.delete(body.receiver);else chosenTVs.clear();selectionDirty=false;}
     renderUsage();
   }catch(error){message(error.message);await refresh().catch(()=>{});}
-  finally{if(!interrupt){busy=false;updateButtons();}}
+  finally{if(!interrupt){busy=false;busyAction='';updateButtons();}}
 }
 
 async function connectPreview(){
