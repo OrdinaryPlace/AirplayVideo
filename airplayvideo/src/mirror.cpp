@@ -239,6 +239,25 @@ void mirror(const Credentials &c, uint16_t timing_port, int seconds,
 } // namespace lab
 
 namespace lab {
+Json audio_timing_setup(int lead_ms) {
+  require(lead_ms>=500&&lead_ms<=2000,"Invalid audio presentation lead");
+  const int samples=lead_ms*44100/1000;
+  // A receiver can clamp the sync packet's latency to the SETUP bounds.
+  // Request exactly the shared A/V buffer, not an unrelated 250–2000 ms range.
+  return {{"latencyMin",samples},{"latencyMax",samples},{"usingScreen",true}};
+}
+Bytes audio_sync_packet(uint64_t presentation_epoch,int64_t pts_us,
+                        uint32_t timestamp,int lead_ms,bool first) {
+  require(pts_us>=0,"Negative audio presentation timestamp");
+  require(lead_ms>=500&&lead_ms<=2000,"Invalid audio presentation lead");
+  Bytes sync(20); sync[0]=first?0x90:0x80; sync[1]=0xd4; be(sync,2,7,2);
+  // Field 4 is the sample playing at the NTP instant; field 16 is the
+  // corresponding packet being sent ahead. Both must describe the same clock.
+  be(sync,4,timestamp-uint32_t(lead_ms*44100/1000),4);
+  be(sync,8,presentation_epoch+ntp_delta(pts_us)-ntp_delta(uint64_t(lead_ms)*1000),8);
+  be(sync,16,timestamp,4);
+  return sync;
+}
 Bytes audio_packet(std::span<const uint8_t> pcm, std::span<const uint8_t> key,
                    uint64_t nonce, uint16_t sequence, uint32_t timestamp,
                    uint32_t ssrc, bool first) {
@@ -277,8 +296,9 @@ public:
     key_=random_bytes(32);
     Json stream={{"type",96},{"audioFormat",0x800},{"audioMode","default"},{"ct",1},
       {"sr",44100},{"spf",352},{"isMedia",true},{"controlPort",port},
-      {"latencyMin",11025},{"latencyMax",88200},{"shk",Json::binary(key_)},
+      {"shk",Json::binary(key_)},
       {"streamConnectionID",random_id()},{"supportsDynamicStreamID",false}};
+    stream.update(audio_timing_setup(lead_ms_));
     auto reply=rtsp.plist("SETUP",uri,{{"streams",Json::array({stream})}});
     int cp=0,dp=0;
     for(const auto &s:reply.value("streams",Json::array())) if(s.value("type",0)==96) { cp=s.value("controlPort",0); dp=s.value("dataPort",0); }
@@ -308,10 +328,7 @@ public:
   void send(const MediaPacket &p) {
     uint32_t timestamp=origin_+uint32_t((uint64_t(p.pts_us)*44100)/1000000);
     if(p.pts_us-last_sync_>=1000000) {
-      Bytes sync(20); sync[0]=first_?0x90:0x80; sync[1]=0xd4; be(sync,2,7,2);
-      be(sync,4,timestamp-uint32_t(lead_ms_*44100/1000),4);
-      uint64_t ntp=epoch_+ntp_delta(p.pts_us)-ntp_delta(uint64_t(lead_ms_)*1000);
-      be(sync,8,ntp,8); be(sync,16,timestamp,4);
+      auto sync=audio_sync_packet(epoch_,p.pts_us,timestamp,lead_ms_,first_);
       require(sendto(control_.fd(),sync.data(),sync.size(),0,reinterpret_cast<sockaddr*>(&peer_control_),sizeof(peer_control_))==ssize_t(sync.size()),"Audio synchronization send failed");
       last_sync_=p.pts_us;
     }

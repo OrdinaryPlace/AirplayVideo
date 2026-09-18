@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.1.6
+
+- Request the selected playback buffer in AirPlay audio SETUP as well as the
+  shared audio/video timing. The previous audio request allowed a different
+  receiver latency regardless of the selected buffer. Physical lip-sync
+  acceptance remains receiver-dependent and needs a listening check.
+- Remove the scrollbar when filling YouTube video; restore normal scrolling
+  for navigation and consent dialogs. Hide the app scrollbar in expanded preview.
+- Keep the first-run wizard and add directly accessible Settings pages afterward,
+  with isolated field saves, retained drafts, per-page reset and conflict checks.
+- Preserve open browser sessions and avoid tuner/MQTT reconnects for unrelated
+  settings changes. Resolution changes still close the browser.
+- Put Play below TV selection and show the selected TV names beside the action.
+
 ## 0.1.5
 
 - Run ordinary sandboxed Chrome without remote debugging, restoring the browser

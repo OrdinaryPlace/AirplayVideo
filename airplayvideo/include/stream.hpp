@@ -45,6 +45,9 @@ void mirror_stream(const Credentials &, Media &, uint16_t timing_port,
 Bytes audio_packet(std::span<const uint8_t> pcm, std::span<const uint8_t> key,
                    uint64_t nonce, uint16_t sequence, uint32_t timestamp,
                    uint32_t ssrc, bool first);
+Json audio_timing_setup(int lead_ms);
+Bytes audio_sync_packet(uint64_t presentation_epoch, int64_t pts_us,
+                        uint32_t timestamp, int lead_ms, bool first);
 Json media_capabilities();
 int run_stream(const Json &config, const std::filesystem::path &receivers,
                std::atomic<bool> &stop, const Note &note);

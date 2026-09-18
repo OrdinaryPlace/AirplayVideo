@@ -4,7 +4,7 @@ Send a browser page or an HDHomeRun channel to your Apple TVs from Home Assistan
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.1.5.** This is an independent implementation in a new
+**Experimental, version 0.1.6.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -43,6 +43,13 @@ The separate five-step **Setup** wizard handles:
 Setup changes require playback to be stopped. Settings do not start playback.
 Use **Manage pages** on the playback page to add named browser shortcuts.
 
+After setup, **Settings** has direct navigation between pages. **Save this page**
+saves only edited fields; drafts on other pages remain available while you move
+around the app. A dot marks unsaved pages. **Reset this page** restores its saved
+values. Picture, sound and browser-default edits keep the browser session open;
+changing output resolution or disabling browser mode closes it. Settings are
+applied to the next playback session.
+
 ## Use every day
 
 Choose a saved page, YouTube video, Watch Later, web address, or channel.
@@ -51,9 +58,10 @@ Select the TVs and press **Play on selected TVs**. Use **Stop** for one TV or
 the last TV closes the source and releases its tuner.
 
 The browser preview lets you navigate, sign in, paste text, and operate the
-container browser. In **Setup → Configure**, choose **Open browser to sign in**,
+container browser. In **Settings → Browser & live TV** (or **Setup → Configure**
+on first use), choose **Open browser to sign in**,
 then **Full screen preview**. Use **A+ / A−** to enlarge or reduce the page;
-**100%** resets its zoom. **Back to Setup** keeps the same browser session.
+**100%** resets its zoom. **Back to Settings** keeps the same browser session.
 The expanded layout also works when the HA browser cannot enter native fullscreen.
 Preview audio is sent to the TVs, not the preview tab.
 

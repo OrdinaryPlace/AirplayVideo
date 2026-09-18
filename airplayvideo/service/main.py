@@ -11,7 +11,7 @@ import time
 import uuid
 import aiohttp
 from aiohttp import web
-from .model import Store, VERSION, UserError, check, identifier, local_address, validate_setup, atomic_json
+from .model import Store, VERSION, UserError, check, identifier, local_address, validate_setup, patch_setup, atomic_json
 from .browser import Browser
 from .controller import PairingEngine, Controller
 from .hdhomerun import Channels, inspect as inspect_tuner, discover as discover_tuners
@@ -153,29 +153,37 @@ class Application:
             self.require_idle()
             data = await request.json()
             action = request.match_info["action"]
-            if action == "save":
-                settings = validate_setup(data)
+            if action in {"save", "update"}:
+                previous = self.store.data["setup"]
+                settings = (patch_setup(previous, data.get("changes"), data.get("expected"))
+                            if action == "update" else validate_setup(data))
                 encoder = settings["video"]["encoder"]
                 check(encoder == "auto" or encoder in self.controller.capabilities["encoders"], "Choose an encoder available on this host")
                 for tuner in settings["hdhomerun"]["devices"]:
-                    verified = await inspect_tuner(self.session, tuner["address"])
-                    check(verified["id"] == tuner["id"], "A tuner identity changed; find the device again")
+                    if not any(t["id"] == tuner["id"] and t["address"] == tuner["address"] for t in previous["hdhomerun"]["devices"]):
+                        verified = await inspect_tuner(self.session, tuner["address"])
+                        check(verified["id"] == tuner["id"], "A tuner identity changed; find the device again")
                 self.require_idle()
-                await self.browser.close()
+                if (previous["video"]["resolution"] != settings["video"]["resolution"] or
+                        previous["modes"]["browser"] and not settings["modes"]["browser"]):
+                    await self.browser.close()
                 self.store.setup(settings)
                 if settings["modes"]["browser"] and not self.store.data["pages"]:
                     page = self.store.save_page({"name": "Home", "url": settings["browser"]["home_url"]})
                     for receiver in self.store.data["receivers"]:
                         self.store.data["selected_pages"][receiver["id"]] = page["id"]
                     self.store.save()
-                await self.channels.refresh()
+                if (not previous["complete"] or previous["hdhomerun"] != settings["hdhomerun"] or
+                        previous["modes"]["hdhomerun"] != settings["modes"]["hdhomerun"]):
+                    await self.channels.refresh()
                 for receiver in self.store.data["receivers"]:
                     first = next((r for r in self.channels.rows if r["supported"]), None)
                     if first:
                         self.store.data["selected_channels"].setdefault(receiver["id"], first["id"])
                 self.store.save()
-                await self.ha.close()
-                await self.ha.start()
+                if not previous["complete"] or previous["home_assistant"] != settings["home_assistant"]:
+                    await self.ha.close()
+                    await self.ha.start()
                 self.ha.refresh()
             elif action == "open_browser":
                 # First-run sign-in needs no tuner, receiver or saved setup.

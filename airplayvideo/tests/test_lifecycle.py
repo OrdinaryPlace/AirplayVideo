@@ -160,3 +160,52 @@ async def test_ingress_and_mutation_boundary(tmp_path):
             response = await client.get('/preview?ticket=invalid')
             assert response.status == 409
             assert not application.store.data['setup']['complete']
+
+
+@pytest.mark.asyncio
+async def test_isolated_settings_keep_browser_tuner_and_mqtt_session(tmp_path, monkeypatch):
+    from service import main
+    inspect = AsyncMock(side_effect=UserError('Existing tuner is offline'))
+    monkeypatch.setattr(main, 'inspect_tuner', inspect)
+    store = Store(tmp_path)
+    settings = default_setup()
+    settings['modes']['hdhomerun'] = True
+    settings['hdhomerun']['devices'] = [dict(id='ABCDEF12', address='192.168.250.10', name='Fixture')]
+    store.setup(settings)
+    page = store.save_page(dict(name='Example', url='https://example.com'))
+    async with ClientSession() as session:
+        application = Application(store,session)
+        application.browser.close = AsyncMock()
+        application.channels.refresh = AsyncMock()
+        application.ha.close = AsyncMock()
+        application.ha.start = AsyncMock()
+        async with TestClient(TestServer(make_app(application,standalone=True))) as client:
+            async def edit(changes, expected):
+                return await client.post('/api/setup/update', json=dict(changes=changes,expected=expected),headers={'X-AirplayVideo':'1'})
+            response = await edit({'audio':{'latency_ms':750}}, {'audio':{'latency_ms':1500}})
+            assert response.status == 200
+            assert Store(tmp_path).data['setup']['audio']['latency_ms'] == 750
+            assert Store(tmp_path).page(page['id']) == page
+            inspect.assert_not_awaited()
+            application.browser.close.assert_not_awaited()
+            application.channels.refresh.assert_not_awaited()
+            application.ha.close.assert_not_awaited()
+            application.ha.start.assert_not_awaited()
+            before = store.path.read_bytes()
+            response = await edit({'audio':{'latency_ms':1000}}, {'audio':{'latency_ms':1500}})
+            assert response.status == 409 and store.path.read_bytes() == before
+            application.controller.stream = object()
+            response = await edit({'audio':{'latency_ms':1000}}, {'audio':{'latency_ms':750}})
+            assert response.status == 409 and store.path.read_bytes() == before
+            application.controller.stream = None
+            response = await edit({'video':{'resolution':'720p'}}, {'video':{'resolution':'1080p'}})
+            assert response.status == 200
+            application.browser.close.assert_awaited_once()
+            response = await edit({'home_assistant':{'enabled':False}}, {'home_assistant':{'enabled':True}})
+            assert response.status == 200
+            application.ha.close.assert_awaited_once()
+            application.ha.start.assert_awaited_once()
+            response = await edit({'hdhomerun':{'devices':[dict(id='ABCDEF12',address='192.168.250.11',name='Fixture')]}}, {'hdhomerun':settings['hdhomerun']})
+            assert response.status == 409
+            inspect.assert_awaited_once()
+            assert store.data['setup']['hdhomerun'] == settings['hdhomerun']

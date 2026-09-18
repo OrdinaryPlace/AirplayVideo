@@ -71,5 +71,5 @@ RUN ldconfig && dpkg-query -W > /opt/dependency-sources/debian-packages.txt
 WORKDIR /opt/airplayvideo
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 EXPOSE 8099 18200-18215/udp
-LABEL io.hass.name="AirplayVideo" io.hass.description="Browser and HDHomeRun video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.1.5"
+LABEL io.hass.name="AirplayVideo" io.hass.description="Browser and HDHomeRun video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.1.6"
 CMD ["python3", "-m", "service.main"]

@@ -22,9 +22,9 @@
     <div id="error" class="error" role="alert" hidden></div>
     <section id="loading" class="card"><h1>Opening AirplayVideo</h1><p>Connecting to the app…</p></section>
     <section id="wizard" hidden>
-      <div class="wizard-heading"><div><p class="eyebrow">APPLICATION SETUP</p><h1 id="wizardTitle">Choose your sources</h1><p id="wizardDescription" class="muted"></p></div><span id="stepCount" class="badge"></span></div>
+      <div class="wizard-heading"><div><p id="settingsLabel" class="eyebrow">APPLICATION SETUP</p><h1 id="wizardTitle">Choose your sources</h1><p id="wizardDescription" class="muted"></p></div><span id="stepCount" class="badge"></span></div>
       <ol id="steps" class="steps" aria-label="Setup progress"></ol>
-      <form id="setupForm" class="card wizard-card"><div id="stepContent"></div><div class="wizard-footer"><button type="button" id="previous">Back</button><button type="submit" id="next" class="primary">Continue</button></div></form>
+      <form id="setupForm" class="card wizard-card"><div id="stepContent"></div><p id="settingsStatus" class="muted" role="status" hidden></p><div class="wizard-footer"><button type="button" id="previous">Back</button><button type="button" id="discardSettings" hidden>Reset this page</button><button type="submit" id="next" class="primary">Continue</button></div></form>
     </section>
     <section id="playback" hidden>
       <div class="play-grid">
@@ -45,11 +45,10 @@
             <label class="check-row"><input id="favoritesOnly" type="checkbox"> Favorites only</label>
             <p id="channelHint" class="muted"></p>
           </div>
-          <div class="play-actions"><button id="play" class="primary">Play on selected TVs</button><button id="stopAll" class="danger-outline">Stop all</button></div>
-          <p id="nowPlaying" class="muted" aria-live="polite">Choose a source and one or more TVs.</p>
         </section>
-        <section class="card tv-card"><div class="card-header"><h2>TVs</h2><button id="tvSetup" class="text-button">Manage in Setup</button></div><p class="muted tight">The same source plays on every selected TV.</p><div id="tvList"></div></section>
+        <section class="card tv-card"><div class="card-header"><h2>Where to play</h2><button id="tvSetup" class="text-button">Manage TVs</button></div><p class="muted tight">The same source plays on every selected TV.</p><div id="tvList"></div></section>
       </div>
+      <div class="card playback-footer"><p id="selectionHint" class="muted" aria-live="polite">Choose one or more TVs above.</p><div class="play-actions"><button id="play" class="primary" aria-describedby="selectionHint">Play on selected TVs</button><button id="stopAll" class="danger-outline">Stop all</button></div><p id="nowPlaying" class="muted" aria-live="polite">Choose a source and one or more TVs.</p></div>
     </section>
       <section id="previewSection" class="card preview-card" hidden>
         <div class="card-header"><h2>Browser preview</h2><span id="previewHelp" class="muted">Sound plays on the TVs</span></div>

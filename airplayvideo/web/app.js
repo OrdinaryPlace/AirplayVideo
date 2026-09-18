@@ -2,10 +2,13 @@ import RFB from '../novnc/core/rfb.js';
 
 const $ = id => document.getElementById(id);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-let state, draft, step = 0, mode = 'browser', busy = false;
+let state, draft, setupBase, step = 0, mode = 'browser', busy = false, settingsSaving = false;
 let chosenTVs = new Set(), selectionDirty = false, discoveredTVs = [], discoveredTuners = [];
 let rfb = null, previewConnecting = false, previewWanted = false, previewExpanded = false;
 const stepNames = ['Sources', 'Configure', 'Pair TVs', 'Picture & sound', 'Finish'];
+const settingsNames = ['Sources', 'Browser & live TV', 'TVs', 'Picture & sound', 'Home Assistant'];
+const stepIds = ['sources', 'browser', 'tvs', 'picture', 'home-assistant'];
+const stepSections = [['modes'], ['browser','hdhomerun'], [], ['video','audio'], ['home_assistant']];
 const titles = ['Choose your sources', 'Configure your sources', 'Pair your TVs', 'Set picture and sound', 'Connect Home Assistant'];
 const descriptions = [
   'Enable the modes you want. You can return to Setup whenever your installation changes.',
@@ -35,6 +38,7 @@ async function refresh() {
   $('loading').hidden = true;
   $('version').textContent = state.version;
   $('connection').textContent = state.home_assistant.connected ? 'Home Assistant connected' : 'App controls ready';
+  $('setupTab').textContent = state.setup.complete ? 'Settings' : 'Setup';
   if (!selectionDirty) chosenTVs = new Set(state.runtime.targets);
   renderUsage();
   return state;
@@ -61,28 +65,34 @@ function route() {
   $('wizard').hidden = !setup; $('playback').hidden = setup;
   $('setupTab').classList.toggle('active', setup); $('playTab').classList.toggle('active', !setup);
   if (setup) {
-    if (!draft) draft = structuredClone(state.setup);
+    if (draft && !$('stepContent').hidden && $('stepContent').children.length) collectStep(false);
+    if (!draft) {draft = structuredClone(state.setup); setupBase = structuredClone(state.setup);}
+    const linkedStep = stepIds.indexOf(location.hash.split('/')[1]);
+    if (state.setup.complete && linkedStep >= 0) step = linkedStep;
     renderStep();
   } else renderUsage();
   renderPreview();
 }
 
 function openSetup(target = 0) {
-  draft = structuredClone(state.setup); step = target;
-  location.hash = '#setup'; route();
+  if (draft && !$('wizard').hidden) collectStep(false);
+  if (!draft) {draft = structuredClone(state.setup); setupBase = structuredClone(state.setup);}
+  step = target;
+  message();
+  location.hash = '#setup/' + stepIds[target]; renderStep(); route();
   if (state.runtime.targets.length || state.runtime.phase === 'preparing')
-    message('', 'Stop playback before saving changes to Setup.');
+    message('', 'Stop playback before saving settings.');
 }
 
-function collectStep() {
+function collectStep(validate = true) {
   if (step === 0) {
     draft.modes.browser = $('enableBrowser').checked;
     draft.modes.hdhomerun = $('enableHDHR').checked;
-    if (!draft.modes.browser && !draft.modes.hdhomerun) throw new Error('Enable at least one source mode.');
+    if (validate && !draft.modes.browser && !draft.modes.hdhomerun) throw new Error('Enable at least one source mode.');
   } else if (step === 1) {
     if ($('homeUrl')) draft.browser.home_url = $('homeUrl').value;
     if ($('youtubeQuality')) draft.browser.youtube_quality = $('youtubeQuality').value;
-    if (draft.modes.hdhomerun && !draft.hdhomerun.devices.length) throw new Error('Find or add your HDHomeRun first.');
+    if (validate && draft.modes.hdhomerun && !draft.hdhomerun.devices.length) throw new Error('Find or add your HDHomeRun first.');
   } else if (step === 3) {
     draft.video.resolution = $('resolution').value;
     draft.video.fps = Number($('frameRate').value);
@@ -95,31 +105,68 @@ function collectStep() {
   } else if (step === 4) draft.home_assistant.enabled = $('enableHA').checked;
 }
 
+function pageChanges(index = step) {
+  const changes = {}, expected = {};
+  for (const section of stepSections[index]) for (const key of Object.keys(draft[section])) {
+    if (JSON.stringify(draft[section][key]) !== JSON.stringify(setupBase[section][key])) {
+      (changes[section] ||= {})[key] = draft[section][key];
+      (expected[section] ||= {})[key] = setupBase[section][key];
+    }
+  }
+  return {changes, expected};
+}
+
+function settingsStatus() {
+  if (!state.setup.complete) return;
+  const dirty = Object.keys(pageChanges().changes).length > 0;
+  const playing = state.runtime.targets.length || state.runtime.phase === 'preparing';
+  $('next').disabled = settingsSaving || !dirty || !!playing;
+  $('discardSettings').disabled = settingsSaving || !dirty;
+  $('settingsStatus').textContent = step === 2 ? 'Pairings are saved as soon as you enter the TV code.' :
+    playing ? 'Stop playback before saving settings.' : dirty ? 'Unsaved changes on this page. Save when ready.' : 'This page is up to date.';
+  for (const button of document.querySelectorAll('[data-settings-step]')) {
+    const index = Number(button.dataset.settingsStep);
+    button.textContent = settingsNames[index] + (Object.keys(pageChanges(index).changes).length ? ' •' : '');
+    button.disabled = settingsSaving;
+  }
+}
+
 function checked(value) { return value ? 'checked' : ''; }
 function selected(value, expected) { return value === expected ? 'selected' : ''; }
 
 function renderStep() {
+  const editing = state.setup.complete;
   $('wizardTitle').textContent = titles[step]; $('wizardDescription').textContent = descriptions[step];
+  $('settingsLabel').textContent = editing ? 'APPLICATION SETTINGS' : 'APPLICATION SETUP';
+  if (editing) {$('wizardTitle').textContent = settingsNames[step]; $('wizardDescription').textContent = 'Jump to any page. Save only the settings you change there.';}
+  $('stepCount').hidden = editing;
+  $('steps').classList.toggle('settings-nav', editing);
+  $('steps').setAttribute('aria-label', editing ? 'Settings pages' : 'Setup progress');
   $('stepCount').textContent = `${step + 1} of 5`;
-  $('steps').innerHTML = stepNames.map((name, i) => `<li class="${i === step ? 'current' : i < step ? 'done' : ''}" ${i === step ? 'aria-current="step"' : ''}>${i + 1}. ${name}</li>`).join('');
-  $('previous').hidden = step === 0;
-  $('next').textContent = step === 4 ? 'Save setup & open playback' : 'Continue';
+  $('steps').innerHTML = editing ? settingsNames.map((name,i)=>`<li><button type="button" data-settings-step="${i}" ${i===step?'aria-current="page"':''}>${name}</button></li>`).join('') : stepNames.map((name, i) => `<li class="${i === step ? 'current' : i < step ? 'done' : ''}" ${i === step ? 'aria-current="step"' : ''}>${i + 1}. ${name}</li>`).join('');
+  for (const button of document.querySelectorAll('[data-settings-step]')) button.onclick = () => {collectStep(false); message(); location.hash = '#setup/' + stepIds[Number(button.dataset.settingsStep)];};
+  $('previous').hidden = editing || step === 0;
+  $('discardSettings').hidden = !editing || step === 2;
+  $('settingsStatus').hidden = !editing;
+  $('next').hidden = editing && step === 2;
+  $('next').disabled = false;
+  $('next').textContent = editing ? 'Save this page' : step === 4 ? 'Save setup & open playback' : 'Continue';
   if (step === 0) {
     $('stepContent').innerHTML = `<div class="mode-cards">
       <label class="mode-card"><input id="enableBrowser" type="checkbox" ${checked(draft.modes.browser)}><div><h2>Web browser</h2><p>Show a dashboard, saved page, or YouTube video. Sign in and interact through the browser preview.</p></div></label>
       <label class="mode-card"><input id="enableHDHR" type="checkbox" ${checked(draft.modes.hdhomerun)}><div><h2>HDHomeRun live TV</h2><p>Choose an antenna channel. One tuner supplies the same program to all selected TVs.</p></div></label>
     </div><p class="muted">Both modes can be enabled. Playback uses one source at a time.</p>`;
   } else if (step === 1) {
-    $('stepContent').innerHTML = `${draft.modes.browser ? `<section class="setup-section"><h2>Browser defaults</h2><label for="homeUrl">Home page</label><input id="homeUrl" type="url" required value="${escape(draft.browser.home_url)}"><label for="youtubeQuality">YouTube quality preference</label><select id="youtubeQuality"><option value="1080p" ${selected(draft.browser.youtube_quality,'1080p')}>1080p</option><option value="720p" ${selected(draft.browser.youtube_quality,'720p')}>720p</option><option value="auto" ${selected(draft.browser.youtube_quality,'auto')}>YouTube automatic</option></select><p class="muted">The browser keeps its own sign-ins and site data. Available video quality depends on the source.</p><button id="setupBrowser" type="button" class="primary">Open browser to sign in</button><p class="muted">Use the full screen preview and A+ to make sign-in fields easier to read. You can sign in before finishing Setup.</p></section>` : ''}
-      ${draft.modes.hdhomerun ? `<section class="setup-section"><div class="card-header"><h2>HDHomeRun devices</h2><button id="findTuners" type="button">Find HDHomeRun</button></div><p class="muted">Discovery reads the channel list. It does not start a stream or run an antenna scan.</p><div id="configuredTuners" class="device-list"></div><div id="foundTuners" class="device-list"></div><details><summary>Enter a device address</summary><div class="inline-form"><div><label for="tunerAddress">HDHomeRun IPv4 address</label><input id="tunerAddress" placeholder="192.168.x.x" inputmode="decimal"></div><button id="probeTuner" type="button">Connect</button></div></details></section>` : ''}`;
-    if (draft.modes.browser) $('setupBrowser').onclick = () => setupTask(async () => {
+    $('stepContent').innerHTML = `${editing || draft.modes.browser ? `<section class="setup-section"><h2>Browser defaults</h2><label for="homeUrl">Home page</label><input id="homeUrl" type="url" required value="${escape(draft.browser.home_url)}"><label for="youtubeQuality">YouTube quality preference</label><select id="youtubeQuality"><option value="1080p" ${selected(draft.browser.youtube_quality,'1080p')}>1080p</option><option value="720p" ${selected(draft.browser.youtube_quality,'720p')}>720p</option><option value="auto" ${selected(draft.browser.youtube_quality,'auto')}>YouTube automatic</option></select><p class="muted">The browser keeps its own sign-ins and site data. Available video quality depends on the source.</p><button id="setupBrowser" type="button" class="primary">Open browser to sign in</button><p class="muted">Use the full screen preview and A+ to make sign-in fields easier to read. You can sign in before finishing Setup.</p></section>` : ''}
+      ${editing || draft.modes.hdhomerun ? `<section class="setup-section"><div class="card-header"><h2>HDHomeRun devices</h2><button id="findTuners" type="button">Find HDHomeRun</button></div><p class="muted">Discovery reads the channel list. It does not start a stream or run an antenna scan.</p><div id="configuredTuners" class="device-list"></div><div id="foundTuners" class="device-list"></div><details><summary>Enter a device address</summary><div class="inline-form"><div><label for="tunerAddress">HDHomeRun IPv4 address</label><input id="tunerAddress" placeholder="192.168.x.x" inputmode="decimal"></div><button id="probeTuner" type="button">Connect</button></div></details></section>` : ''}`;
+    if ($('setupBrowser')) $('setupBrowser').onclick = () => setupTask(async () => {
       draft.browser.home_url = $('homeUrl').value;
       draft.browser.youtube_quality = $('youtubeQuality').value;
       state = await api('api/setup/open_browser', {url:draft.browser.home_url});
       renderPreview();
       $('previewSection').scrollIntoView({behavior:'smooth',block:'start'});
     }, $('setupBrowser'));
-    if (draft.modes.hdhomerun) {
+    if ($('configuredTuners')) {
       renderTuners();
       $('findTuners').onclick = () => setupTask(async () => {
         discoveredTuners = (await api('api/setup/discover_tuners', {})).devices;
@@ -152,13 +199,14 @@ function renderStep() {
       <div><label for="encoder">Encoding</label><select id="encoder"><option value="auto" ${selected(draft.video.encoder,'auto')}>Automatic</option><option value="libopenh264" ${selected(draft.video.encoder,'libopenh264')}>Software · OpenH264</option><option value="h264_vaapi" ${selected(draft.video.encoder,'h264_vaapi')} ${hardware?'':'disabled'}>Hardware · VAAPI ${hardware?'':'(unavailable)'}</option></select></div>
       <div><label for="bitrate">Video bitrate · <span id="bitrateValue">${draft.video.bitrate_mbps}</span> Mbps</label><input id="bitrate" type="range" min="2" max="20" step="1" value="${draft.video.bitrate_mbps}"></div>
       <div><label for="latency">Playback buffer</label><select id="latency">${[500,750,1000,1500,2000].map(value=>`<option value="${value}" ${selected(draft.audio.latency_ms,value)}>${value} ms${value===1500?' · recommended for live TV':''}</option>`).join('')}</select></div>
-    </div><label class="check-row"><input id="enableAudio" type="checkbox" ${checked(draft.audio.enabled)}> Send sound to the TVs</label><label class="check-row"><input id="deinterlace" type="checkbox" ${checked(draft.video.deinterlace)}> Deinterlace broadcast video when needed</label><p class="muted">Start with 1080p at 30 fps. A higher frame rate or bitrate needs more processing and network capacity. A longer buffer gives live broadcasts more time to arrive.</p>`;
+    </div><label class="check-row"><input id="enableAudio" type="checkbox" ${checked(draft.audio.enabled)}> Send sound to the TVs</label><label class="check-row"><input id="deinterlace" type="checkbox" ${checked(draft.video.deinterlace)}> Deinterlace broadcast video when needed</label><p class="muted">Start with 1080p at 30 fps. A higher frame rate or bitrate needs more processing and network capacity. The buffer delays picture and sound together. A longer buffer gives live broadcasts more time to arrive. Changing resolution closes the browser; other picture and sound edits keep it open.</p>`;
     $('bitrate').oninput = () => $('bitrateValue').textContent = $('bitrate').value;
   } else {
     const connected = state.home_assistant.connected;
-    $('stepContent').innerHTML = `<label class="check-row"><input id="enableHA" type="checkbox" ${checked(draft.home_assistant.enabled)}> Create TV controls in Home Assistant</label><p class="muted">Each paired TV gets Play and Stop buttons, saved-page shortcuts, channel selection, and status for your dashboards and automations.</p><div class="integration"><strong>${connected ? 'Home Assistant connection ready' : 'Home Assistant connection needs attention'}</strong><p class="muted">${connected ? 'The app found the MQTT service automatically. Controls appear for paired TVs after you finish Setup.' : escape(state.home_assistant.error || 'Enable MQTT in Home Assistant to create playback entities. You can still use the app directly.')}</p><button type="button" id="retryHA" class="text-button">Check connection again</button></div><dl class="review"><dt>Modes</dt><dd>${Object.entries(draft.modes).filter(([,enabled])=>enabled).map(([key])=>key==='browser'?'Web browser':'HDHomeRun').join(' + ')}</dd><dt>Paired TVs</dt><dd>${state.receivers.length ? escape(state.receivers.map(r=>r.name).join(', ')) : 'None yet — add them in Setup later'}</dd><dt>Picture</dt><dd>${draft.video.resolution} · ${draft.video.fps} fps · H.264</dd><dt>Sound</dt><dd>${draft.audio.enabled ? 'Stereo audio enabled' : 'Video only'}</dd><dt>After saving</dt><dd>Playback stays idle until you press Play.</dd></dl>`;
+    $('stepContent').innerHTML = `<label class="check-row"><input id="enableHA" type="checkbox" ${checked(draft.home_assistant.enabled)}> Create TV controls in Home Assistant</label><p class="muted">Each paired TV gets Play and Stop buttons, saved-page shortcuts, channel selection, and status for your dashboards and automations.</p><div class="integration"><strong>${connected ? 'Home Assistant connection ready' : 'Home Assistant connection needs attention'}</strong><p class="muted">${connected ? 'The app found the MQTT service automatically. Controls appear for paired TVs when enabled.' : escape(state.home_assistant.error || 'Enable MQTT in Home Assistant to create playback entities. You can still use the app directly.')}</p><button type="button" id="retryHA" class="text-button">Check connection again</button></div><dl class="review"><dt>Modes</dt><dd>${Object.entries(draft.modes).filter(([,enabled])=>enabled).map(([key])=>key==='browser'?'Web browser':'HDHomeRun').join(' + ')}</dd><dt>Paired TVs</dt><dd>${state.receivers.length ? escape(state.receivers.map(r=>r.name).join(', ')) : 'None yet — add them in Setup later'}</dd><dt>Picture</dt><dd>${draft.video.resolution} · ${draft.video.fps} fps · H.264</dd><dt>Sound</dt><dd>${draft.audio.enabled ? 'Stereo audio enabled' : 'Video only'}</dd><dt>After saving</dt><dd>Playback stays idle until you press Play.</dd></dl>`;
     $('retryHA').onclick = () => setupTask(async () => { await api('api/setup/home_assistant', {}); await refresh(); renderStep(); }, $('retryHA'));
   }
+  settingsStatus();
   renderPreview();
 }
 
@@ -173,6 +221,7 @@ function renderTuners() {
   const configured = new Set(draft.hdhomerun.devices.map(d=>d.id));
   $('foundTuners').innerHTML = discoveredTuners.filter(d=>!configured.has(d.id)).map(device=>`<div class="device-row"><div><p>${escape(device.name)}</p><small>${escape(device.address)}</small></div><button type="button" data-add-tuner="${escape(device.id)}">Use device</button></div>`).join('');
   for (const button of document.querySelectorAll('[data-add-tuner]')) button.onclick=()=>addTuner(discoveredTuners.find(d=>d.id===button.dataset.addTuner));
+  settingsStatus();
 }
 
 function renderTVSetup() {
@@ -196,13 +245,33 @@ async function setupTask(action, button) {
 
 $('setupForm').onsubmit = async event => {
   event.preventDefault();
+  settingsSaving = true;
   await setupTask(async()=>{
-    collectStep();
+    collectStep(!state.setup.complete);
+    if (state.setup.complete) {
+      settingsStatus();
+      const patch = pageChanges();
+      state = await api('api/setup/update', patch);
+      // Rebase unedited fields against the latest saved state while preserving
+      // unsaved work on the other pages.
+      const pending = stepSections.map((_,index)=>index===step ? {changes:{}} : pageChanges(index));
+      setupBase = structuredClone(state.setup); draft = structuredClone(state.setup);
+      for (const page of pending) for (const [section,fields] of Object.entries(page.changes)) {
+        Object.assign(draft[section],fields);
+        Object.assign(setupBase[section],page.expected[section]);
+      }
+      renderStep(); message('', 'Changes on this page saved.'); return;
+    }
     if(step<4) {step++;renderStep();return;}
-    state=await api('api/setup/save',draft); draft=null;
+    state=await api('api/setup/save',draft); draft=null; setupBase=null;
     location.hash='#play'; route(); message('', 'Setup saved. Choose a source and TV to begin.');
   },$('next'));
+  settingsSaving = false;
+  if (draft) settingsStatus();
 };
+$('setupForm').addEventListener('input',()=>{if(state.setup.complete){collectStep(false);settingsStatus();}});
+$('setupForm').addEventListener('change',()=>{if(state.setup.complete){collectStep(false);settingsStatus();}});
+$('discardSettings').onclick=()=>{for(const section of stepSections[step]) {draft[section]=structuredClone(state.setup[section]);setupBase[section]=structuredClone(state.setup[section]);}renderStep();message();};
 $('previous').onclick=()=>{try{collectStep();}catch{}step=Math.max(0,step-1);renderStep();message();};
 $('pairForm').onsubmit=async event=>{
   event.preventDefault(); $('completePair').disabled=true;
@@ -226,7 +295,7 @@ function renderChannels(){
   const rows=state.channels.filter(row=>(!$('favoritesOnly').checked||favorites.has(row.id))&&row.label.toLowerCase().includes(search));
   setOptions($('channelSelect'),rows.map(row=>({value:row.id,label:row.label+(row.supported?'':` — ${row.reason}`),disabled:!row.supported})),'No matching channels');
   $('favorite').textContent=favorites.has($('channelSelect').value)?'★':'☆';
-  $('channelHint').textContent=state.channel_error || (!state.channels.length?'No channels loaded. Check HDHomeRun in Setup.':'Choose a channel, then Play. Selection alone does not use a tuner.');
+  $('channelHint').textContent=state.channel_error || (!state.channels.length?'No channels loaded. Check HDHomeRun in Settings.':'Choose a channel, then Play. Selection alone does not use a tuner.');
 }
 
 function stableMarkup(element, html) {
@@ -253,7 +322,7 @@ function renderUsage(){
     const status=runtime.receivers[receiver.id]||{};
     const description=status.message || ({streaming:'Sending',connecting:'Connecting…',stopped:'Stopped',error:'Needs attention'}[status.state]||'Ready');
     return `<div class="tv-row"><input type="checkbox" id="tv-${receiver.id}" data-tv="${receiver.id}" ${checked(chosenTVs.has(receiver.id))}><label for="tv-${receiver.id}">${escape(receiver.name)}<small>${escape(description)}</small></label>${runtime.targets.includes(receiver.id)?`<button data-stop="${receiver.id}">Stop</button>`:''}</div>`;
-  }).join(''):'<p class="empty">Add your TVs in Setup, then choose where to play.</p>');
+  }).join(''):'<p class="empty">Choose Manage TVs to add a TV, then select where to play.</p>');
   for(const checkbox of document.querySelectorAll('[data-tv]'))checkbox.onchange=()=>{selectionDirty=true;checkbox.checked?chosenTVs.add(checkbox.dataset.tv):chosenTVs.delete(checkbox.dataset.tv);updateButtons();};
   for(const button of document.querySelectorAll('[data-stop]'))button.onclick=()=>act('stop',{receiver:button.dataset.stop},true);
   renderPreview();
@@ -263,10 +332,10 @@ function renderUsage(){
 function renderPreview(){
   if(!state)return;
   const setup = !$('wizard').hidden;
-  previewWanted = state.runtime.browser_open && (setup ? step===1 && draft?.modes.browser : mode==='browser');
+  previewWanted = state.runtime.browser_open && (setup ? step===1 && (state.setup.complete || draft?.modes.browser) : mode==='browser');
   $('previewSection').hidden = !previewWanted;
   $('previewHelp').textContent = setup ? 'Sign in here. Your browser profile is saved.' : 'Sound plays on the TVs';
-  $('returnPreview').textContent = setup ? 'Back to Setup' : 'Back to Playback';
+  $('returnPreview').textContent = setup ? state.setup.complete ? 'Back to Settings' : 'Back to Setup' : 'Back to Playback';
   if(!previewWanted && previewExpanded) collapsePreview();
   if(previewWanted&&!rfb&&!previewConnecting)connectPreview();
   if(!previewWanted&&rfb){rfb.disconnect();rfb=null;}
@@ -298,8 +367,11 @@ function updateButtons(){
   if(!state)return;
   $('play').disabled=busy||!chosenTVs.size||!state.setup.complete;
   $('play').textContent=busy?'Starting…':'Play on selected TVs';
+  const names = state.receivers.filter(receiver=>chosenTVs.has(receiver.id)).map(receiver=>receiver.name);
+  $('selectionHint').textContent = names.length ? 'Play on: ' + names.join(', ') : 'Choose one or more TVs above.';
   $('openBrowser').disabled=busy;
   $('stopAll').disabled=!busy&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
+  if (draft && !$('wizard').hidden) settingsStatus();
 }
 
 async function act(action,body={},interrupt=false){

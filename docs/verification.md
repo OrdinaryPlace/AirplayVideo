@@ -1,5 +1,28 @@
 # Verification
 
+## 0.1.6 — buffer negotiation and settings
+
+- Three CTest suites pass, including an independent receiver interpretation of
+  audio sync bytes and SETUP latency bounds at 500/750/1000/1500/2000 ms. Tests
+  compare with video presentation time, including late joins, RTP wrap and long
+  streams. The NTP/RTP mapping already included the lead; the fixed 250–2000 ms
+  audio negotiation bounds did not require a receiver to use that lead. New
+  bounds request the same configured delay and identify screen audio explicitly.
+- All 52 Python tests pass. Isolated edits preserve unrelated values, reject
+  conflicting writes and active-playback saves, skip unchanged/offline tuners,
+  retain the browser and only reconnect affected services.
+- Actual sandboxed Chrome verifies no scrollbar for filled video, exact style
+  restoration for consent/navigation, and the existing native-control/profile
+  regressions. This fixture requires no account or external video.
+- The first-run wizard and subsequent Settings pages were exercised in the
+  actual container. Changing pages retains drafts; saving only the buffer leaves
+  an unsaved home-page edit untouched. Saving sound settings retains the preview.
+  At 390 px the settings navigation fits, the expanded preview fills the viewport
+  without overflow, and Play is below the TV selection area.
+- Sender timing tests establish the requested schedule, not the TV's actual
+  picture/speaker timing. Physical lip sync still needs user observation after
+  restarting playback; no quality or synchronization measurement is inferred.
+
 ## 0.1.0 — 2026-09-17
 
 This is an experimental first release. Verified results will be updated as the

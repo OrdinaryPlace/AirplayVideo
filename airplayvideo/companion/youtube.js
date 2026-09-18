@@ -46,6 +46,14 @@ function youtubeControl(command) {
         return rect.width > 0 && rect.height > 0;
       });
       if (!current || prompt || !location.pathname.startsWith('/watch')) {restore(); return;}
+      // Fixed-position video does not remove the underlying document's scroll
+      // range. Hide its scrollbar only while filling video, and restore it for
+      // normal navigation, sign-in and consent dialogs.
+      for (const root of [document.documentElement, document.body]) {
+        remember(root);
+        root.style.setProperty('overflow', 'hidden', 'important');
+        root.style.setProperty('scrollbar-gutter', 'auto', 'important');
+      }
       for (let branch = current; branch.parentElement; branch = branch.parentElement) {
         for (const sibling of branch.parentElement.children) {
           if (sibling !== branch && sibling instanceof HTMLElement) {

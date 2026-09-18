@@ -11,7 +11,7 @@ import tempfile
 from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import uuid
 
-VERSION = "0.1.5"
+VERSION = "0.1.6"
 IDENTIFIER = re.compile(r"[a-f0-9]{32}\Z")
 
 
@@ -166,6 +166,24 @@ def validate_setup(value):
     except (KeyError, TypeError) as exc:
         raise UserError("Setup is incomplete") from exc
     return result
+
+
+def patch_setup(current, changes, expected):
+    """Merge only edited fields; reject conflicting edits from another client."""
+    check(current["complete"], "Finish first-time setup before editing settings")
+    check(isinstance(changes, dict) and isinstance(expected, dict), "Invalid settings changes")
+    check(changes.keys() == expected.keys(), "Invalid settings changes")
+    result = copy.deepcopy(current)
+    allowed = default_setup()
+    for section, fields in changes.items():
+        check(section != "complete" and section in allowed and isinstance(fields, dict), "Unknown settings section")
+        check(isinstance(expected[section], dict) and fields.keys() == expected[section].keys(), "Invalid settings changes")
+        for key, value in fields.items():
+            check(key in allowed[section], "Unknown setting")
+            check(current[section][key] == expected[section][key] or current[section][key] == value,
+                  "This setting changed in another window. Reopen Settings before saving it again.")
+            result[section][key] = copy.deepcopy(value)
+    return validate_setup(result)
 
 
 class Store:

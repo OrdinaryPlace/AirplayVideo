@@ -2,7 +2,7 @@ import copy
 import json
 import os
 import pytest
-from service.model import Store, UserError, atomic_json, default_setup, private_json, validate_setup, browser_url, youtube_url, local_address
+from service.model import Store, UserError, atomic_json, default_setup, private_json, validate_setup, patch_setup, browser_url, youtube_url, local_address
 from service.hdhomerun import parse_lineup
 from service.mqtt import discovery_documents
 
@@ -39,6 +39,28 @@ def test_hdhr_requires_a_configured_device():
         validate_setup(settings)
     settings["hdhomerun"]["devices"] = [{"id":"ABCDEF12","name":"Fixture tuner","address":"192.168.250.10"}]
     assert validate_setup(settings)["complete"]
+
+
+def test_isolated_edit_preserves_other_fields_and_detects_conflicts():
+    current = validate_setup(default_setup())
+    current['video']['fps'] = 60  # another page/client's saved edit
+    updated = patch_setup(current, {'audio': {'latency_ms': 750}}, {'audio': {'latency_ms': 1500}})
+    assert updated['video']['fps'] == 60
+    assert updated['audio']['latency_ms'] == 750
+    assert current['audio']['latency_ms'] == 1500
+    with pytest.raises(UserError, match='another window'):
+        patch_setup(updated, {'audio': {'latency_ms': 1000}}, {'audio': {'latency_ms': 1500}})
+    # A repeated request is safe if its desired value is already saved.
+    assert patch_setup(updated, {'audio': {'latency_ms': 750}}, {'audio': {'latency_ms': 1500}}) == updated
+
+
+@pytest.mark.parametrize('changes,expected', [({'complete': True},{'complete':False}),
+    ({'audio': {'unknown': 1}},{'audio': {'unknown': 0}}),
+    ({'audio': {'latency_ms': 1}},{'audio': {'latency_ms': 1500}}),
+    ({'video': {'fps': 60}},{}), ([],[])])
+def test_settings_patch_rejects_invalid_edits(changes, expected):
+    with pytest.raises(UserError):
+        patch_setup(validate_setup(default_setup()), changes, expected)
 
 
 def test_corrupt_private_state_is_preserved(tmp_path):

@@ -27,8 +27,39 @@ async def main():
         field.addEventListener('input',()=>report('input'));
         form.addEventListener('submit',e=>{e.preventDefault();report('submitted')});
         </script>''')
+    async def video_fixture(request):
+        # Exercise production fitting in a local, account-free page. Only the
+        # origin guard is adapted; extension permissions stay YouTube-only.
+        script = (Path(__file__).parents[1] / 'companion/youtube.js').read_text()
+        script = script.replace("location.origin !== 'https://www.youtube.com'", "location.origin !== new URL(location.href).origin")
+        return web.Response(content_type='text/html', text='''<!doctype html><html style="overflow:auto"><body style="margin:0;overflow:scroll">
+        <aside style="height:2400px">Scrollable page</aside><main><div id="movie_player"><video></video></div></main>
+        <script>''' + script + '''
+        requestAnimationFrame(()=>{
+          const assert=(value,message)=>{if(!value)throw new Error(message)};
+          let error='';
+          try {
+            const original=[document.documentElement.getAttribute('style'),document.body.getAttribute('style')];
+            Object.defineProperty(document.querySelector('video'),'readyState',{value:2});
+            youtubeControl({action:'fit'});
+            for(const element of [document.documentElement,document.body]) assert(getComputedStyle(element).overflow==='hidden','Scrollbar not hidden');
+            assert(document.documentElement.clientWidth===innerWidth,'Scrollbar occupies picture width');
+            const rect=document.querySelector('#movie_player').getBoundingClientRect();
+            assert(rect.width===innerWidth && rect.height===innerHeight,'Video does not fill viewport');
+            const dialog=document.createElement('div');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.textContent='Consent fixture';document.body.append(dialog);
+            window.__airplayVideoFit.refresh();
+            assert(document.documentElement.getAttribute('style')===original[0] && document.body.getAttribute('style')===original[1],'Dialog did not restore scrolling');
+            dialog.remove();window.__airplayVideoFit.refresh();
+            history.pushState(null,'','/home');window.__airplayVideoFit.refresh();
+            assert(document.documentElement.getAttribute('style')===original[0] && document.body.getAttribute('style')===original[1],'Navigation did not restore scrolling');
+            assert(document.querySelector('aside').getAttribute('style')==='height:2400px','Page styling was not restored');
+          } catch(e) {error=e.message;}
+          fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'/watch',event:'fit',webdriver:navigator.webdriver,error})});
+        });
+        </script></body></html>''')
     app = web.Application()
     app.router.add_post('/report', report)
+    app.router.add_get('/watch', video_fixture)
     app.router.add_get('/{browser}/{page}', fixture)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -95,6 +126,9 @@ async def main():
                     await browsers[0].navigate(base + '/0/restored', default_setup())
                     assert (await expect('/0/restored'))['retained'] == 'yes'
                     assert browsers[0].companion.identity == identity
+                    await browsers[0].navigate(base + '/watch', default_setup())
+                    assert not (await expect('/watch', 'fit'))['error'], 'Video fit/scroll restoration failed'
+                    print('PASS: fullscreen video has no scrollbar; consent and navigation restore scrolling', flush=True)
                     print('PASS: two sandboxed browsers; no automation/debugging flags; native Unicode paste, navigation, zoom, private previews and saved profile after restart', flush=True)
                 finally:
                     for browser in browsers:

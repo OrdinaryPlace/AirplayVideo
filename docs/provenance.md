@@ -45,6 +45,10 @@ module. Google Chrome is not covered by this repository's MIT license.
   and its packet/audio implementations (MIT): protocol reference for PCM setup,
   packet authentication, sync and resend behavior; not a runtime dependency.
 - [OpenAirPlay protocol notes](https://openairplay.github.io/airplay-spec/)
+- [Shairport Sync timing receiver](https://github.com/mikebrady/shairport-sync/blob/master/rtp.c)
+  (MIT) and [AirPlay 2 protocol notes](https://github.com/SteeBono/airplayreceiver/wiki/AirPlay2-Protocol):
+  references for RTP/NTP latency bounds and screen-audio metadata. No receiver
+  implementation is included or linked into AirplayVideo.
 - [SiliconDust HTTP development](https://www.silicondust.com/hdhomerun/hdhomerun_http_development.pdf)
 - [Home Assistant app configuration](https://developers.home-assistant.io/docs/apps/configuration/)
 - [Home Assistant MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
