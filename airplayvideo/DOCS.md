@@ -4,7 +4,7 @@ Send a browser page or an HDHomeRun channel to your Apple TVs from Home Assistan
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.1.3.** This is an independent implementation in a new
+**Experimental, version 0.1.4.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -27,8 +27,9 @@ The separate five-step **Setup** wizard handles:
 
 1. Enable **Web browser**, **HDHomeRun live TV**, or both.
 2. Set the browser home page and YouTube quality preference; find a tuner or
-   enter its LAN IPv4 address. Discovery can be blocked across container/VLAN
-   boundaries, so both tuner and TV discovery have a manual address fallback.
+   enter its LAN IPv4 address. The app uses host networking for
+   LAN discovery. Across VLANs, multicast/broadcast forwarding may still be
+   needed; both tuner and TV discovery also have a manual address fallback.
 3. Pair each TV using the fresh four-digit PIN shown on that TV. Pairings and
    browser sign-ins are private app data and survive restarts.
 4. Choose resolution, frame rate, encoder, bitrate, stereo audio, and buffer.

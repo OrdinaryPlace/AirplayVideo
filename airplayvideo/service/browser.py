@@ -12,6 +12,7 @@ import time
 import aiohttp
 from Cryptodome.Cipher import DES
 from .model import UserError, check, browser_url
+from .network import unused_loopback_port
 
 
 def child_environment():
@@ -35,6 +36,8 @@ class Browser:
         self.lock = asyncio.Lock()
         self.cdp_lock = asyncio.Lock()
         self.vnc_password = None
+        self.vnc_port = None
+        self.cdp_port = None
         self.youtube_task = None
         self.environment = child_environment()
         self.environment.update(HOME=str(self.root), DISPLAY=":99.0", XAUTHORITY=str(self.root / "Xauthority"), XDG_RUNTIME_DIR=str(self.root / "runtime"), PULSE_SERVER="unix:" + str(self.root / "pulse.sock"), PULSE_COOKIE=str(self.root / "pulse-cookie"), PULSE_SINK="airplayvideo")
@@ -49,11 +52,11 @@ class Browser:
         finally:
             os.close(fd)
 
-    async def launch(self, *args, stdin=None):
+    async def launch(self, *args, stdin=None, pass_fds=()):
         groups = {1000}
         for path in Path("/dev/dri").glob("*"):
             groups.add(path.stat().st_gid)
-        process = await asyncio.create_subprocess_exec(*args, env=self.environment, user=1000, group=1000, extra_groups=sorted(groups), start_new_session=True, stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
+        process = await asyncio.create_subprocess_exec(*args, env=self.environment, user=1000, group=1000, extra_groups=sorted(groups), pass_fds=pass_fds, start_new_session=True, stdin=asyncio.subprocess.PIPE if stdin is not None else asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.PIPE)
         process.component = Path(args[0]).name
         process.diagnostic = ""
         async def discard_errors():
@@ -95,6 +98,40 @@ class Browser:
                 await asyncio.sleep(0.15)
         raise UserError("Browser startup timed out")
 
+    async def start_display(self, width, height, cookie):
+        # X servers share abstract UNIX sockets on the host network. Let Xvfb
+        # bind an unused display, then use that exact display for every child.
+        read_fd, write_fd = os.pipe()
+        reader = asyncio.StreamReader()
+        transport, _ = await asyncio.get_running_loop().connect_read_pipe(
+            lambda: asyncio.StreamReaderProtocol(reader), os.fdopen(read_fd, "rb", buffering=0))
+        try:
+            try:
+                await self.launch("Xvfb", "-displayfd", str(write_fd), "-screen", "0", f"{width}x{height}x24", "-nolisten", "tcp", "-auth", self.environment["XAUTHORITY"], pass_fds=(write_fd,))
+            finally:
+                os.close(write_fd)
+            display = (await asyncio.wait_for(reader.readline(), 15)).strip()
+            check(display.isdigit() and 0 <= int(display) < 65536, "Virtual display did not start")
+            self.environment["DISPLAY"] = ":" + display.decode("ascii") + ".0"
+            await self.launch("xauth", "-f", self.environment["XAUTHORITY"], "source", "-", stdin=f"add {self.environment['DISPLAY']} MIT-MAGIC-COOKIE-1 {cookie}\n".encode())
+        finally:
+            transport.close()
+
+    async def wait_debugger(self):
+        # Chrome writes its own dynamically bound port into this private profile.
+        path = self.root / "profile" / "DevToolsActivePort"
+        for _ in range(100):
+            check(all(child.returncode is None for child in self.children), "Browser exited during startup")
+            try:
+                port = int(path.read_text().splitlines()[0])
+                check(0 < port <= 65535, "Browser returned an invalid control endpoint")
+                self.cdp_port = port
+                await self.wait_port(port)
+                return
+            except (FileNotFoundError, ValueError, IndexError):
+                await asyncio.sleep(0.15)
+        raise UserError("Browser control did not become ready")
+
     async def start(self, setup):
         async with self.lock:
             if self.running:
@@ -118,7 +155,7 @@ class Browser:
                 await self.launch("xauth", "-f", self.environment["XAUTHORITY"], "source", "-", stdin=f"add :99 MIT-MAGIC-COOKIE-1 {cookie}\n".encode())
                 self.dimensions = (1920, 1080) if setup["video"]["resolution"] == "1080p" else (1280, 720)
                 width, height = self.dimensions
-                await self.launch("Xvfb", ":99", "-screen", "0", f"{width}x{height}x24", "-nolisten", "tcp", "-auth", self.environment["XAUTHORITY"])
+                await self.start_display(width, height, cookie)
                 for _ in range(80):
                     probe = await asyncio.create_subprocess_exec("xdpyinfo", env=self.environment, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
                     if await probe.wait() == 0:
@@ -128,10 +165,13 @@ class Browser:
                     raise UserError("Virtual display did not start")
                 await self.launch("openbox", "--sm-disable")
                 await self.launch("pulseaudio", "-n", "--daemonize=no", "--exit-idle-time=-1", "--log-level=error", "-L", f"module-native-protocol-unix socket={self.root / 'pulse.sock'} auth-cookie={self.root / 'pulse-cookie'}", "-L", "module-null-sink sink_name=airplayvideo rate=48000 channels=2")
-                await self.launch("x11vnc", "-display", ":99", "-auth", self.environment["XAUTHORITY"], "-localhost", "-rfbport", "5900", "-rfbauth", str(self.root / "vnc-password"), "-forever", "-shared", "-xkb", "-quiet")
-                await self.wait_port(5900)
-                await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=9222", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--kiosk", "about:blank")
-                await self.wait_port(9222)
+                self.vnc_port = unused_loopback_port()
+                await self.launch("x11vnc", "-display", self.environment["DISPLAY"], "-auth", self.environment["XAUTHORITY"], "-localhost", "-rfbport", str(self.vnc_port), "-rfbauth", str(self.root / "vnc-password"), "-forever", "-shared", "-xkb", "-quiet")
+                await self.wait_port(self.vnc_port)
+                with contextlib.suppress(FileNotFoundError):
+                    (self.root / "profile" / "DevToolsActivePort").unlink()
+                await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--kiosk", "about:blank")
+                await self.wait_debugger()
                 self.running = True
                 self.url = ""
             except BaseException:
@@ -142,7 +182,7 @@ class Browser:
         check(self.running, "Open the browser first")
         async with self.cdp_lock:
             try:
-                async with self.session.get("http://127.0.0.1:9222/json/list", timeout=aiohttp.ClientTimeout(total=3)) as response:
+                async with self.session.get(f"http://127.0.0.1:{self.cdp_port}/json/list", timeout=aiohttp.ClientTimeout(total=3)) as response:
                     pages = await response.json()
                 page = next((p for p in pages if p.get("type") == "page"), None)
                 check(page is not None, "Browser page is unavailable")
@@ -233,7 +273,7 @@ class Browser:
 
     async def preview_connection(self):
         check(self.running and self.vnc_password, "Open the browser first")
-        reader, writer = await asyncio.open_connection("127.0.0.1", 5900)
+        reader, writer = await asyncio.open_connection("127.0.0.1", self.vnc_port)
         try:
             greeting = await reader.readexactly(12)
             check(greeting == b"RFB 003.008\n", "Unexpected preview protocol")
@@ -275,6 +315,8 @@ class Browser:
         self.children.clear()
         self.url = ""
         self.vnc_password = None
+        self.vnc_port = None
+        self.cdp_port = None
 
     async def close(self):
         async with self.lock:

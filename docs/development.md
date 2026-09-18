@@ -14,7 +14,16 @@ rejection, media timestamps beyond two hours, shared subscriber delivery, stereo
 PCM, and a generated MPEG-TS input through the actual source pipeline.
 Python tests cover configuration persistence, guarded API access, mode/format
 validation, source replacement, Stop during warmup, independent receivers,
-MQTT discovery and stale command rejection.
+MQTT discovery and stale command rejection. Host-network tests verify that
+concurrent engines allocate separate loopback endpoints and that ingress fails
+closed without a valid Supervisor assignment. The browser coexistence check
+starts two private displays while the conventional VNC/CDP ports are occupied:
+
+```sh
+docker run --rm --cap-add SYS_ADMIN --shm-size=256m \
+  -e PYTHONPATH=/opt/airplayvideo airplayvideo:dev \
+  python3 tests/browser-network.py
+```
 
 For an isolated local UI test, create an empty private data directory. Never
 mount production app data, an existing browser profile, or receiver pairings.

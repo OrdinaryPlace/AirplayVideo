@@ -16,6 +16,7 @@ from .browser import Browser
 from .controller import PairingEngine, Controller
 from .hdhomerun import Channels, inspect as inspect_tuner, discover as discover_tuners
 from .mqtt import HomeAssistant
+from .network import ingress_listener
 
 ROOT = Path(os.environ.get("AIRPLAYVIDEO_DATA", "/data"))
 WEB = Path(os.environ.get("AIRPLAYVIDEO_WEB", "/opt/airplayvideo/web"))
@@ -323,4 +324,5 @@ async def serve():
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.WARNING, format="%(levelname)s: %(message)s")
-    web.run_app(serve(), host="0.0.0.0", port=8099, access_log=None, print=lambda _: print("AirplayVideo ready; playback starts only from an explicit user command", flush=True), shutdown_timeout=30)
+    host, port = asyncio.run(ingress_listener())
+    web.run_app(serve(), host=host, port=port, access_log=None, print=lambda _: print("AirplayVideo ready; playback starts only from an explicit user command", flush=True), shutdown_timeout=30)

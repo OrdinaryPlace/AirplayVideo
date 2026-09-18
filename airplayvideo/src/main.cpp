@@ -90,7 +90,7 @@ int main(int argc,char **argv) {
     std::signal(SIGTERM,request_exit);std::signal(SIGINT,request_exit);
     std::string mode="server",argument;
     std::filesystem::path data="/data/receivers";
-    int port=8098;
+    int port=0;
     for(int i=1;i<argc;++i) {
       std::string arg=argv[i];
       auto value=[&]{require(i+1<argc,"Missing argument");return std::string(argv[++i]);};
@@ -106,7 +106,7 @@ int main(int argc,char **argv) {
     if(mode=="capabilities") {std::cout<<media_capabilities().dump()<<std::endl;return 0;}
     if(mode=="discover") {Json list=Json::array();for(const auto &r:discover())list.push_back(r.json());std::cout<<list.dump()<<std::endl;return 0;}
     if(mode=="sample") {write_sample(argument,3);return 0;}
-    require(port>0&&port<=65535,"Invalid API port");
+    require(port>=0&&port<=65535,"Invalid API port");
     Pairings pairings(data);
     httplib::Server server;server.set_payload_max_length(8192);server.set_read_timeout(5);server.set_write_timeout(5);
     server.set_pre_routing_handler([](const auto &req,auto &res) {
@@ -131,9 +131,11 @@ int main(int argc,char **argv) {
     route("/pair/cancel",[&](const auto &){pairings.cancel();return Json::object();});
     route("/capabilities",[](const auto &){return media_capabilities();});
     server.Get("/health",[](const auto &,auto &res){res.set_content("ready","text/plain");});
-    require(server.bind_to_port("127.0.0.1",port),"Engine API port unavailable");
+    if(port==0) port=server.bind_to_any_port("127.0.0.1");
+    else require(server.bind_to_port("127.0.0.1",port),"Engine API port unavailable");
+    require(port>0,"Engine API port unavailable");
     std::jthread monitor([&](std::stop_token stopping){while(!stopping.stop_requested()){if(exiting&&server.is_running()){server.stop();break;}std::this_thread::sleep_for(std::chrono::milliseconds(50));}});
-    event("engine_ready",{});
+    event("engine_ready",{{"port",port}});
     bool result=server.listen_after_bind();monitor.request_stop();
     require(result||exiting,"Engine API failed");return 0;
   } catch(const Json::exception &) {event("fatal",{{"message","Invalid saved configuration; files preserved"}});return 1;}

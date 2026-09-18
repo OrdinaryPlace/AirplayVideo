@@ -15,5 +15,7 @@ jobs:
         run: docker build --progress=plain -t airplayvideo:test airplayvideo
       - name: Verify configuration, API boundaries, and playback lifecycle
         run: docker run --rm airplayvideo:test python3 -m pytest tests -q -p no:cacheprovider
+      - name: Verify browser coexistence on a shared network
+        run: docker run --rm --cap-add SYS_ADMIN --shm-size=256m -e PYTHONPATH=/opt/airplayvideo airplayvideo:test python3 tests/browser-network.py
       - name: Check browser module syntax
         run: node --input-type=module --check < airplayvideo/web/app.js

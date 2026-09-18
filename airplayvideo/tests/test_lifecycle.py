@@ -16,7 +16,7 @@ A, B = 'a'*32, 'b'*32
 
 class Browser:
     running = True
-    environment = {}
+    environment = {"DISPLAY": ":42.0"}
     navigate = AsyncMock()
     start = AsyncMock()
     close = AsyncMock()
@@ -37,6 +37,7 @@ class Stream:
     fail = False
     gate = None
     def __init__(self, *_):
+        self.config = _[1]
         self.closed = False
         self.commands = []
         self.entered = asyncio.Event()
@@ -67,6 +68,13 @@ def setup(tmp_path, monkeypatch):
 
 def request(receiver=A, channel='ABCDEF12:4.1'):
     return dict(mode='hdhomerun', channel=channel, receivers=[receiver])
+
+@pytest.mark.asyncio
+async def test_browser_capture_uses_the_allocated_display(setup):
+    _, control = setup
+    await control.play(dict(mode='browser', browser_source='url', url='https://example.com', receivers=[A]))
+    assert Stream.created[-1].config['source']['display'] == ':42.0'
+    await control.stop()
 
 @pytest.mark.asyncio
 async def test_join_shares_source_and_stop_only_removes_requested_tv(setup):
@@ -125,10 +133,11 @@ async def test_selection_does_not_reserve_a_tuner_and_retained_play_is_ignored(s
 async def test_pairing_client_accepts_receiver_array():
     app = web.Application()
     app.router.add_post('/receivers',lambda _: web.json_response([]))
-    # Exercise the actual fixed client against its loopback service endpoint.
-    server = TestServer(app,host='127.0.0.1',port=8098)
+    server = TestServer(app,host='127.0.0.1')
     async with server, ClientSession() as session:
-        assert await PairingEngine('/tmp/unused',session).call('/receivers') == []
+        engine = PairingEngine('/tmp/unused',session)
+        engine.port = server.port
+        assert await engine.call('/receivers') == []
 
 @pytest.mark.asyncio
 async def test_ingress_and_mutation_boundary(tmp_path):
@@ -136,6 +145,7 @@ async def test_ingress_and_mutation_boundary(tmp_path):
         application = Application(Store(tmp_path),session)
         async with TestClient(TestServer(make_app(application))) as client:
             assert (await client.get('/api/state')).status == 403
+            assert (await client.get('/api/state', headers={'X-Forwarded-For': '172.30.32.2'})).status == 403
         async with TestClient(TestServer(make_app(application,standalone=True))) as client:
             assert (await client.get('/api/state')).status == 200
             assert (await client.post('/api/actions/stop',json={})).status == 403

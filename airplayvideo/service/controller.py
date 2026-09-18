@@ -16,13 +16,22 @@ class PairingEngine:
     def __init__(self, root, session):
         self.root, self.session = Path(root), session
         self.process = None
+        self.port = None
 
     async def start(self):
-        self.process = await asyncio.create_subprocess_exec("airplayvideo-engine", "--data", str(self.root / "receivers"), env=child_environment(), stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+        self.process = await asyncio.create_subprocess_exec("airplayvideo-engine", "--data", str(self.root / "receivers"), env=child_environment(), stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            event = json.loads(await asyncio.wait_for(self.process.stdout.readline(), 10))
+            check(event.get("event") == "engine_ready", "The AirPlay engine could not start")
+            port = event["details"]["port"]
+            check(type(port) is int and 0 < port <= 65535, "The AirPlay engine returned an invalid endpoint")
+            self.port = port
+        except (asyncio.TimeoutError, ValueError, KeyError, TypeError) as exc:
+            raise UserError("The AirPlay engine did not become ready") from exc
         for _ in range(100):
             check(self.process.returncode is None, "The AirPlay engine could not start")
             try:
-                async with self.session.get("http://127.0.0.1:8098/health", timeout=aiohttp.ClientTimeout(total=1)) as response:
+                async with self.session.get(f"http://127.0.0.1:{self.port}/health", timeout=aiohttp.ClientTimeout(total=1)) as response:
                     if response.status == 200:
                         return
             except (aiohttp.ClientError, asyncio.TimeoutError):
@@ -31,8 +40,9 @@ class PairingEngine:
         raise UserError("The AirPlay engine did not become ready")
 
     async def call(self, path, body=None):
+        check(self.port is not None, "The AirPlay engine is not ready")
         try:
-            async with self.session.post("http://127.0.0.1:8098" + path, json=body or {}, headers={"X-AirplayVideo": "1"}, timeout=aiohttp.ClientTimeout(total=35)) as response:
+            async with self.session.post(f"http://127.0.0.1:{self.port}" + path, json=body or {}, headers={"X-AirplayVideo": "1"}, timeout=aiohttp.ClientTimeout(total=35)) as response:
                 result = await response.json()
                 if response.status != 200:
                     raise UserError(result.get("error", "AirPlay operation failed") if isinstance(result, dict) else "AirPlay operation failed")
@@ -48,6 +58,7 @@ class PairingEngine:
             except asyncio.TimeoutError:
                 self.process.kill()
                 await self.process.wait()
+        self.port = None
 
 
 class Stream:
@@ -217,7 +228,7 @@ class Controller:
             url, label = browser_url(request.get("url")), "Web page"
         else:
             raise UserError("Choose a browser source")
-        return {"kind": "browser", "key": "browser", "label": label, "url": url, "page_id": request.get("page"), "browser_source": kind}, {"kind": "browser", "display": ":99.0", "pulse": "airplayvideo.monitor"}
+        return {"kind": "browser", "key": "browser", "label": label, "url": url, "page_id": request.get("page"), "browser_source": kind}, {"kind": "browser", "pulse": "airplayvideo.monitor"}
 
     async def open_browser(self, request):
         self.require_mode("browser")
@@ -252,6 +263,7 @@ class Controller:
                         await self.browser.navigate(source["url"], self.store.data["setup"], source["browser_source"] == "youtube", source["browser_source"] == "watch_later")
                     else:
                         await self.browser.start(self.store.data["setup"])
+                    input_config["display"] = self.browser.environment["DISPLAY"]
                 check(generation == self.generation, "Playback was cancelled")
                 if not same_source:
                     self.phase = "preparing"

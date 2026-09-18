@@ -45,16 +45,19 @@ re-pair or reconnect.
 
 ## Private boundaries
 
-- The production UI is served only through Home Assistant ingress. No web, VNC,
-  CDP, X11 or PulseAudio port is published to the LAN.
-- Only UDP 18200–18215 is published for receiver timing and audio recovery.
-  Leave this internal/external port mapping unchanged in this release.
+- Host networking allows LAN mDNS and HDHomeRun broadcast discovery. A bridged
+  container does not forward this discovery traffic onto the LAN.
+- The production UI binds only to Supervisor's internal bridge address on its
+  assigned ingress port, and accepts only the ingress proxy as the caller.
+  Engine, VNC and CDP listeners allocate loopback ports; Xvfb chooses an unused
+  display. X11 TCP is disabled and PulseAudio uses a private UNIX socket.
+- UDP 18200–18215 supplies receiver timing and audio recovery during playback.
 - The container uses `SYS_ADMIN` to allow Chrome's nested sandbox namespaces,
   as required by this container runtime. This is a broad Linux capability;
   Home Assistant Protection mode and Chrome's sandbox remain enabled. The
   browser runs as UID 1000 and receives no Supervisor/MQTT credentials.
 - The container has its own browser profile and display, no host filesystem
-  mounts, no host network, and no access to Home Assistant configuration files.
+  mounts and no access to Home Assistant configuration files.
 - Browser URLs may point to LAN services; access is for authenticated HA admins.
   Protect browser accounts and back up the app as private data.
 - Root-owned settings and pairing files are mode 0600; the browser cannot read

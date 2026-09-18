@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.4
+
+- Restore TV and tuner LAN discovery by using Home Assistant host networking.
+- Bind the UI to Supervisor's internal ingress interface and assigned port.
+- Allocate private engine/browser ports and the virtual display dynamically so
+  other browser apps can remain running on the same host.
+
 ## 0.1.3
 
 - Return to playback controls when an expanded browser preview closes.
