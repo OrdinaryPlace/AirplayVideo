@@ -1,5 +1,21 @@
 # Verification
 
+## 0.2.3 — idle event channel
+
+- The updated Linux image passes all six native suites, 80 Python tests and
+  the actual sandboxed-browser regressions.
+- The longer installed live-TV trial exposed a 90-second read deadline on an
+  otherwise idle AirPlay event channel. Regular feedback and media delivery
+  were separate and remained active until the sender treated that idle read as
+  failure. Events now wait through quiet periods without dropping the session.
+- Native encrypted socket-pair tests cover repeated idle intervals, fragmented
+  event arrival, pipelined events already in the decrypted buffer, actual peer
+  closure and a stalled partial message. Message authentication and bounded
+  parsing remain enabled.
+- Receiver testing must extend beyond the previous 90-second cutoff, then
+  explicitly verify Stop and tuner release. Transport success still does not
+  establish physical picture, sound or lip sync.
+
 ## 0.2.2 — live TV startup and packet scheduling
 
 - The Linux release image passes six native suites, all 80 Python tests, the

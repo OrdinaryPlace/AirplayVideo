@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.3
+
+- Keep a quiet AirPlay event connection alive. The sender previously treated
+  90 seconds without an unsolicited event as failure and stopped playback.
+- Preserve bounded parsing/authentication after an event begins, and still
+  fail on actual closure, malformed events or a stalled partial message.
+- Test idle periods, fragmented encrypted events, pipelined messages and real
+  disconnects. Retain normal feedback requests and prompt Stop behavior.
+
 ## 0.2.2
 
 - Recover when a live MPEG-2 broadcast begins between sequence headers, instead

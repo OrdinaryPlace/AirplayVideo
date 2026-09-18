@@ -22,14 +22,18 @@ Socket &Socket::operator=(Socket &&o) noexcept {
   }
   return *this;
 }
-static void ready(int fd, short events, int ms) {
+static bool poll_ready(int fd, short events, int ms) {
   pollfd p{fd, events, 0};
   int r;
   do {
     r = poll(&p, 1, ms);
   } while (r < 0 && errno == EINTR);
-  require(r > 0, "Network timeout");
+  require(r >= 0, "Network poll failed");
   require(!(p.revents & (POLLERR | POLLNVAL)), "Network socket error");
+  return r > 0;
+}
+static void ready(int fd, short events, int ms) {
+  require(poll_ready(fd, events, ms), "Network timeout");
 }
 Socket Socket::connect(const std::string &ip, uint16_t port, int timeout) {
   sockaddr_in a{};
@@ -135,6 +139,12 @@ Bytes Channel::read_block(int timeout) {
   require(used == ssize_t(head.size()) && len == n,
           "Channel authentication failed");
   return Bytes(plain, plain + len);
+}
+std::optional<Message> Channel::read_event(int idle_timeout,int message_timeout) {
+  // Events are unsolicited: silence is normal. Once any bytes arrive, retain
+  // the ordinary bounded framing/authentication checks, including partial data.
+  if(pending_.empty()&&!poll_ready(socket_.fd(),POLLIN,idle_timeout)) return std::nullopt;
+  return read_message(message_timeout);
 }
 Message Channel::read_message(int timeout) {
   const std::string delimiter = "\r\n\r\n";

@@ -20,6 +20,29 @@ template <class F> static void rejected(F test, const char *message) {
   check(failed, message);
 }
 template <class T> using Owned = std::unique_ptr<T, void (*)(T *)>;
+static void event_channel_test() {
+  int sockets[2];check(socketpair(AF_UNIX,SOCK_STREAM,0,sockets)==0,"Event socket pair");
+  Channel events{Socket(sockets[0])};Socket peer(sockets[1]);
+  auto secret=random_bytes(32);events.encrypt(secret,PAIR_CHANNEL_EVENTS);
+  Owned<pair_cipher_context> server(pair_cipher_new(PAIR_SERVER_HOMEKIT,PAIR_CHANNEL_EVENTS,secret.data(),secret.size(),nullptr),pair_cipher_free);
+  check(bool(server),"Event peer cipher");
+  for(int i=0;i<5;++i)check(!events.read_event(10,30),"Quiet event channel remains healthy across idle deadlines");
+  const auto message=bytes("POST /event HTTP/1.1\r\nCSeq: 7\r\nContent-Length: 3\r\n\r\nonePOST /event HTTP/1.1\r\nCSeq: 8\r\nContent-Length: 3\r\n\r\ntwo");
+  uint8_t *raw=nullptr;size_t size=0;
+  check(pair_encrypt(&raw,&size,message.data(),message.size(),server.get())==ssize_t(message.size()),"Event peer encryption");
+  Owned<uint8_t> wire(raw,[](uint8_t *p){free(p);});
+  std::jthread writer([&]{peer.write(std::span(raw,size).first(1));std::this_thread::sleep_for(std::chrono::milliseconds(10));peer.write(std::span(raw,size).subspan(1));});
+  auto first=events.read_event(100,100);writer.join();
+  check(first&&first->body==bytes("one")&&first->headers.at("cseq")=="7","Fragmented encrypted event after idle");
+  auto second=events.read_event(0,100);
+  check(second&&second->body==bytes("two")&&second->headers.at("cseq")=="8","Buffered event does not wait for another socket read");
+  check(!events.read_event(10,30),"Channel can return to idle after an event");
+  peer.shutdown();rejected([&]{events.read_event(100,100);},"Actual event peer closure still fails");
+  int partial[2];check(socketpair(AF_UNIX,SOCK_STREAM,0,partial)==0,"Partial event socket pair");
+  Channel incomplete{Socket(partial[0])};Socket incomplete_peer(partial[1]);
+  incomplete_peer.write(bytes("POST /event HTTP/1.1\r\n"));
+  rejected([&]{incomplete.read_event(10,20);},"Started but stalled event remains bounded");
+}
 struct Peer {
   std::array<uint8_t, 32> key{};
   std::string id;
@@ -219,6 +242,7 @@ int main() {
     auto second = video.frame(1);
     check(second.payload != frame.payload, "Generated animation changes");
     pairing_test();
+    event_channel_test();
     std::cout << assertions << " assertions passed\n";
     return 0;
   } catch (const std::exception &e) {

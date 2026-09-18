@@ -8,6 +8,11 @@ and are not an additional playback-delay setting. Incomplete mid-stream joins
 recover at the next usable sequence header; sustained loss of either track
 fails and releases the input. Stop interrupts reads, pacing and queue waits.
 
+The AirPlay event socket carries unsolicited messages and may stay quiet.
+Short cancellable polls wait for an event without an idle-expiration policy;
+once data arrives, the existing bounded framing and authenticated decryption
+still apply. Regular control-channel feedback remains the session heartbeat.
+
 ```mermaid
 flowchart LR
   W[Setup wizard] --> S[Private settings and pairings]

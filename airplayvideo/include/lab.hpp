@@ -10,6 +10,7 @@
 #include <memory>
 #include <mutex>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -85,6 +86,8 @@ public:
                const char *suffix = nullptr);
   void write(std::span<const uint8_t> data);
   Message read_message(int timeout_ms = 5000);
+  std::optional<Message> read_event(int idle_timeout_ms = 250,
+                                  int message_timeout_ms = 5000);
   void shutdown() { socket_.shutdown(); }
 };
 class Rtsp {

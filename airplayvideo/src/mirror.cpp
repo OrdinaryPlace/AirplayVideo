@@ -88,7 +88,9 @@ public:
     worker_ = std::jthread([this](std::stop_token stop) {
       while (!stop.stop_requested()) {
         try {
-          auto m = channel_.read_message(90000);
+          auto event = channel_.read_event();
+          if (!event) continue;
+          const auto &m = *event;
           if (m.status != 0)
             continue;
           std::string response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n";
