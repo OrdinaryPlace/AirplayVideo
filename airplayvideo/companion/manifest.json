@@ -1,0 +1,9 @@
+{
+  "manifest_version": 3,
+  "name": "AirplayVideo Browser Controls",
+  "version": "1.0.0",
+  "description": "Private browser controls for the local AirplayVideo app.",
+  "permissions": ["nativeMessaging", "scripting"],
+  "host_permissions": ["https://www.youtube.com/*"],
+  "background": {"service_worker": "background.js"}
+}

@@ -50,12 +50,13 @@
         </section>
         <section class="card tv-card"><div class="card-header"><h2>TVs</h2><button id="tvSetup" class="text-button">Manage in Setup</button></div><p class="muted tight">The same source plays on every selected TV.</p><div id="tvList"></div></section>
       </div>
+    </section>
       <section id="previewSection" class="card preview-card" hidden>
-        <div class="card-header"><h2>Browser preview</h2><span class="muted">Sound plays on the TVs</span></div>
-        <div class="preview-toolbar" aria-label="Browser controls"><button data-browser="back" title="Back">←</button><button data-browser="forward" title="Forward">→</button><button data-browser="reload">Reload</button><button data-browser="play_pause">Play / pause</button><button data-browser="fullscreen">Fill video</button><button id="paste">Paste text</button><span class="spacer"></span><button id="expand">Expand</button><button id="closeBrowser">Close browser</button></div>
+        <div class="card-header"><h2>Browser preview</h2><span id="previewHelp" class="muted">Sound plays on the TVs</span></div>
+        <div class="preview-toolbar" aria-label="Browser controls"><button data-browser="back" title="Back">←</button><button data-browser="forward" title="Forward">→</button><button data-browser="reload">Reload</button><button data-browser="play_pause">Play / pause</button><button data-browser="fullscreen">Fill video</button><button id="paste">Paste text</button><span class="spacer"></span><button data-browser="zoom_out" aria-label="Make page smaller">A−</button><button data-browser="zoom_reset" title="Reset page zoom">100%</button><button data-browser="zoom_in" aria-label="Make page larger">A+</button><button id="expand" class="primary" aria-expanded="false">Full screen preview</button><button id="returnPreview" hidden>Back to Setup</button><button id="closeBrowser">Close browser</button></div>
+        <p id="previewError" class="error" role="alert" hidden></p>
         <div id="preview" tabindex="0" aria-label="Interactive remote browser preview"></div><p id="previewStatus" class="muted tight" role="status"></p>
       </section>
-    </section>
   </main>
   <dialog id="pairDialog"><form id="pairForm"><h2 id="pairTitle">Pair your TV</h2><p>Enter the four-digit code shown on the TV.</p><label for="pin">TV code</label><input id="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="one-time-code" required><p id="pairError" class="error" hidden></p><div class="dialog-actions"><button id="cancelPair" type="button">Cancel</button><button id="completePair" class="primary">Complete pairing</button></div></form></dialog>
   <dialog id="pagesDialog"><form id="pageForm"><h2>Saved pages</h2><div id="pagesList" class="saved-list"></div><input id="pageId" type="hidden"><label for="pageName">Name</label><input id="pageName" maxlength="60" required placeholder="Living room dashboard"><label for="pageUrl">Page URL</label><input id="pageUrl" type="url" required placeholder="https://…"><div class="dialog-actions"><button id="closePages" type="button">Close</button><button class="primary">Save page</button></div></form></dialog>

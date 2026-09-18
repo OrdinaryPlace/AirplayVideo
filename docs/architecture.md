@@ -49,7 +49,7 @@ re-pair or reconnect.
   container does not forward this discovery traffic onto the LAN.
 - The production UI binds only to Supervisor's internal bridge address on its
   assigned ingress port, and accepts only the ingress proxy as the caller.
-  Engine, VNC and CDP listeners allocate loopback ports; Xvfb chooses an unused
+  Engine and VNC listeners allocate loopback ports; Xvfb chooses an unused
   display. X11 TCP is disabled and PulseAudio uses a private UNIX socket.
 - UDP 18200–18215 supplies receiver timing and audio recovery during playback.
 - The container uses `SYS_ADMIN` to allow Chrome's nested sandbox namespaces,
@@ -62,6 +62,14 @@ re-pair or reconnect.
   Protect browser accounts and back up the app as private data.
 - Root-owned settings and pairing files are mode 0600; the browser cannot read
   them. PINs are not stored. Pairings verify the receiver's pinned identity.
+- Chrome has no remote debugging endpoint or automation flags. A per-install
+  signed Linux extension uses a private native-messaging socket. Its only page
+  permission is `https://www.youtube.com/*`; there is no debugger, cookies,
+  broad tabs or account-page permission. Navigation uses ordinary Chrome APIs.
+- Native paste briefly serves UTF-8 text on the private X11 clipboard, waits for the
+  receiving application to read it, lets the paste event settle, and closes the owner. Text is never an argv,
+  file or log entry. VNC selection exchange is disabled, and preview input is
+  held while paste is delivered to the owned Chrome window.
 - VNC has a private session password. The service authenticates the loopback
   VNC connection and bridges it through an ingress-authorized WebSocket with an
   expiring one-use ticket. The browser tab never receives the VNC password.

@@ -4,7 +4,7 @@ const $ = id => document.getElementById(id);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 let state, draft, step = 0, mode = 'browser', busy = false;
 let chosenTVs = new Set(), selectionDirty = false, discoveredTVs = [], discoveredTuners = [];
-let rfb = null, previewConnecting = false, previewWanted = false;
+let rfb = null, previewConnecting = false, previewWanted = false, previewExpanded = false;
 const stepNames = ['Sources', 'Configure', 'Pair TVs', 'Picture & sound', 'Finish'];
 const titles = ['Choose your sources', 'Configure your sources', 'Pair your TVs', 'Set picture and sound', 'Connect Home Assistant'];
 const descriptions = [
@@ -26,6 +26,7 @@ async function api(path, body) {
 
 function message(error = '', notice = '') {
   $('error').textContent = error; $('error').hidden = !error;
+  $('previewError').textContent = error; $('previewError').hidden = !error;
   $('notice').textContent = notice; $('notice').hidden = !notice;
 }
 
@@ -63,6 +64,7 @@ function route() {
     if (!draft) draft = structuredClone(state.setup);
     renderStep();
   } else renderUsage();
+  renderPreview();
 }
 
 function openSetup(target = 0) {
@@ -108,8 +110,15 @@ function renderStep() {
       <label class="mode-card"><input id="enableHDHR" type="checkbox" ${checked(draft.modes.hdhomerun)}><div><h2>HDHomeRun live TV</h2><p>Choose an antenna channel. One tuner supplies the same program to all selected TVs.</p></div></label>
     </div><p class="muted">Both modes can be enabled. Playback uses one source at a time.</p>`;
   } else if (step === 1) {
-    $('stepContent').innerHTML = `${draft.modes.browser ? `<section class="setup-section"><h2>Browser defaults</h2><label for="homeUrl">Home page</label><input id="homeUrl" type="url" required value="${escape(draft.browser.home_url)}"><label for="youtubeQuality">YouTube quality preference</label><select id="youtubeQuality"><option value="1080p" ${selected(draft.browser.youtube_quality,'1080p')}>1080p</option><option value="720p" ${selected(draft.browser.youtube_quality,'720p')}>720p</option><option value="auto" ${selected(draft.browser.youtube_quality,'auto')}>YouTube automatic</option></select><p class="muted">The browser keeps its own sign-ins and site data. Available video quality depends on the source.</p></section>` : ''}
+    $('stepContent').innerHTML = `${draft.modes.browser ? `<section class="setup-section"><h2>Browser defaults</h2><label for="homeUrl">Home page</label><input id="homeUrl" type="url" required value="${escape(draft.browser.home_url)}"><label for="youtubeQuality">YouTube quality preference</label><select id="youtubeQuality"><option value="1080p" ${selected(draft.browser.youtube_quality,'1080p')}>1080p</option><option value="720p" ${selected(draft.browser.youtube_quality,'720p')}>720p</option><option value="auto" ${selected(draft.browser.youtube_quality,'auto')}>YouTube automatic</option></select><p class="muted">The browser keeps its own sign-ins and site data. Available video quality depends on the source.</p><button id="setupBrowser" type="button" class="primary">Open browser to sign in</button><p class="muted">Use the full screen preview and A+ to make sign-in fields easier to read. You can sign in before finishing Setup.</p></section>` : ''}
       ${draft.modes.hdhomerun ? `<section class="setup-section"><div class="card-header"><h2>HDHomeRun devices</h2><button id="findTuners" type="button">Find HDHomeRun</button></div><p class="muted">Discovery reads the channel list. It does not start a stream or run an antenna scan.</p><div id="configuredTuners" class="device-list"></div><div id="foundTuners" class="device-list"></div><details><summary>Enter a device address</summary><div class="inline-form"><div><label for="tunerAddress">HDHomeRun IPv4 address</label><input id="tunerAddress" placeholder="192.168.x.x" inputmode="decimal"></div><button id="probeTuner" type="button">Connect</button></div></details></section>` : ''}`;
+    if (draft.modes.browser) $('setupBrowser').onclick = () => setupTask(async () => {
+      draft.browser.home_url = $('homeUrl').value;
+      draft.browser.youtube_quality = $('youtubeQuality').value;
+      state = await api('api/setup/open_browser', {url:draft.browser.home_url});
+      renderPreview();
+      $('previewSection').scrollIntoView({behavior:'smooth',block:'start'});
+    }, $('setupBrowser'));
     if (draft.modes.hdhomerun) {
       renderTuners();
       $('findTuners').onclick = () => setupTask(async () => {
@@ -150,6 +159,7 @@ function renderStep() {
     $('stepContent').innerHTML = `<label class="check-row"><input id="enableHA" type="checkbox" ${checked(draft.home_assistant.enabled)}> Create TV controls in Home Assistant</label><p class="muted">Each paired TV gets Play and Stop buttons, saved-page shortcuts, channel selection, and status for your dashboards and automations.</p><div class="integration"><strong>${connected ? 'Home Assistant connection ready' : 'Home Assistant connection needs attention'}</strong><p class="muted">${connected ? 'The app found the MQTT service automatically. Controls appear for paired TVs after you finish Setup.' : escape(state.home_assistant.error || 'Enable MQTT in Home Assistant to create playback entities. You can still use the app directly.')}</p><button type="button" id="retryHA" class="text-button">Check connection again</button></div><dl class="review"><dt>Modes</dt><dd>${Object.entries(draft.modes).filter(([,enabled])=>enabled).map(([key])=>key==='browser'?'Web browser':'HDHomeRun').join(' + ')}</dd><dt>Paired TVs</dt><dd>${state.receivers.length ? escape(state.receivers.map(r=>r.name).join(', ')) : 'None yet — add them in Setup later'}</dd><dt>Picture</dt><dd>${draft.video.resolution} · ${draft.video.fps} fps · H.264</dd><dt>Sound</dt><dd>${draft.audio.enabled ? 'Stereo audio enabled' : 'Video only'}</dd><dt>After saving</dt><dd>Playback stays idle until you press Play.</dd></dl>`;
     $('retryHA').onclick = () => setupTask(async () => { await api('api/setup/home_assistant', {}); await refresh(); renderStep(); }, $('retryHA'));
   }
+  renderPreview();
 }
 
 function addTuner(device) {
@@ -246,12 +256,34 @@ function renderUsage(){
   }).join(''):'<p class="empty">Add your TVs in Setup, then choose where to play.</p>');
   for(const checkbox of document.querySelectorAll('[data-tv]'))checkbox.onchange=()=>{selectionDirty=true;checkbox.checked?chosenTVs.add(checkbox.dataset.tv):chosenTVs.delete(checkbox.dataset.tv);updateButtons();};
   for(const button of document.querySelectorAll('[data-stop]'))button.onclick=()=>act('stop',{receiver:button.dataset.stop},true);
-  $('previewSection').hidden=mode!=='browser'||!runtime.browser_open;
-  previewWanted=mode==='browser'&&runtime.browser_open&&!$('playback').hidden;
-  if(!previewWanted&&document.fullscreenElement===$('previewSection'))document.exitFullscreen().catch(()=>{});
+  renderPreview();
+  updateButtons();
+}
+
+function renderPreview(){
+  if(!state)return;
+  const setup = !$('wizard').hidden;
+  previewWanted = state.runtime.browser_open && (setup ? step===1 && draft?.modes.browser : mode==='browser');
+  $('previewSection').hidden = !previewWanted;
+  $('previewHelp').textContent = setup ? 'Sign in here. Your browser profile is saved.' : 'Sound plays on the TVs';
+  $('returnPreview').textContent = setup ? 'Back to Setup' : 'Back to Playback';
+  if(!previewWanted && previewExpanded) collapsePreview();
   if(previewWanted&&!rfb&&!previewConnecting)connectPreview();
   if(!previewWanted&&rfb){rfb.disconnect();rfb=null;}
-  updateButtons();
+}
+
+function expandedState(value){
+  previewExpanded=value;
+  $('previewSection').classList.toggle('expanded',value);
+  document.body.classList.toggle('preview-expanded',value);
+  $('expand').hidden=value;
+  $('expand').setAttribute('aria-expanded',String(value));
+  $('returnPreview').hidden=!value;
+}
+async function collapsePreview(){
+  expandedState(false);
+  if(document.fullscreenElement)await document.exitFullscreen().catch(()=>{});
+  if(previewWanted){$('expand').focus();(!$('wizard').hidden?$('wizard'):$('playback')).scrollIntoView({block:'start'});}
 }
 
 function browserKindChanged(){
@@ -308,7 +340,16 @@ $('refreshChannels').onclick=()=>act('refresh_channels');
 $('setupTab').onclick=()=>openSetup();$('tvSetup').onclick=()=>openSetup(2);
 $('playTab').onclick=()=>{location.hash=state.setup.complete?'#play':'#setup';route();};
 for(const button of document.querySelectorAll('[data-browser]'))button.onclick=()=>act('browser',{action:button.dataset.browser});
-$('expand').onclick=async()=>{if(document.fullscreenElement)await document.exitFullscreen();else await $('previewSection').requestFullscreen();};
+$('expand').onclick=async()=>{
+  expandedState(true);
+  // The large in-app layout also works when HA/the browser denies fullscreen.
+  try{await $('previewSection').requestFullscreen();}catch{}
+  $('returnPreview').focus();
+};
+$('returnPreview').onclick=collapsePreview;
+document.addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement)expandedState(false);});
+document.addEventListener('keydown',event=>{if(event.key==='Escape'&&previewExpanded&&!$('pasteDialog').open){event.preventDefault();collapsePreview();}});
+$('previewSection').appendChild($('pasteDialog'));
 $('paste').onclick=()=>{$('pasteText').value='';$('pasteDialog').showModal();$('pasteText').focus();};
 $('cancelPaste').onclick=()=>{$('pasteText').value='';$('pasteDialog').close();};
 $('pasteDialog').addEventListener('cancel',()=>{$('pasteText').value='';});

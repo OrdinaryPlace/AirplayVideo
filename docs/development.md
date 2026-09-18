@@ -17,7 +17,11 @@ validation, source replacement, Stop during warmup, independent receivers,
 MQTT discovery and stale command rejection. Host-network tests verify that
 concurrent engines allocate separate loopback endpoints and that ingress fails
 closed without a valid Supervisor assignment. The browser coexistence check
-starts two private displays while the conventional VNC/CDP ports are occupied:
+starts two private displays while conventional VNC/debugging ports are occupied.
+It verifies ordinary `navigator.webdriver === false` from a synthetic page,
+absence of debugging/automation flags, native Unicode paste without submitting,
+Back/Forward/Reload, zoom, and retained profile/extension identity after restart.
+The signed extension is installed with the production `umask 077`:
 
 ```sh
 docker run --rm --cap-add SYS_ADMIN --shm-size=256m \

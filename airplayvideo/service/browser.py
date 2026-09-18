@@ -2,17 +2,16 @@
 from __future__ import annotations
 import asyncio
 import contextlib
-import json
 import os
 from pathlib import Path
 import secrets
 import signal
 import struct
 import time
-import aiohttp
 from Cryptodome.Cipher import DES
 from .model import UserError, check, browser_url
 from .network import unused_loopback_port
+from .companion import Companion, install as install_companion
 
 
 def child_environment():
@@ -34,13 +33,14 @@ class Browser:
         self.url = ""
         self.dimensions = (1920, 1080)
         self.lock = asyncio.Lock()
-        self.cdp_lock = asyncio.Lock()
+        self.control_lock = asyncio.Lock()
         self.vnc_password = None
         self.vnc_port = None
-        self.cdp_port = None
+        self.companion = None
+        self.chrome_process = None
         self.youtube_task = None
         self.environment = child_environment()
-        self.environment.update(HOME=str(self.root), DISPLAY=":99.0", XAUTHORITY=str(self.root / "Xauthority"), XDG_RUNTIME_DIR=str(self.root / "runtime"), PULSE_SERVER="unix:" + str(self.root / "pulse.sock"), PULSE_COOKIE=str(self.root / "pulse-cookie"), PULSE_SINK="airplayvideo")
+        self.environment.update(LANG="C.UTF-8", LC_ALL="C.UTF-8", HOME=str(self.root), DISPLAY=":99.0", XAUTHORITY=str(self.root / "Xauthority"), XDG_RUNTIME_DIR=str(self.root / "runtime"), PULSE_SERVER="unix:" + str(self.root / "pulse.sock"), PULSE_COOKIE=str(self.root / "pulse-cookie"), PULSE_SINK="airplayvideo")
 
     def _private_file(self, name, data):
         path = self.root / name
@@ -117,21 +117,6 @@ class Browser:
         finally:
             transport.close()
 
-    async def wait_debugger(self):
-        # Chrome writes its own dynamically bound port into this private profile.
-        path = self.root / "profile" / "DevToolsActivePort"
-        for _ in range(100):
-            check(all(child.returncode is None for child in self.children), "Browser exited during startup")
-            try:
-                port = int(path.read_text().splitlines()[0])
-                check(0 < port <= 65535, "Browser returned an invalid control endpoint")
-                self.cdp_port = port
-                await self.wait_port(port)
-                return
-            except (FileNotFoundError, ValueError, IndexError):
-                await asyncio.sleep(0.15)
-        raise UserError("Browser control did not become ready")
-
     async def start(self, setup):
         async with self.lock:
             if self.running:
@@ -166,44 +151,72 @@ class Browser:
                 await self.launch("openbox", "--sm-disable")
                 await self.launch("pulseaudio", "-n", "--daemonize=no", "--exit-idle-time=-1", "--log-level=error", "-L", f"module-native-protocol-unix socket={self.root / 'pulse.sock'} auth-cookie={self.root / 'pulse-cookie'}", "-L", "module-null-sink sink_name=airplayvideo rate=48000 channels=2")
                 self.vnc_port = unused_loopback_port()
-                await self.launch("x11vnc", "-display", self.environment["DISPLAY"], "-auth", self.environment["XAUTHORITY"], "-localhost", "-rfbport", str(self.vnc_port), "-rfbauth", str(self.root / "vnc-password"), "-forever", "-shared", "-xkb", "-quiet")
+                await self.launch("x11vnc", "-display", self.environment["DISPLAY"], "-auth", self.environment["XAUTHORITY"], "-localhost", "-rfbport", str(self.vnc_port), "-rfbauth", str(self.root / "vnc-password"), "-forever", "-shared", "-xkb", "-nosel", "-quiet")
                 await self.wait_port(self.vnc_port)
                 with contextlib.suppress(FileNotFoundError):
                     (self.root / "profile" / "DevToolsActivePort").unlink()
-                await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--remote-debugging-address=127.0.0.1", "--remote-debugging-port=0", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--kiosk", "about:blank")
-                await self.wait_debugger()
+                identity = await asyncio.to_thread(install_companion, self.root)
+                self.companion = Companion(self.root, identity)
+                await self.companion.start()
+                self.environment.update(AIRPLAYVIDEO_COMPANION_ID=identity, AIRPLAYVIDEO_COMPANION_SOCKET=str(self.companion.path))
+                self.chrome_process = await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--start-fullscreen", "about:blank")
+                await self.companion.wait_ready()
                 self.running = True
                 self.url = ""
             except BaseException:
                 await self._close()
                 raise
 
-    async def cdp(self, method, params=None):
-        check(self.running, "Open the browser first")
-        async with self.cdp_lock:
-            try:
-                async with self.session.get(f"http://127.0.0.1:{self.cdp_port}/json/list", timeout=aiohttp.ClientTimeout(total=3)) as response:
-                    pages = await response.json()
-                page = next((p for p in pages if p.get("type") == "page"), None)
-                check(page is not None, "Browser page is unavailable")
-                async with self.session.ws_connect(page["webSocketDebuggerUrl"], timeout=5, max_msg_size=2 * 1024 * 1024) as ws:
-                    await ws.send_json({"id": 1, "method": method, "params": params or {}})
-                    async with asyncio.timeout(10):
-                        async for message in ws:
-                            if message.type != aiohttp.WSMsgType.TEXT:
-                                break
-                            result = json.loads(message.data)
-                            if result.get("id") == 1:
-                                check("error" not in result, "Browser action could not be completed")
-                                return result.get("result", {})
-            except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
-                raise UserError("Browser is not responding; close and reopen it") from exc
-        raise UserError("Browser connection ended")
+    async def native_command(self, *args, text=None, timeout=10):
+        process = await asyncio.create_subprocess_exec(*args, env=self.environment, user=1000, group=1000, stdin=asyncio.subprocess.PIPE if text is not None else asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            output, _ = await asyncio.wait_for(process.communicate(text.encode() if text is not None else None), timeout)
+            check(process.returncode == 0, "The browser control could not finish")
+            return output.decode().strip()
+        except BaseException:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+            raise
 
-    async def evaluate(self, expression):
-        result = await self.cdp("Runtime.evaluate", {"expression": expression, "returnByValue": True, "userGesture": True, "awaitPromise": True})
-        check("exceptionDetails" not in result, "The page needs interaction in the browser preview")
-        return result.get("result", {}).get("value")
+    async def paste_clipboard(self, text):
+        # One bounded, foreground clipboard owner on our private X display.
+        # Input stays on stdin and the selection disappears when it exits.
+        process = await asyncio.create_subprocess_exec("python3", str(Path(__file__).with_name("paste.py")), env=self.environment, user=1000, group=1000, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+        try:
+            process.stdin.write(text.encode("utf-8"))
+            await process.stdin.drain()
+            process.stdin.close()
+            check(await asyncio.wait_for(process.stdout.readline(), 5) == b"ready\n", "Paste could not prepare the clipboard")
+            await self.native_command("xdotool", "key", "--clearmodifiers", "ctrl+v")
+            check(await asyncio.wait_for(process.stdout.readline(), 5) == b"served\n", "Paste did not finish; select a field and try again")
+            # Clipboard ownership changes can invalidate Chrome's prefetched
+            # text. Let its native paste event finish before clearing ownership.
+            await asyncio.sleep(0.5)
+        except asyncio.TimeoutError as exc:
+            raise UserError("Paste did not finish; select a field and try again") from exc
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await process.wait()
+
+    async def paste(self, text):
+        check(isinstance(text, str) and len(text) <= 16384, "Text is too long")
+        check(not any(ord(char) < 32 or ord(char) == 127 for char in text), "Paste a single line without control characters")
+        async with self.control_lock:
+            # Guard all preview clients while native keyboard input is delivered.
+            remote = ["x11vnc", "-display", self.environment["DISPLAY"], "-auth", self.environment["XAUTHORITY"]]
+            try:
+                guarded = await self.native_command(*remote, "-R", "viewonly", "-Q", "viewonly", "-sync")
+                check("viewonly:1" in guarded, "Preview input could not be paused for Paste")
+                window = await self.native_command("xdotool", "getactivewindow")
+                check(window.isdigit() and self.chrome_process is not None, "Select a browser field before pasting")
+                owner = await self.native_command("xdotool", "getwindowpid", window)
+                check(owner == str(self.chrome_process.pid), "Select a browser field before pasting")
+                await self.paste_clipboard(text)
+            finally:
+                with contextlib.suppress(UserError, OSError):
+                    await self.native_command(*remote, "-R", "noviewonly", "-sync")
 
     def cancel_youtube(self):
         if self.youtube_task:
@@ -214,60 +227,42 @@ class Browser:
         url = browser_url(url)
         await self.start(setup)
         self.cancel_youtube()
-        await self.cdp("Page.navigate", {"url": url})
+        async with self.control_lock:
+            check(self.running and self.companion, "Open the browser first")
+            await self.companion.call("navigate", url=url)
         self.url = url
         if youtube or watch_later:
             self.youtube_task = asyncio.create_task(self.prepare_youtube(setup["browser"]["youtube_quality"], watch_later))
 
     async def prepare_youtube(self, quality, watch_later):
         try:
-            if watch_later:
-                for _ in range(30):
-                    chosen = await self.evaluate("""(() => {
-                      if (!location.hostname.endsWith('youtube.com')) return false;
-                      const rows = [...document.querySelectorAll('ytd-playlist-video-renderer')];
-                      const row = rows.find(r => {const p=r.querySelector('#progress');return !p || parseFloat(p.style.width)<100;});
-                      const link=row?.querySelector('a#video-title');
-                      if(!link) return false;link.click();return true;
-                    })()""")
-                    if chosen:
-                        break
-                    await asyncio.sleep(1)
-            preferred = {"1080p": "hd1080", "720p": "hd720", "auto": "auto"}[quality]
             for _ in range(45):
-                ready = await self.evaluate("""(() => {
-                  if (!location.hostname.endsWith('youtube.com')) return false;
-                  const v=document.querySelector('video'),p=document.querySelector('#movie_player');
-                  if(!v||!p||v.readyState<2) return false;
-                  const q=""" + json.dumps(preferred) + """;
-                  if(q!=='auto'&&typeof p.setPlaybackQualityRange==='function')p.setPlaybackQualityRange(q,q);
-                  v.play().catch(()=>{});p.requestFullscreen().catch(()=>{});return true;
-                })()""")
-                if ready:
+                result = await self.companion.call("youtube_prepare", quality=quality, watch_later=watch_later)
+                if result.get("ready"):
                     return
                 await asyncio.sleep(1)
         except (UserError, asyncio.CancelledError):
-            # Sign-in/consent stays in the preview. No credential or consent automation.
+            # The companion cannot inspect or operate Google account pages.
             return
 
     async def control(self, action, value=None):
         check(self.running, "Open the browser first")
         if action in {"back", "forward", "reload"}:
             self.cancel_youtube()
-        if action == "reload":
-            await self.cdp("Page.reload")
-        elif action in {"back", "forward"}:
-            history = await self.cdp("Page.getNavigationHistory")
-            target = history["currentIndex"] + (-1 if action == "back" else 1)
-            if 0 <= target < len(history["entries"]):
-                await self.cdp("Page.navigateToHistoryEntry", {"entryId": history["entries"][target]["id"]})
+            async with self.control_lock:
+                await self.companion.call(action)
+        elif action in {"zoom_in", "zoom_out", "zoom_reset"}:
+            async with self.control_lock:
+                await self.native_command("xdotool", "key", "--clearmodifiers", {"zoom_in": "ctrl+plus", "zoom_out": "ctrl+minus", "zoom_reset": "ctrl+0"}[action])
         elif action == "paste":
-            check(isinstance(value, str) and len(value) <= 16384, "Text is too long")
-            await self.cdp("Input.insertText", {"text": value})
-        elif action == "play_pause":
-            await self.evaluate("(() => {const v=document.querySelector('video');if(v){if(v.paused)v.play();else v.pause();}})()")
-        elif action == "fullscreen":
-            await self.evaluate("(() => {const v=document.querySelector('video');if(v)v.requestFullscreen().catch(()=>{});})()")
+            await self.paste(value)
+        elif action in {"play_pause", "fullscreen"}:
+            async with self.control_lock:
+                result = await self.companion.call(action)
+                if not result.get("ready") and action == "play_pause":
+                    await self.native_command("xdotool", "key", "XF86AudioPlay")
+                else:
+                    check(result.get("ready"), "Use the video controls in the preview on this page")
         else:
             raise UserError("Unknown browser action")
 
@@ -297,9 +292,12 @@ class Browser:
 
     async def _close(self):
         self.cancel_youtube()
-        if self.running:
+        if self.running and self.companion:
             with contextlib.suppress(UserError, OSError):
-                await self.cdp("Browser.close")
+                await self.companion.call("close")
+            if self.chrome_process and self.chrome_process.returncode is None:
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(self.chrome_process.wait(), 4)
         self.running = False
         for child in reversed(self.children):
             if child.returncode is None:
@@ -313,11 +311,14 @@ class Browser:
                     await child.wait()
             await child.error_reader
         self.children.clear()
+        if self.companion:
+            await self.companion.close()
         self.url = ""
         self.vnc_password = None
         self.vnc_port = None
-        self.cdp_port = None
+        self.companion = None
+        self.chrome_process = None
 
     async def close(self):
-        async with self.lock:
+        async with self.lock, self.control_lock:
             await self._close()

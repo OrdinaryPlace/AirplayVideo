@@ -50,7 +50,10 @@ RUN curl -fL https://dl.google.com/linux/direct/google-chrome-stable_current_amd
  && apt-get update && apt-get install -y /tmp/chrome.deb \
  && rm /tmp/chrome.deb && rm -rf /var/lib/apt/lists/* \
  && useradd --uid 1000 --create-home browser \
- && mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix
+ && mkdir -p /tmp/.X11-unix /usr/share/google-chrome/extensions /opt/airplayvideo/installed \
+ && chmod 1777 /tmp/.X11-unix \
+ && chmod 755 /usr/share/google-chrome/extensions /opt/airplayvideo /opt/airplayvideo/installed
+RUN apt-get update && apt-get install -y --no-install-recommends python3-xlib && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/lib/ /usr/local/lib/
 COPY --from=build /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
 COPY --from=build /opt/app/build/airplayvideo-engine /usr/local/bin/
@@ -60,11 +63,13 @@ COPY LICENSE /opt/licenses/AirplayVideo-MIT.txt
 COPY --from=build /opt/sources/ffmpeg-8.0.1/COPYING.LGPLv2.1 /opt/licenses/FFmpeg-LGPL-2.1.txt
 COPY --from=build /opt/sources/openh264-2.6.0/LICENSE /opt/licenses/OpenH264-BSD.txt
 COPY service /opt/airplayvideo/service
+COPY companion /opt/airplayvideo/companion
+RUN chmod 755 /opt/airplayvideo/service/companion_host.py
 COPY web /opt/airplayvideo/web
 COPY tests /opt/airplayvideo/tests
 RUN ldconfig && dpkg-query -W > /opt/dependency-sources/debian-packages.txt
 WORKDIR /opt/airplayvideo
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 EXPOSE 8099 18200-18215/udp
-LABEL io.hass.name="AirplayVideo" io.hass.description="Browser and HDHomeRun video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.1.4"
+LABEL io.hass.name="AirplayVideo" io.hass.description="Browser and HDHomeRun video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.1.5"
 CMD ["python3", "-m", "service.main"]

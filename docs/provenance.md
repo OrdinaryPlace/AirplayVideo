@@ -33,7 +33,7 @@ Other dependencies are installed from Debian bookworm or Google's official
 Chrome distribution. Their versions are recorded by `dpkg-query` in the image.
 They retain their licenses, including OpenSSL (Apache-2.0), libsodium (ISC),
 libplist (LGPL), nlohmann/json and cpp-httplib (MIT), aiohttp (Apache-2.0),
-Paho MQTT (EPL-2.0/EDL-1.0), PyCryptodome (BSD/public-domain components), and
+Paho MQTT (EPL-2.0/EDL-1.0), Python Xlib (LGPL-2.1), PyCryptodome (BSD/public-domain components), and
 noVNC (MPL-2.0). Xvfb, Openbox, PulseAudio and x11vnc are separate system
 processes under their respective licenses; noVNC is a separately served browser
 module. Google Chrome is not covered by this repository's MIT license.
@@ -50,6 +50,13 @@ module. Google Chrome is not covered by this repository's MIT license.
 - [Home Assistant MQTT discovery](https://www.home-assistant.io/integrations/mqtt/#mqtt-discovery)
 - [RFB specification](https://www.rfc-editor.org/rfc/rfc6143)
   for browser preview framing and VNC challenge-response.
+
+The independently written browser companion follows Chrome's documented
+[Linux external extension installation](https://developer.chrome.com/docs/extensions/how-to/distribute/install-extensions),
+[native messaging](https://developer.chrome.com/docs/extensions/develop/concepts/native-messaging),
+and [CRX3 format](https://chromium.googlesource.com/chromium/src/+/main/components/crx_file/crx3.proto).
+The earlier app's operational notes identified the no-debugging sign-in behavior;
+its browser-control implementation was not copied into this repository.
 
 Protocol constants and interfaces are implemented in the app's own C++/Python
 code. Dependency licenses apply to their components; the MIT license applies to

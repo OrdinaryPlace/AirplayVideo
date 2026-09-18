@@ -4,7 +4,7 @@ Send a browser page or an HDHomeRun channel to your Apple TVs from Home Assistan
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.1.4.** This is an independent implementation in a new
+**Experimental, version 0.1.5.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -51,7 +51,19 @@ Select the TVs and press **Play on selected TVs**. Use **Stop** for one TV or
 the last TV closes the source and releases its tuner.
 
 The browser preview lets you navigate, sign in, paste text, and operate the
-container browser. Preview audio is sent to the TVs, not the preview tab.
+container browser. In **Setup → Configure**, choose **Open browser to sign in**,
+then **Full screen preview**. Use **A+ / A−** to enlarge or reduce the page;
+**100%** resets its zoom. **Back to Setup** keeps the same browser session.
+The expanded layout also works when the HA browser cannot enter native fullscreen.
+Preview audio is sent to the TVs, not the preview tab.
+
+Chrome runs normally with its sandbox and persistent profile, without a remote
+debugging or browser-automation channel. Sign in yourself through the preview.
+The local controls extension uses normal navigation APIs; its page permission
+is limited to YouTube playback. It cannot inspect Google account pages. Paste
+uses a temporary native clipboard on the private display, inserts one line
+without submitting it, then clears that clipboard. Fill video is available for
+YouTube; on other sites use the player’s own fullscreen control.
 Sign-ins and consent remain under your control. Watch Later uses YouTube's
 native queue and requires signing in inside this app's browser.
 

@@ -177,6 +177,11 @@ class Application:
                 await self.ha.close()
                 await self.ha.start()
                 self.ha.refresh()
+            elif action == "open_browser":
+                # First-run sign-in needs no tuner, receiver or saved setup.
+                # Reopening the preview must preserve an in-progress login.
+                if not self.browser.running:
+                    await self.browser.navigate(data.get("url"), self.store.data["setup"])
             elif action == "discover_tuners":
                 return web.json_response({"devices": await discover_tuners(self.session)})
             elif action == "probe_tuner":

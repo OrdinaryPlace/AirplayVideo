@@ -41,3 +41,19 @@ Home Assistant installed it from the public app repository with Protection mode
 enabled. First start found a host port collision on UDP 57102, before any app
 process or pairing started. Version 0.1.1 moves the dedicated mappings to
 18200–18215; existing browser apps and their data are unchanged.
+
+## 0.1.5 browser sign-in mode and wizard preview
+
+- All three CTest suites and 45 Python tests pass in the Linux image.
+- Two actual sandboxed Chrome instances pass native navigation, Unicode paste
+  into a masked fixture, no form submission, clipboard clearing, restored VNC
+  input, authenticated preview, and profile/extension identity after reopening.
+  The test runs with umask 077 and occupied conventional browser ports. Its own
+  page reports webdriver false; Chrome has no debugging or automation flags.
+- The actual container wizard opens a browser before Setup is complete. Full
+  screen preview, page zoom, the Paste dialog and return to Setup were checked.
+  At 390 px the toolbar wraps and the page has no horizontal overflow. The
+  public Big Buck Bunny YouTube clip plays and Fill video fills the canvas.
+- Google account sign-in is deliberately completed by the user. Removing the
+  debugging channel restores the previously accepted browser mode, but a local
+  fixture cannot prove that Google will accept a particular account login.

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.5
+
+- Run ordinary sandboxed Chrome without remote debugging, restoring the browser
+  mode previously used for Google/YouTube sign-in. Keep the existing profile.
+- Use a signed local extension for navigation and YouTube controls, with native
+  Unicode paste and no permission to inspect account pages.
+- Add the interactive preview to Setup before setup is complete, with full-screen
+  expansion, page zoom, and a return button that preserves the sign-in session.
+- Keep Paste visible in fullscreen and fall back to an expanded app view when
+  native fullscreen is unavailable.
+
 ## 0.1.4
 
 - Restore TV and tuner LAN discovery by using Home Assistant host networking.
