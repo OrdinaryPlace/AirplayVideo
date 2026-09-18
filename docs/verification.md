@@ -1,5 +1,25 @@
 # Verification
 
+## 0.2.2 — live TV startup and packet scheduling
+
+- The Linux release image passes six native suites, all 80 Python tests, the
+  actual sandboxed-browser regressions and browser-module syntax checks.
+- The original engine fails a synthetic 1080i MPEG-2/AC-3 transport stream that
+  starts between sequence headers, matching the failure on a local live tuner.
+  The new engine recovers, deinterlaces and produces H.264 with non-silent PCM.
+  Sustained damaged data fails within a bounded deadline; Stop joins all workers.
+- Independently paced video/audio decoding uses a single HTTP tuner connection
+  and bounded compressed-packet queues. A native regression measures steady-state
+  audio age and keeps the source clock shared. The HTTP test verifies Stop closes
+  the connection, and a delayed tuning failure gives a safe actionable error.
+- A private five-second replay of the same real broadcast measured median audio
+  age falling from 765 ms to -6 ms (packets emitted within their decoded audio
+  frame), maximum 10 ms; video median remained 48 ms. This measures publication
+  delay against source PTS, not TV speaker/display synchronization.
+- A fresh live-tuner capture completed with 150 video frames at 1920x1080 and
+  stereo PCM. Physical receiver picture, sound and lip sync remain separate
+  acceptance checks. Private broadcast captures are not included in the repo.
+
 ## 0.1.6 — buffer negotiation and settings
 
 - Three CTest suites pass, including an independent receiver interpretation of

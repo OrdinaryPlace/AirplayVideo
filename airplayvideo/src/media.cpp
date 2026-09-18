@@ -348,12 +348,17 @@ struct Media::Impl {
         require(network,"Unsupported source"); source=o.at("source").at("url");
         if(kind=="hdhomerun") require(source.starts_with("http://"),"HDHomeRun requires local HTTP");
         av_dict_set(&opts,"protocol_whitelist",kind=="fixture"?"file":"http,tcp",0);
-        av_dict_set(&opts,"rw_timeout","5000000",0);
+        // A tuner can spend five seconds tuning before returning its HTTP
+        // response. Allow that response to arrive instead of racing it.
+        av_dict_set(&opts,"rw_timeout","8000000",0);
         av_dict_set(&opts,"probesize","2000000",0); av_dict_set(&opts,"analyzeduration","2000000",0);
       }
       const AVInputFormat *demuxer=format.empty()?nullptr:av_find_input_format(format.c_str());
       require(format.empty()||demuxer,"Required capture device missing");
-      int result=avformat_open_input(&input,source.c_str(),demuxer,&opts); av_dict_free(&opts); check(result,"Open media source");
+      int result=avformat_open_input(&input,source.c_str(),demuxer,&opts); av_dict_free(&opts);
+      if(kind=="hdhomerun" && result<0 && !interrupt(this))
+        throw std::runtime_error("HDHomeRun could not provide this channel. Try another channel and check reception or whether all tuners are in use.");
+      check(result,"Open media source");
       if(network) check(avformat_find_stream_info(input,nullptr),"Read channel formats");
       std::map<int,Codec> decoders;
       int video_index=-1,audio_index=-1;
@@ -369,6 +374,7 @@ struct Media::Impl {
         const auto *codec=avcodec_find_decoder(p->codec_id); require(codec,"Source decoder unavailable");
         Codec ctx(avcodec_alloc_context3(codec)); require(bool(ctx),"Decoder allocation");
         check(avcodec_parameters_to_context(ctx.get(),p),"Decoder format"); ctx->thread_count=2;
+        ctx->pkt_timebase=input->streams[i]->time_base;
         check(avcodec_open2(ctx.get(),codec,nullptr),"Open source decoder"); decoders.emplace(i,std::move(ctx));
       }
       require(!network||video_index>=0,"Channel has no video");
@@ -379,34 +385,102 @@ struct Media::Impl {
       if(audio_index>=0) audio=std::make_unique<AudioConverter>(deliver);
       int64_t origin=network ? input->start_time : 0;
       int64_t offset=network ? std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-owner.epoch).count() : 0;
-      Packet packet(av_packet_alloc()); require(bool(packet),"Capture packet allocation");
-      while(!interrupt(this)) {
-        result=av_read_frame(input,packet.get());
-        if(result<0) { if(interrupt(this)) break; throw std::runtime_error("Media source ended or timed out; press Play to reconnect"); }
-        auto it=decoders.find(packet->stream_index);
-        if(it==decoders.end()) { av_packet_unref(packet.get()); continue; }
-        int index=packet->stream_index;
-        check(avcodec_send_packet(it->second.get(),packet.get()),"Decode source packet"); av_packet_unref(packet.get());
+      std::mutex origin_mutex;
+      struct DecoderProgress { Clock::time_point last_frame=Clock::now(); unsigned invalid=0; };
+      auto decode=[&](int index,AVPacket *packet,DecoderProgress &state,std::stop_token ending) {
+        auto recover=[&](int error) {
+          if(!network||error!=AVERROR_INVALIDDATA) return false;
+          // A broadcast can begin between sequence headers/keyframes. Keep
+          // decoder state until usable data arrives, with a finite loss limit.
+          require(++state.invalid<=256,"Channel has too much damaged data; check reception and reconnect");
+          return true;
+        };
+        auto *decoder=decoders.at(index).get();
+        int decoded=avcodec_send_packet(decoder,packet);
+        if(recover(decoded)) return;
+        check(decoded,"Decode source packet");
         for(;;) {
-          auto f=frame(); result=avcodec_receive_frame(it->second.get(),f.get());
-          if(result==AVERROR(EAGAIN)||result==AVERROR_EOF) break;
-          check(result,"Decode source frame");
+          auto f=frame(); decoded=avcodec_receive_frame(decoder,f.get());
+          if(decoded==AVERROR(EAGAIN)||decoded==AVERROR_EOF) break;
+          if(recover(decoded)) break;
+          check(decoded,"Decode source frame");
+          if(state.invalid) note("source_recovered",{{"track",index==video_index?"video":"audio"},{"invalid_packets",state.invalid}});
+          state.invalid=0;state.last_frame=Clock::now();
           int64_t pts=f->best_effort_timestamp!=AV_NOPTS_VALUE?f->best_effort_timestamp:f->pts;
           require(pts!=AV_NOPTS_VALUE,"Source has no presentation timestamps");
-          int64_t us=av_rescale_q(pts,input->streams[index]->time_base,micros);
+          int64_t us=av_rescale_q(pts,decoder->pkt_timebase,micros);
           if(network) {
+            std::lock_guard lock(origin_mutex);
             if(origin==AV_NOPTS_VALUE) origin=us;
             us=us-origin+offset;
           } else if(kind=="browser") us-=wall_epoch;
           if(kind=="synthetic"||network) {
             auto due=owner.epoch+std::chrono::microseconds(us);
-            while(!interrupt(this)&&Clock::now()<due) std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            while(!interrupt(this)&&!ending.stop_requested()&&Clock::now()<due) std::this_thread::sleep_for(std::chrono::milliseconds(1));
           }
-          if(interrupt(this)) break;
+          if(interrupt(this)||ending.stop_requested()) break;
           if(index==video_index) video->consume(f.get(),us);
           else audio->consume(f.get(),us);
         }
+      };
+      struct PacketQueue {
+        std::mutex mutex;
+        std::condition_variable changed;
+        std::deque<Packet> packets;
+        size_t bytes=0;
+      };
+      std::map<int,PacketQueue> queues;
+      std::atomic<bool> input_done{false};
+      std::vector<std::jthread> decoding;
+      if(network) for(const auto &[index,decoder]:decoders) {
+        auto &queue=queues.try_emplace(index).first->second;
+        decoding.emplace_back([&,index,q=&queue](std::stop_token ending) {
+          try {
+            DecoderProgress state;
+            while(!interrupt(this)&&!ending.stop_requested()) {
+              require(Clock::now()-state.last_frame<std::chrono::seconds(8),"Channel stopped producing usable video or audio; check reception and reconnect");
+              Packet next;
+              {
+                std::unique_lock lock(q->mutex);
+                q->changed.wait_for(lock,std::chrono::milliseconds(50),[&]{return !q->packets.empty()||input_done||interrupt(this)||ending.stop_requested();});
+                if(q->packets.empty()) {if(input_done)break;continue;}
+                next=std::move(q->packets.front());q->packets.pop_front();q->bytes-=next->size;
+              }
+              q->changed.notify_one();
+              decode(index,next.get(),state,ending);
+            }
+          } catch(const std::exception &e) {
+            if(!interrupt(this)) {failure=true;note("source_error",{{"message",e.what()}});close();}
+          }
+        });
       }
+      DecoderProgress device_progress;
+      Packet packet(av_packet_alloc()); require(bool(packet),"Capture packet allocation");
+      while(!interrupt(this)) {
+        result=av_read_frame(input,packet.get());
+        if(result<0) break;
+        int index=packet->stream_index;
+        if(decoders.contains(index)) {
+          if(network) {
+            // Demux independently: a future video PTS must never stop us
+            // reading audio behind it in a bursty/interleaved transport stream.
+            auto &q=queues.at(index);
+            require(packet->size<=8*1024*1024,"Channel packet exceeds the input limit");
+            std::unique_lock lock(q.mutex);
+            while(!interrupt(this)&&(q.packets.size()>=256||q.bytes+packet->size>8*1024*1024))
+              q.changed.wait_for(lock,std::chrono::milliseconds(50));
+            if(interrupt(this)) break;
+            Packet owned(av_packet_alloc());require(bool(owned),"Queued packet allocation");
+            q.bytes+=packet->size;av_packet_move_ref(owned.get(),packet.get());
+            q.packets.push_back(std::move(owned));q.changed.notify_one();
+          } else decode(index,packet.get(),device_progress,{});
+        }
+        av_packet_unref(packet.get());
+      }
+      input_done=true;
+      for(auto &[index,q]:queues) q.changed.notify_all();
+      for(auto &worker:decoding) worker.join();
+      if(!interrupt(this)) throw std::runtime_error("Media source ended or timed out; press Play to reconnect");
     } catch(const std::exception &e) {
       if(!interrupt(this)) { failure=true; note("source_error",{{"message",e.what()}}); closed=true; }
     }

@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2
+
+- Recover when a live MPEG-2 broadcast begins between sequence headers, instead
+  of aborting on its first incomplete frame. Stop on sustained unusable data.
+- Demux live TV into bounded audio/video packet queues with independently paced
+  decoders. Waiting for video no longer prevents reading and delivering audio.
+  Both tracks retain the same source timestamps and presentation clock.
+- Allow the tuner's five-second tuning response and explain unavailable-channel
+  failures in terms of reception or occupied tuners.
+- Add a generated 1080i MPEG-2/AC-3 mid-stream fixture, timing and cancellation
+  regressions, and real HTTP input/connection-release tests. No codec or buffer
+  setting changes are required.
+
 ## 0.2.1
 
 - Advertise the selected video latency instead of a fixed 100 ms; identify audio

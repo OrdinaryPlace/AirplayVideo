@@ -1,5 +1,13 @@
 # Architecture
 
+HDHomeRun input uses one HTTP connection. The demuxer fills separate compressed
+audio/video queues (at most 256 packets and 8 MiB each); each decoder paces its
+own track against the common input timestamp origin. This prevents video waits
+from blocking audio further down the transport stream. Queues apply backpressure
+and are not an additional playback-delay setting. Incomplete mid-stream joins
+recover at the next usable sequence header; sustained loss of either track
+fails and releases the input. Stop interrupts reads, pacing and queue waits.
+
 ```mermaid
 flowchart LR
   W[Setup wizard] --> S[Private settings and pairings]
