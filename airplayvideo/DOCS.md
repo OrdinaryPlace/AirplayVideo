@@ -4,7 +4,7 @@ Send a browser page or an HDHomeRun channel to your Apple TVs from Home Assistan
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.1.1.** This is an independent implementation in a new
+**Experimental, version 0.1.2.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 

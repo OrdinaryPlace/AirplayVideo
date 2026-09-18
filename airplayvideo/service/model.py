@@ -11,7 +11,7 @@ import tempfile
 from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import uuid
 
-VERSION = "0.1.1"
+VERSION = "0.1.2"
 IDENTIFIER = re.compile(r"[a-f0-9]{32}\Z")
 
 

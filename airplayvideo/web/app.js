@@ -147,7 +147,7 @@ function renderStep() {
     $('bitrate').oninput = () => $('bitrateValue').textContent = $('bitrate').value;
   } else {
     const connected = state.home_assistant.connected;
-    $('stepContent').innerHTML = `<label class="check-row"><input id="enableHA" type="checkbox" ${checked(draft.home_assistant.enabled)}> Create TV controls in Home Assistant</label><p class="muted">Each paired TV gets Play and Stop buttons, saved-page shortcuts, channel selection, and status for your dashboards and automations.</p><div class="integration"><strong>${connected ? 'Home Assistant connection ready' : 'Home Assistant connection needs attention'}</strong><p class="muted">${connected ? 'The app found the MQTT service automatically. Controls will appear when you finish Setup.' : escape(state.home_assistant.error || 'Enable MQTT in Home Assistant to create playback entities. You can still use the app directly.')}</p><button type="button" id="retryHA" class="text-button">Check connection again</button></div><dl class="review"><dt>Modes</dt><dd>${Object.entries(draft.modes).filter(([,enabled])=>enabled).map(([key])=>key==='browser'?'Web browser':'HDHomeRun').join(' + ')}</dd><dt>Paired TVs</dt><dd>${state.receivers.length ? escape(state.receivers.map(r=>r.name).join(', ')) : 'None yet — add them in Setup later'}</dd><dt>Picture</dt><dd>${draft.video.resolution} · ${draft.video.fps} fps · H.264</dd><dt>Sound</dt><dd>${draft.audio.enabled ? 'Stereo audio enabled' : 'Video only'}</dd><dt>After saving</dt><dd>Playback stays idle until you press Play.</dd></dl>`;
+    $('stepContent').innerHTML = `<label class="check-row"><input id="enableHA" type="checkbox" ${checked(draft.home_assistant.enabled)}> Create TV controls in Home Assistant</label><p class="muted">Each paired TV gets Play and Stop buttons, saved-page shortcuts, channel selection, and status for your dashboards and automations.</p><div class="integration"><strong>${connected ? 'Home Assistant connection ready' : 'Home Assistant connection needs attention'}</strong><p class="muted">${connected ? 'The app found the MQTT service automatically. Controls appear for paired TVs after you finish Setup.' : escape(state.home_assistant.error || 'Enable MQTT in Home Assistant to create playback entities. You can still use the app directly.')}</p><button type="button" id="retryHA" class="text-button">Check connection again</button></div><dl class="review"><dt>Modes</dt><dd>${Object.entries(draft.modes).filter(([,enabled])=>enabled).map(([key])=>key==='browser'?'Web browser':'HDHomeRun').join(' + ')}</dd><dt>Paired TVs</dt><dd>${state.receivers.length ? escape(state.receivers.map(r=>r.name).join(', ')) : 'None yet — add them in Setup later'}</dd><dt>Picture</dt><dd>${draft.video.resolution} · ${draft.video.fps} fps · H.264</dd><dt>Sound</dt><dd>${draft.audio.enabled ? 'Stereo audio enabled' : 'Video only'}</dd><dt>After saving</dt><dd>Playback stays idle until you press Play.</dd></dl>`;
     $('retryHA').onclick = () => setupTask(async () => { await api('api/setup/home_assistant', {}); await refresh(); renderStep(); }, $('retryHA'));
   }
 }
@@ -219,10 +219,16 @@ function renderChannels(){
   $('channelHint').textContent=state.channel_error || (!state.channels.length?'No channels loaded. Check HDHomeRun in Setup.':'Choose a channel, then Play. Selection alone does not use a tuner.');
 }
 
+function stableMarkup(element, html) {
+  if(element._renderedMarkup === html) return;
+  element._renderedMarkup = html;
+  element.innerHTML = html;
+}
+
 function renderUsage(){
   if(!state)return;
   if(!state.setup.modes[mode])mode=state.setup.modes.browser?'browser':'hdhomerun';
-  $('modeSwitch').innerHTML=Object.entries(state.setup.modes).filter(([,enabled])=>enabled).map(([kind])=>`<button class="${mode===kind?'selected':''}" data-mode="${kind}">${kind==='browser'?'Web browser':'Live TV'}</button>`).join('');
+  stableMarkup($('modeSwitch'),Object.entries(state.setup.modes).filter(([,enabled])=>enabled).map(([kind])=>`<button class="${mode===kind?'selected':''}" data-mode="${kind}">${kind==='browser'?'Web browser':'Live TV'}</button>`).join(''));
   $('modeSwitch').hidden=Object.values(state.setup.modes).filter(Boolean).length<2;
   for(const button of document.querySelectorAll('[data-mode]'))button.onclick=()=>{mode=button.dataset.mode;renderUsage();};
   $('browserSource').hidden=mode!=='browser';$('channelSource').hidden=mode!=='hdhomerun';
@@ -233,11 +239,11 @@ function renderUsage(){
   $('runtimeBadge').textContent=label;
   $('nowPlaying').textContent=runtime.source?`${runtime.source.label} · ${runtime.targets.length} TV${runtime.targets.length===1?'':'s'}`:'Choose a source and one or more TVs.';
   if(runtime.error&&!$('error').textContent)message(runtime.error);
-  $('tvList').innerHTML=state.receivers.length?state.receivers.map(receiver=>{
+  stableMarkup($('tvList'),state.receivers.length?state.receivers.map(receiver=>{
     const status=runtime.receivers[receiver.id]||{};
     const description=status.message || ({streaming:'Sending',connecting:'Connecting…',stopped:'Stopped',error:'Needs attention'}[status.state]||'Ready');
     return `<div class="tv-row"><input type="checkbox" id="tv-${receiver.id}" data-tv="${receiver.id}" ${checked(chosenTVs.has(receiver.id))}><label for="tv-${receiver.id}">${escape(receiver.name)}<small>${escape(description)}</small></label>${runtime.targets.includes(receiver.id)?`<button data-stop="${receiver.id}">Stop</button>`:''}</div>`;
-  }).join(''):'<p class="empty">Add your TVs in Setup, then choose where to play.</p>';
+  }).join(''):'<p class="empty">Add your TVs in Setup, then choose where to play.</p>');
   for(const checkbox of document.querySelectorAll('[data-tv]'))checkbox.onchange=()=>{selectionDirty=true;checkbox.checked?chosenTVs.add(checkbox.dataset.tv):chosenTVs.delete(checkbox.dataset.tv);updateButtons();};
   for(const button of document.querySelectorAll('[data-stop]'))button.onclick=()=>act('stop',{receiver:button.dataset.stop},true);
   $('previewSection').hidden=mode!=='browser'||!runtime.browser_open;

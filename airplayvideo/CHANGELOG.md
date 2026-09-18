@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.2
+
+- Preserve unchanged source-mode buttons and TV controls during status polling,
+  keeping keyboard focus and in-progress clicks stable.
+- Clarify that native Home Assistant controls are created for paired TVs.
+
 ## 0.1.1
 
 - Move AirPlay timing and audio recovery to UDP 18200–18215, below the usual
