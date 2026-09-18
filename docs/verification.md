@@ -33,3 +33,11 @@ TV and container browser capture. Those results are not a substitute for the
 combined app's acceptance tests.
 
 No comparative quality winner over the previous stack is claimed.
+
+## 0.1.1 installation follow-up
+
+The initial public commit passed GitHub's clean Linux build and all tests.
+Home Assistant installed it from the public app repository with Protection mode
+enabled. First start found a host port collision on UDP 57102, before any app
+process or pairing started. Version 0.1.1 moves the dedicated mappings to
+18200–18215; existing browser apps and their data are unchanged.

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.1
+
+- Move AirPlay timing and audio recovery to UDP 18200–18215, below the usual
+  Linux ephemeral range, after a first-install collision on a busy HA host.
+
 ## 0.1.0
 
 Initial experimental release:

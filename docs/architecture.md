@@ -47,7 +47,7 @@ re-pair or reconnect.
 
 - The production UI is served only through Home Assistant ingress. No web, VNC,
   CDP, X11 or PulseAudio port is published to the LAN.
-- Only UDP 57100–57115 is published for receiver timing and audio recovery.
+- Only UDP 18200–18215 is published for receiver timing and audio recovery.
   Leave this internal/external port mapping unchanged in this release.
 - The container uses `SYS_ADMIN` to allow Chrome's nested sandbox namespaces,
   as required by this container runtime. This is a broad Linux capability;

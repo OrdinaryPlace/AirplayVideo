@@ -1,5 +1,5 @@
 name: AirplayVideo
-version: "0.1.0"
+version: "0.1.1"
 slug: airplayvideo
 description: Send a browser page or HDHomeRun channel to your Apple TVs
 url: https://github.com/OrdinaryPlace/AirplayVideo
@@ -23,38 +23,38 @@ video: true
 privileged: [SYS_ADMIN]
 stage: experimental
 ports:
-  57100/udp: 57100
-  57101/udp: 57101
-  57102/udp: 57102
-  57103/udp: 57103
-  57104/udp: 57104
-  57105/udp: 57105
-  57106/udp: 57106
-  57107/udp: 57107
-  57108/udp: 57108
-  57109/udp: 57109
-  57110/udp: 57110
-  57111/udp: 57111
-  57112/udp: 57112
-  57113/udp: 57113
-  57114/udp: 57114
-  57115/udp: 57115
+  18200/udp: 18200
+  18201/udp: 18201
+  18202/udp: 18202
+  18203/udp: 18203
+  18204/udp: 18204
+  18205/udp: 18205
+  18206/udp: 18206
+  18207/udp: 18207
+  18208/udp: 18208
+  18209/udp: 18209
+  18210/udp: 18210
+  18211/udp: 18211
+  18212/udp: 18212
+  18213/udp: 18213
+  18214/udp: 18214
+  18215/udp: 18215
 ports_description:
-  57100/udp: AirPlay timing for TV slot 1
-  57101/udp: AirPlay timing for TV slot 2
-  57102/udp: AirPlay timing for TV slot 3
-  57103/udp: AirPlay timing for TV slot 4
-  57104/udp: AirPlay timing for TV slot 5
-  57105/udp: AirPlay timing for TV slot 6
-  57106/udp: AirPlay timing for TV slot 7
-  57107/udp: AirPlay timing for TV slot 8
-  57108/udp: AirPlay audio recovery for TV slot 1
-  57109/udp: AirPlay audio recovery for TV slot 2
-  57110/udp: AirPlay audio recovery for TV slot 3
-  57111/udp: AirPlay audio recovery for TV slot 4
-  57112/udp: AirPlay audio recovery for TV slot 5
-  57113/udp: AirPlay audio recovery for TV slot 6
-  57114/udp: AirPlay audio recovery for TV slot 7
-  57115/udp: AirPlay audio recovery for TV slot 8
+  18200/udp: AirPlay timing for TV slot 1
+  18201/udp: AirPlay timing for TV slot 2
+  18202/udp: AirPlay timing for TV slot 3
+  18203/udp: AirPlay timing for TV slot 4
+  18204/udp: AirPlay timing for TV slot 5
+  18205/udp: AirPlay timing for TV slot 6
+  18206/udp: AirPlay timing for TV slot 7
+  18207/udp: AirPlay timing for TV slot 8
+  18208/udp: AirPlay audio recovery for TV slot 1
+  18209/udp: AirPlay audio recovery for TV slot 2
+  18210/udp: AirPlay audio recovery for TV slot 3
+  18211/udp: AirPlay audio recovery for TV slot 4
+  18212/udp: AirPlay audio recovery for TV slot 5
+  18213/udp: AirPlay audio recovery for TV slot 6
+  18214/udp: AirPlay audio recovery for TV slot 7
+  18215/udp: AirPlay audio recovery for TV slot 8
 options: {}
 schema: {}

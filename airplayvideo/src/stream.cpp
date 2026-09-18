@@ -49,7 +49,7 @@ int run_stream(const Json &config,const std::filesystem::path &directory,
               auto fields=details; fields["id"]=id; note(stage,fields);
             };
             try {
-              mirror_stream(credentials,media,57100+slot,57108+slot,ptr->stop,receiver_note);
+              mirror_stream(credentials,media,18200+slot,18208+slot,ptr->stop,receiver_note);
             } catch(const Json::exception &) {
               receiver_note("receiver_error",{{"message","Unexpected receiver response"}});
             } catch(const std::exception &e) {

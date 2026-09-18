@@ -356,7 +356,7 @@ void mirror_stream(const Credentials &c,Media &media,uint16_t timing_port,
     auto record=control.request("RECORD",uri,{},"",{{"Range","npt=0-"}});
     require(record.status==200,"Receiver rejected playback");
     auto volume=control.request("SET_PARAMETER",uri,bytes("volume: 0.000000\r\n"),"text/parameters");
-    // Digital unity gain; this never changes the TV's system volume.
+    // Request digital unity gain for this audio stream.
     require(!audio||volume.status==200,"Receiver rejected audio gain");
     auto subscription=media.subscribe();
     note("connecting",{{"video",true},{"audio",bool(audio)}});
