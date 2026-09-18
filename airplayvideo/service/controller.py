@@ -9,7 +9,7 @@ import signal
 import uuid
 import aiohttp
 from .browser import child_environment
-from .model import UserError, check, atomic_json, browser_url, youtube_url, identifier
+from .model import UserError, check, atomic_json, browser_url, youtube_url, identifier, validate_generated
 
 
 class PairingEngine:
@@ -68,6 +68,7 @@ class Stream:
         self.reader = None
         self.ready = asyncio.get_running_loop().create_future()
         self.stopping = False
+        self.completed = False
         self.write_lock = asyncio.Lock()
         self.close_lock = asyncio.Lock()
 
@@ -98,6 +99,8 @@ class Stream:
                 try:
                     event = json.loads(line)
                     name, fields = event["event"], event["details"]
+                    if name == "source_finished":
+                        self.completed = True
                     if name == "media_ready" and not self.ready.done():
                         self.ready.set_result(fields)
                     if name in {"source_error", "fatal"} and not self.ready.done():
@@ -109,7 +112,7 @@ class Stream:
             code = await self.process.wait()
             if not self.ready.done():
                 self.ready.set_exception(UserError("Playback was cancelled" if self.stopping else "The media process exited during startup"))
-            await self.callback(self, "process_exit", {"code": code, "requested": self.stopping})
+            await self.callback(self, "process_exit", {"code": code, "requested": self.stopping, "completed": self.completed})
 
     async def command(self, command):
         check(self.process and self.process.returncode is None and not self.stopping, "Playback is no longer running")
@@ -172,7 +175,7 @@ class Controller:
             encoder = "h264_vaapi" if "h264_vaapi" in self.capabilities["encoders"] else "libopenh264"
         check(encoder in self.capabilities["encoders"], "The configured encoder is unavailable; review Setup")
         width, height = (1920, 1080) if video["resolution"] == "1080p" else (1280, 720)
-        return {"source": source, "width": width, "height": height, "fps": video["fps"], "encoder": encoder, "bitrate": video["bitrate_mbps"] * 1_000_000, "deinterlace": video["deinterlace"], "audio": settings["audio"]["enabled"], "latency_ms": settings["audio"]["latency_ms"]}
+        return {"source": source, "width": width, "height": height, "fps": video["fps"], "encoder": encoder, "bitrate": video["bitrate_mbps"] * 1_000_000, "deinterlace": video["deinterlace"], "audio": source["kind"] != "generated" and settings["audio"]["enabled"], "latency_ms": settings["audio"]["latency_ms"]}
 
     async def event(self, stream, event, fields):
         if stream is not self.stream and stream is not self.pending:
@@ -190,9 +193,12 @@ class Controller:
                 self.error = fields.get("message", "The source stopped")
                 self.phase = "error"
             if event == "process_exit" and not fields["requested"]:
-                self.error = self.error or "Playback ended; press Play to reconnect"
-                self.phase = "error"
+                complete = fields.get("completed") and fields.get("code") == 0
+                self.error = "" if complete else self.error or "Playback ended; press Play to reconnect"
+                self.phase = "idle" if complete else "error"
                 self.targets.clear()
+                self.receivers.clear()
+                self.source = None
                 self.stream = None
             if event == "receiver_error" and self.targets and all(self.receivers.get(r, {}).get("state") == "error" for r in self.targets):
                 task = asyncio.create_task(self.stop_failed(stream))
@@ -213,6 +219,10 @@ class Controller:
     def requested_source(self, request):
         mode = request.get("mode", "browser")
         self.require_mode(mode)
+        if mode == "generated":
+            settings = validate_generated(request.get("generated", {}), self.store.data["setup"]["generated"])
+            # Every Play starts a fresh duration, including identical automation messages.
+            return {"kind": mode, "key": uuid.uuid4().hex, "label": settings["title"]}, {"kind": mode, "generated": settings}
         if mode == "hdhomerun":
             channel = self.channels.get(request.get("channel"))
             return {"kind": "hdhomerun", "key": channel["id"], "label": channel["label"]}, {"kind": "hdhomerun", "url": channel["_url"]}

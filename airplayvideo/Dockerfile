@@ -28,6 +28,7 @@ RUN curl -fL https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz -o ffmpeg.tar.xz \
  && make -j4 && make install && ldconfig \
  && ffmpeg -buildconf > /opt/sources/ffmpeg-buildconf.txt 2>&1
 WORKDIR /opt/app
+RUN apt-get update && apt-get install -y --no-install-recommends libpango1.0-dev fonts-noto-core tzdata && rm -rf /var/lib/apt/lists/*
 FROM dependencies AS build
 COPY CMakeLists.txt ./
 COPY include ./include
@@ -54,6 +55,7 @@ RUN curl -fL https://dl.google.com/linux/direct/google-chrome-stable_current_amd
  && chmod 1777 /tmp/.X11-unix \
  && chmod 755 /usr/share/google-chrome/extensions /opt/airplayvideo /opt/airplayvideo/installed
 RUN apt-get update && apt-get install -y --no-install-recommends python3-xlib && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends libpangocairo-1.0-0 fonts-noto-core tzdata && rm -rf /var/lib/apt/lists/*
 COPY --from=build /usr/local/lib/ /usr/local/lib/
 COPY --from=build /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
 COPY --from=build /opt/app/build/airplayvideo-engine /usr/local/bin/
@@ -71,5 +73,5 @@ RUN ldconfig && dpkg-query -W > /opt/dependency-sources/debian-packages.txt
 WORKDIR /opt/airplayvideo
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 EXPOSE 8099 18200-18215/udp
-LABEL io.hass.name="AirplayVideo" io.hass.description="Browser and HDHomeRun video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.1.6"
+LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.0"
 CMD ["python3", "-m", "service.main"]

@@ -1,7 +1,7 @@
 name: AirplayVideo
-version: "0.1.6"
+version: "0.2.0"
 slug: airplayvideo
-description: Send a browser page or HDHomeRun channel to your Apple TVs
+description: Send browser pages, live TV or generated videos to your Apple TVs
 url: https://github.com/OrdinaryPlace/AirplayVideo
 arch: [amd64]
 startup: application

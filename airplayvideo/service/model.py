@@ -10,8 +10,9 @@ import stat
 import tempfile
 from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import uuid
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.1.6"
+VERSION = "0.2.0"
 IDENTIFIER = re.compile(r"[a-f0-9]{32}\Z")
 
 
@@ -116,10 +117,41 @@ def atomic_json(path: Path, value):
             os.unlink(temporary)
 
 
+def generated_defaults():
+    return {"title": "Hello world", "tagline": "Made with AirplayVideo", "duration_seconds": 60,
+            "display": "countdown", "timezone": os.environ.get("TZ", "UTC")}
+
+
+def validate_generated(value, defaults=None):
+    check(isinstance(value, dict), "Invalid generated video settings")
+    result = dict(defaults or generated_defaults())
+    check(not value.keys() - result.keys(), "Unknown generated video setting")
+    result.update(value)
+    for key, maximum in (("title", 160), ("tagline", 240)):
+        item = result[key]
+        check(isinstance(item, str) and len(item) <= maximum and
+              not any((ord(c) < 32 and c != "\n") or 0xD800 <= ord(c) <= 0xDFFF for c in item),
+              f"Use plain text for the {key} (up to {maximum} characters)")
+        result[key] = item.strip()
+    check(bool(result["title"]), "Enter a title")
+    check(type(result["duration_seconds"]) is int and 1 <= result["duration_seconds"] <= 86400,
+          "Length must be a whole number from 1 to 86400 seconds")
+    check(result["display"] in ("time", "countdown", "neither"), "Choose time, countdown or neither")
+    zone = result["timezone"]
+    check(isinstance(zone, str) and len(zone) <= 100 and re.fullmatch(r"[A-Za-z0-9_+/-]+", zone) and
+          not zone.startswith("/") and ".." not in zone, "Enter an IANA time zone, such as America/New_York")
+    try:
+        ZoneInfo(zone)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        raise UserError("Unknown time zone") from exc
+    return result
+
+
 def default_setup():
     return {
         "complete": False,
-        "modes": {"browser": True, "hdhomerun": False},
+        "modes": {"browser": True, "hdhomerun": False, "generated": True},
+        "generated": generated_defaults(),
         "browser": {"home_url": "https://www.youtube.com/", "youtube_quality": "1080p"},
         "hdhomerun": {"devices": []},
         "video": {"resolution": "1080p", "fps": 30, "codec": "h264", "encoder": "auto", "bitrate_mbps": 8, "deinterlace": True},
@@ -135,6 +167,10 @@ def validate_setup(value):
         for mode in ("browser", "hdhomerun"):
             check(type(value["modes"][mode]) is bool, "Choose which modes to enable")
             result["modes"][mode] = value["modes"][mode]
+        generated = value["modes"].get("generated", True)
+        check(type(generated) is bool, "Choose which modes to enable")
+        result["modes"]["generated"] = generated
+        result["generated"] = validate_generated(value.get("generated", {}))
         check(any(result["modes"].values()), "Enable at least one source mode")
         result["browser"]["home_url"] = browser_url(value["browser"]["home_url"])
         check(value["browser"]["youtube_quality"] in {"1080p", "720p", "auto"}, "Invalid YouTube preference")
@@ -196,8 +232,14 @@ class Store:
                 self.data = private_json(self.path)
                 check(self.data["schema"] == 1, "Unsupported configuration version; data preserved")
                 identifier(self.data["installation_id"])
+                # Additive upgrade: keep every existing preference and identity.
+                migrated = "generated" not in self.data["setup"] or "generated" not in self.data["setup"]["modes"]
+                self.data["setup"].setdefault("generated", generated_defaults())
+                self.data["setup"]["modes"].setdefault("generated", True)
                 if self.data["setup"]["complete"]:
                     validate_setup(self.data["setup"])
+                if migrated:
+                    self.save()
             except (ValueError, KeyError, TypeError) as exc:
                 raise UserError("Saved configuration needs attention; existing data was preserved") from exc
         else:

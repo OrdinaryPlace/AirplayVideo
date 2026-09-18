@@ -61,7 +61,7 @@ class Application:
         self.configuration_lock = asyncio.Lock()
 
     def state(self):
-        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error}, "capabilities": self.controller.capabilities}
+        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}
 
     def require_idle(self):
         check(not self.controller.stream and not self.controller.pending, "Stop playback before changing Setup")
@@ -100,6 +100,10 @@ class Application:
         controller = self.controller
         if action == "play":
             await controller.play(data)
+        elif action == "preview_generated":
+            from .model import validate_generated
+            settings = validate_generated(data.get("generated", {}), self.store.data["setup"]["generated"])
+            return web.json_response(await self.pairing.call("/generated/preview", settings))
         elif action == "stop":
             await controller.stop(data.get("receiver"))
         elif action == "open_browser":

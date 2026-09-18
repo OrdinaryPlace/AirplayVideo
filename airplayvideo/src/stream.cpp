@@ -63,10 +63,11 @@ int run_stream(const Json &config,const std::filesystem::path &directory,
       }
     }
   });
-  while(!stop&&!media.failed()) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  while(!stop&&!media.failed()&&!media.completed()) std::this_thread::sleep_for(std::chrono::milliseconds(50));
   stop=true; commands.request_stop(); commands.join();
   for(auto &[id,s]:sessions) s->stop=true;
   media.close(); sessions.clear();
+  if(media.completed()) note("source_finished",Json::object());
   note("source_stopped",{{"failed",media.failed()}});
   return media.failed()?1:0;
 }

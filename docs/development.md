@@ -56,3 +56,9 @@ Do not enable `DEBUG_PAIR`, capture login pages, commit `.dev-data`, or copy
 another application's source, pairing secrets or runtime history into this repo.
 New fixes should add a test for the behavior that failed, rather than duplicating
 the implementation. App changes after installation require a version bump.
+
+The generated CTest covers text/Unicode, timer boundaries, daylight saving time,
+changing pixels, delayed receiver arrival, the first decodable keyframe, and
+natural completion after the video buffer drains. Python tests cover additive
+settings migration, strict automation overrides, exact targets and retriggering
+without stale completion events stopping the replacement.

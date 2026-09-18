@@ -1,4 +1,5 @@
 #include "stream.hpp"
+#include "generated.hpp"
 #include <csignal>
 #include <httplib.h>
 #include <iostream>
@@ -130,6 +131,7 @@ int main(int argc,char **argv) {
     route("/pair/finish",[&](const auto &j){return pairings.finish(j.at("pin"));});
     route("/pair/cancel",[&](const auto &){pairings.cancel();return Json::object();});
     route("/capabilities",[](const auto &){return media_capabilities();});
+    route("/generated/preview",[](const auto &j){return generated_preview(j);});
     server.Get("/health",[](const auto &,auto &res){res.set_content("ready","text/plain");});
     if(port==0) port=server.bind_to_any_port("127.0.0.1");
     else require(server.bind_to_port("127.0.0.1",port),"Engine API port unavailable");

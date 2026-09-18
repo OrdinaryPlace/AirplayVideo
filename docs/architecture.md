@@ -7,6 +7,7 @@ flowchart LR
   H[Native HA entities via MQTT] --> C
   S --> C
   B[Container browser: X11 and PulseAudio] --> M[C++ shared capture and FFmpeg encode]
+  G[Native text and clock renderer: Pango/Cairo] --> M
   T[HDHomeRun HTTP channel] --> M
   C --> B
   C --> M
@@ -75,3 +76,13 @@ re-pair or reconnect.
   expiring one-use ticket. The browser tab never receives the VNC password.
 - No credentials, private URLs, page text or raw child logs are printed. Known
   generic browser startup failures and media counters are available for diagnosis.
+
+## Generated source lifecycle
+
+The native renderer uses bounded plain UTF-8 text, measured wrapping, a selected
+IANA time zone and monotonic elapsed time. Preview calls the same renderer. Warmup
+produces a valid encoded picture without starting the duration. The first receiver
+subscription starts the shared countdown and forces an IDR; the last picture is
+allowed to reach its buffered presentation time before sessions tear down. A
+normal completion returns Idle rather than a source error. Old process events
+cannot end a replacement stream. Generated sources never start audio capture.

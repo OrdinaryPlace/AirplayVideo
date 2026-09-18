@@ -1,3 +1,11 @@
+## 0.2.0
+
+- Add generated video as a third source: title, tagline, length and time/countdown/neither.
+- Render preview and animated output directly in C++ with Pango/Cairo and the shared FFmpeg encoder.
+- Start duration on the first TV connection and stop cleanly after its presentation deadline.
+- Add saved defaults, a native HA Play generated video button and custom multi-TV MQTT messages with copyable automation YAML.
+- Preserve existing settings, pairing identities and browser profiles through an additive upgrade.
+
 # Changelog
 
 ## 0.1.6

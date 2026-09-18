@@ -69,6 +69,37 @@ def setup(tmp_path, monkeypatch):
 def request(receiver=A, channel='ABCDEF12:4.1'):
     return dict(mode='hdhomerun', channel=channel, receivers=[receiver])
 
+
+@pytest.mark.asyncio
+async def test_generated_retrigger_restarts_and_old_completion_cannot_stop_replacement(setup):
+    store, control = setup
+    value = dict(mode='generated', receivers=[A], generated=dict(title='Test', duration_seconds=2))
+    await control.play(value)
+    first = control.stream
+    assert not first.config['audio'] and first.config['source']['generated']['title'] == 'Test'
+    await control.play(value)
+    second = control.stream
+    assert first.closed and second is not first
+    await control.event(first, 'process_exit', dict(code=0, requested=False, completed=True))
+    assert control.stream is second
+    await control.event(second, 'process_exit', dict(code=0, requested=False, completed=True))
+    assert control.phase == 'idle' and control.stream is None and not control.targets
+    assert control.source is None and not control.error and not control.receivers
+
+
+@pytest.mark.asyncio
+async def test_generated_automation_has_explicit_targets_and_does_not_change_defaults(setup):
+    store, control = setup
+    before = copy.deepcopy(store.data['setup'])
+    await control.play(request(B))
+    ha = HomeAssistant(store, control, Channels(), None)
+    await ha.command(dict(action='generated', receivers=[A], generated=dict(title='Dinner "ready"', display='neither')))
+    assert control.targets == {A} and control.source['label'] == 'Dinner "ready"'
+    assert store.data['setup'] == before
+    await ha.command(dict(action='generated', receiver=A, generated=dict(duration_seconds=-1)))
+    assert 'Length' in control.error and control.targets == {A}
+    await control.stop()
+
 @pytest.mark.asyncio
 async def test_browser_capture_uses_the_allocated_display(setup):
     _, control = setup

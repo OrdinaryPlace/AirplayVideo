@@ -1,5 +1,6 @@
 // AirplayVideo's shared, timestamped capture and encoding pipeline.
 #include "stream.hpp"
+#include "generated.hpp"
 #include <cstring>
 #include <bit>
 extern "C" {
@@ -106,6 +107,7 @@ class VideoEncoder {
     }
     require(sws_scale(scale_,input->data,input->linesize,0,input->height,dest,converted->linesize)==h,"Incomplete video conversion");
     converted->pts=av_rescale_q(us,micros,v->time_base);
+    converted->pict_type=input->pict_type;
     converted->color_range=AVCOL_RANGE_MPEG; converted->colorspace=AVCOL_SPC_BT709;
     converted->color_primaries=AVCOL_PRI_BT709; converted->color_trc=AVCOL_TRC_BT709;
     if(device_) {
@@ -250,7 +252,7 @@ struct Media::Impl {
   Media &owner;
   std::atomic<bool> &stop;
   Note note;
-  std::atomic<bool> closed{false},failure{false};
+  std::atomic<bool> closed{false},failure{false},completed{false},joined{false};
   std::mutex mutex;
   std::vector<std::weak_ptr<Subscriber>> subscribers;
   std::vector<std::jthread> workers;
@@ -276,6 +278,41 @@ struct Media::Impl {
         s->error="Receiver cannot keep up; its connection was stopped"; s->closed=true;
       } else { s->packets.push_back(p); s->bytes+=size; }
       s->ready.notify_one();
+    }
+  }
+  void generated() {
+    try {
+      const auto &o=owner.config;
+      require(!o.value("audio",true),"Generated videos are silent");
+      GeneratedVideo renderer(o.at("source").at("generated"),o.at("width"),o.at("height"));
+      VideoEncoder encoder(o,[this](auto p){publish(std::move(p));});
+      auto f=frame(); f->format=AV_PIX_FMT_BGRA; f->width=o.at("width"); f->height=o.at("height");
+      f->sample_aspect_ratio={1,1};f->color_range=AVCOL_RANGE_JPEG;f->colorspace=AVCOL_SPC_BT709;
+      bool started=false; Clock::time_point start; int64_t index=0;
+      const int fps=o.at("fps"),lead=o.at("latency_ms");
+      while(!interrupt(this)) {
+        auto due=owner.epoch+std::chrono::microseconds(index*1000000/fps);
+        while(!interrupt(this)&&Clock::now()<due) std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        if(interrupt(this)) break;
+        auto now=Clock::now(); bool first=joined&&!started;
+        if(first) {started=true;start=now;}
+        double elapsed=started?std::chrono::duration<double>(now-start).count():0;
+        f->data[0]=const_cast<uint8_t*>(renderer.draw(elapsed,(av_gettime()+int64_t(lead)*1000)/1000000));
+        f->linesize[0]=renderer.stride(); f->pict_type=first?AV_PICTURE_TYPE_I:AV_PICTURE_TYPE_NONE;
+        auto us=std::chrono::duration_cast<std::chrono::microseconds>(now-owner.epoch).count();
+        encoder.consume(f.get(),us);
+        if(started&&elapsed>=renderer.duration()) {
+          // Let the final 00:00 picture reach its presentation deadline before TEARDOWN.
+          auto drain=now+std::chrono::milliseconds(lead+100);
+          while(!interrupt(this)&&Clock::now()<drain) std::this_thread::sleep_for(std::chrono::milliseconds(10));
+          if(!interrupt(this)) completed=true;
+          break;
+        }
+        // Skip missed ticks rather than rendering a burst of stale frames.
+        index=std::max(index+1,us*fps/1000000+1);
+      }
+    } catch(const std::exception &e) {
+      if(!interrupt(this)) {failure=true;note("source_error",{{"message",e.what()}});closed=true;}
     }
   }
   void capture(int device_stream) {
@@ -385,12 +422,14 @@ Media::Media(Json c,std::atomic<bool> &s,Note n):config(std::move(c)),epoch_ntp(
 Media::~Media() { close(); impl_->workers.clear(); }
 void Media::start() {
   auto kind=config.at("source").at("kind");
+  if(kind=="generated") {impl_->workers.emplace_back([this]{impl_->generated();});return;}
   int count=(kind=="browser"||kind=="synthetic")&&config.value("audio",true)?2:1;
   for(int i=0;i<count;++i) impl_->workers.emplace_back([this,i]{impl_->capture(i);});
 }
-std::shared_ptr<Subscriber> Media::subscribe() { auto s=std::make_shared<Subscriber>(); std::lock_guard lock(impl_->mutex); impl_->subscribers.push_back(s); return s; }
+std::shared_ptr<Subscriber> Media::subscribe() { auto s=std::make_shared<Subscriber>(); std::lock_guard lock(impl_->mutex); impl_->subscribers.push_back(s); impl_->joined=true; return s; }
 void Media::close() { if(impl_) impl_->close(); }
 bool Media::failed() const { return impl_->failure; }
+bool Media::completed() const { return impl_->completed; }
 Json media_capabilities() {
   AVBufferRef *device=nullptr;
   bool hardware=avcodec_find_encoder_by_name("h264_vaapi")&&av_hwdevice_ctx_create(&device,AV_HWDEVICE_TYPE_VAAPI,"/dev/dri/renderD128",nullptr,0)>=0;

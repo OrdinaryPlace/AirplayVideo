@@ -65,3 +65,13 @@ its browser-control implementation was not copied into this repository.
 Protocol constants and interfaces are implemented in the app's own C++/Python
 code. Dependency licenses apply to their components; the MIT license applies to
 new AirplayVideo code only.
+
+### Native generated-video text
+
+AirplayVideo's renderer is original C++ code. It dynamically links Debian's
+Pango/Cairo/GLib libraries for font layout, drawing and IANA time-zone handling.
+Package versions and Debian copyright files remain in the image. See the
+[Pango/Cairo API](https://docs.gtk.org/PangoCairo/func.create_layout.html),
+[GLib time-zone API](https://docs.gtk.org/glib/ctor.TimeZone.new_identifier.html),
+and [Debian sources](https://sources.debian.org/). Noto fonts are installed from
+Debian with their packaged notices. This does not import Double Take code.

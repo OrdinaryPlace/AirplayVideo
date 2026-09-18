@@ -33,6 +33,8 @@ def discovery_documents(store, channels):
         entity("sensor", receiver, "status", "Status", icon="mdi:cast-connected", state_topic=state, value_template="{{ value_json.connection }}")
         entity("sensor", receiver, "source", "Source", icon="mdi:play-box-outline", state_topic=state, value_template="{{ value_json.source }}")
         entity("sensor", receiver, "error", "Last error", entity_category="diagnostic", state_topic=state, value_template="{{ value_json.error }}")
+        if setup["modes"].get("generated"):
+            entity("button", receiver, "generated", "Play generated video", icon="mdi:card-text", payload_press=command("generated", receiver), **common)
         if setup["modes"]["browser"]:
             pages = store.data["pages"]
             for page in pages:
@@ -143,6 +145,13 @@ class HomeAssistant:
 
     async def command(self, value):
         try:
+            if value.get("action") == "generated":
+                receivers = value.get("receivers", [value.get("receiver")])
+                # Explicit targets: an automation never adds an unrelated active TV.
+                await self.controller.play({"mode": "generated", "receivers": receivers,
+                                            "generated": value.get("generated", {})})
+                self.publish_state()
+                return
             receiver = self.store.receiver(value.get("receiver"))
             receiver_id = receiver["id"]
             action = value.get("action")

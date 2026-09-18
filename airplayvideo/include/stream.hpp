@@ -38,6 +38,7 @@ public:
   void start();
   void close();
   bool failed() const;
+  bool completed() const;
 };
 void mirror_stream(const Credentials &, Media &, uint16_t timing_port,
                    uint16_t control_port, std::atomic<bool> &stop,

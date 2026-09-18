@@ -45,6 +45,13 @@
             <label class="check-row"><input id="favoritesOnly" type="checkbox"> Favorites only</label>
             <p id="channelHint" class="muted"></p>
           </div>
+          <div id="generatedSource" hidden>
+            <div id="generatedFields"></div>
+            <p class="muted">A silent, animated video. The length starts when the first TV connects, then playback stops automatically.</p>
+            <div class="generated-actions"><button id="previewGenerated">Preview video</button><button id="resetGenerated" class="text-button">Use saved defaults</button></div>
+            <figure id="generatedPreview" hidden><img id="generatedImage" alt="Generated video preview"><figcaption class="muted">First frame. The animation and timer update during playback.</figcaption></figure>
+            <details id="generatedAutomation"><summary>Use in a Home Assistant automation</summary><p class="muted">Choose TVs below, then copy this action. Replace the text or settings in your automation. Keep Retain off.</p><label for="automationExample">Automation action YAML</label><textarea id="automationExample" rows="10" readonly spellcheck="false"></textarea><button id="copyAutomation" type="button">Copy action</button><p id="copyStatus" class="muted" role="status"></p></details>
+          </div>
         </section>
         <section class="card tv-card"><div class="card-header"><h2>Where to play</h2><button id="tvSetup" class="text-button">Manage TVs</button></div><p class="muted tight">The same source plays on every selected TV.</p><div id="tvList"></div></section>
       </div>

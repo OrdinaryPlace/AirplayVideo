@@ -1,10 +1,10 @@
 # AirplayVideo
 
-Send a browser page or an HDHomeRun channel to your Apple TVs from Home Assistant.
+Send browser pages, HDHomeRun channels, or generated videos to your Apple TVs from Home Assistant.
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.1.6.** This is an independent implementation in a new
+**Experimental, version 0.2.0.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -25,7 +25,7 @@ minutes. Start the app and open its web UI. Keep Protection mode enabled.
 
 The separate five-step **Setup** wizard handles:
 
-1. Enable **Web browser**, **HDHomeRun live TV**, or both.
+1. Enable **Web browser**, **HDHomeRun live TV**, **Generated video**, or any combination.
 2. Set the browser home page and YouTube quality preference; find a tuner or
    enter its LAN IPv4 address. The app uses host networking for
    LAN discovery. Across VLANs, multicast/broadcast forwarding may still be
@@ -52,13 +52,13 @@ applied to the next playback session.
 
 ## Use every day
 
-Choose a saved page, YouTube video, Watch Later, web address, or channel.
+Choose a saved page, YouTube video, Watch Later, web address, channel, or generated video.
 Select the TVs and press **Play on selected TVs**. Use **Stop** for one TV or
 **Stop all**. A TV joining the same source shares the existing encoder. Stopping
 the last TV closes the source and releases its tuner.
 
 The browser preview lets you navigate, sign in, paste text, and operate the
-container browser. In **Settings → Browser & live TV** (or **Setup → Configure**
+container browser. In **Settings → Source defaults** (or **Setup → Configure**
 on first use), choose **Open browser to sign in**,
 then **Full screen preview**. Use **A+ / A−** to enlarge or reduce the page;
 **100%** resets its zoom. **Back to Settings** keeps the same browser session.
@@ -79,6 +79,7 @@ Home Assistant creates an **AirplayVideo** device for every paired TV, with:
 
 - Saved-page shortcuts, Page selection, and Play selected page.
 - Play YouTube URL and Play Watch Later, when browser mode is enabled.
+- Play generated video using saved defaults, when generated mode is enabled.
 - Channel selection and Play selected channel, when HDHomeRun mode is enabled.
 - Stop, connection status, current source, and diagnostic error.
 
@@ -88,9 +89,73 @@ Changing the source changes it for all currently selected TVs. There are no
 frame-rate, codec, bitrate, or tuner-address controls in the everyday entities.
 The app never resumes playback automatically after a restart.
 
+## Generated videos and automations
+Choose **Generated video**, enter a title, optional tagline and length in seconds,
+and select **Time**, **Countdown**, or **Neither**. Preview the first frame before
+selecting TVs. The app renders plain Unicode text, an animated background/accent,
+and the chosen timer directly in C++, then encodes it through the shared FFmpeg
+pipeline. It does not open Chrome or use a tuner. Generated videos are silent.
+
+Length accepts **1–86400 seconds**. Countdown starts when the first TV connects;
+connection setup does not consume its duration. All selected TVs share that
+countdown. Playback ends automatically after the final frame has reached its
+presentation deadline. Every new Play, including identical automation messages,
+starts a fresh duration. Stop cancels it immediately. Clock mode uses the configured
+IANA time zone (including daylight saving time), initially the app's `TZ` or UTC,
+and displays 24-hour time. Neither hides the timer but retains animation.
+
+Save starting values in **Settings → Source defaults**. Everyday edits and
+custom automation messages do not overwrite those defaults. Each TV's native
+**Play generated video** button uses the saved values.
+
+For custom automations, choose the desired TVs in Playback, expand **Use in a
+Home Assistant automation**, and **Copy action**. This produces an `mqtt.publish`
+action containing this installation's actual command topic and receiver IDs.
+Keep `retain: false`; retained playback commands are ignored. Generated commands
+use exactly the supplied TV set, replacing an existing shared source. One message
+can target several TVs. Unpaired IDs and invalid text/settings are rejected
+before playback changes.
+
+The message format is:
+
+```json
+{
+  "action": "generated",
+  "receivers": ["PAIRED_TV_ID"],
+  "generated": {
+    "title": "Dinner is ready",
+    "tagline": "See you downstairs",
+    "duration_seconds": 60,
+    "display": "countdown",
+    "timezone": "America/New_York"
+  }
+}
+```
+
+`receiver` with one ID is also accepted. Missing generated settings use saved
+defaults. Titles allow 160 characters and taglines 240; text is never interpreted
+as HTML, markup, a filename, or a shell command.
+
+For dynamic HA text, use `tojson` so quotes and line breaks stay valid JSON:
+
+```yaml
+action: mqtt.publish
+data:
+  topic: airplayvideo/INSTALLATION_ID/command
+  retain: false
+  payload: >-
+    {{ dict(action='generated', receivers=['PAIRED_TV_ID'],
+            generated=dict(title=message_title, tagline=message_detail,
+                           duration_seconds=90, display='countdown')) | tojson }}
+```
+
+Define `message_title` and `message_detail` in the automation's variables, and
+replace the topic/TV ID using the app's copied example. Messages and settings can
+appear in Home Assistant traces and MQTT; avoid including secrets in video text.
+
 ## Current boundaries
 
-- Up to eight saved TVs; one active browser page or channel at a time. Receiver
+- Up to eight saved TVs; one active browser page, channel, or generated video at a time. Receiver
   connections are independent, but this is not a claim of sample-accurate
   synchronization between TVs.
 - Unprotected HDHomeRun MPEG-2/H.264 video with AC-3/AAC/MP2/MP3 audio. DRM,
