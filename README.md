@@ -1,10 +1,12 @@
 # AirplayVideo
 
+[Diagnose audio/video timing and capture a sample](docs/audio-video-timing.md).
+
 Send browser pages, HDHomeRun channels, or generated videos to your Apple TVs from Home Assistant.
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.0.** This is an independent implementation in a new
+**Experimental, version 0.2.1.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 

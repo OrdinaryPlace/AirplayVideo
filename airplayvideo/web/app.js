@@ -334,6 +334,7 @@ function stableMarkup(element, html) {
 
 function renderUsage(){
   if(!state)return;
+  renderRecordings();
   if(!state.setup.modes[mode])mode=Object.keys(state.setup.modes).find(key=>state.setup.modes[key]) || 'browser';
   stableMarkup($('modeSwitch'),Object.entries(state.setup.modes).filter(([,enabled])=>enabled).map(([kind])=>`<button class="${mode===kind?'selected':''}" data-mode="${kind}">${modeNames[kind]}</button>`).join(''));
   $('modeSwitch').hidden=Object.values(state.setup.modes).filter(Boolean).length<2;
@@ -362,6 +363,14 @@ function renderUsage(){
   for(const button of document.querySelectorAll('[data-stop]'))button.onclick=()=>act('stop',{receiver:button.dataset.stop},true);
   renderPreview();
   updateButtons();
+}
+
+function renderRecordings(){
+  const recordings=state.recordings||{items:[]};
+  $('recordCapture').disabled=busy||!!recordings.active;
+  $('recordingStatus').textContent=recordings.active?'Recording… Playback can continue.':'';
+  stableMarkup($('recordingList'),recordings.items.map((item,index)=>`<p><strong>Sample ${recordings.items.length-index}</strong> · ${item.status==='complete'?`${item.seconds_requested} seconds · ${item.width}×${item.height}`:escape(item.error||'Incomplete capture')}<br>${['mkv','json','csv'].map((ext,i)=>`<a href="api/recordings/${encodeURIComponent(item.id)}/${ext}" download>${['Download video','Timing report','Packet timings'][i]}</a>`).join(' · ')} · <button type="button" class="text-button" data-remove-recording="${escape(item.id)}">Remove</button></p>`).join(''));
+  for(const button of document.querySelectorAll('[data-remove-recording]'))button.onclick=()=>act('remove_recording',{id:button.dataset.removeRecording});
 }
 
 function renderPreview(){
@@ -400,6 +409,7 @@ function browserKindChanged(){
 
 function updateButtons(){
   if(!state)return;
+  $('recordCapture').disabled=busy||!!state.recordings?.active;
   $('play').disabled=busy||!chosenTVs.size||!state.setup.complete;
   $('play').textContent=busy&&busyAction==='play'?'Starting…':'Play on selected TVs';
   const names = state.receivers.filter(receiver=>chosenTVs.has(receiver.id)).map(receiver=>receiver.name);
@@ -451,6 +461,7 @@ $('copyAutomation').onclick=async()=>{
   catch{$('automationExample').focus();$('automationExample').select();$('copyStatus').textContent='Select and copy the highlighted action.';}
 };
 $('stopAll').onclick=()=>act('stop',{},true);
+$('recordCapture').onclick=()=>act('record',{...requestSource(),seconds:15});
 $('openBrowser').onclick=()=>act('open_browser',requestSource());
 $('closeBrowser').onclick=()=>act('close_browser');
 $('browserKind').onchange=browserKindChanged;

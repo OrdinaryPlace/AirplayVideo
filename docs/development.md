@@ -29,16 +29,18 @@ docker run --rm --cap-add SYS_ADMIN --shm-size=256m \
   python3 tests/browser-network.py
 ```
 
-For an isolated local UI test, create an empty private data directory. Never
+For an isolated local UI test, create an empty Docker volume. Never
 mount production app data, an existing browser profile, or receiver pairings.
+Use a Linux volume rather than a macOS bind mount: the browser's private Unix
+sockets need permissions that Docker's macOS file sharing may not support.
 
 ```sh
-mkdir -m 700 .dev-data
+docker volume create airplayvideo-dev-data
 docker run --rm --name airplayvideo-dev --platform linux/amd64 \
   --cap-add SYS_ADMIN --shm-size=256m \
   -p 127.0.0.1:8099:8099 \
   -e AIRPLAYVIDEO_STANDALONE=1 \
-  -v "$PWD/.dev-data:/data" airplayvideo:dev
+  -v airplayvideo-dev-data:/data airplayvideo:dev
 ```
 
 Open `http://127.0.0.1:8099/`. Standalone mode bypasses the HA ingress source-IP
@@ -62,3 +64,11 @@ changing pixels, delayed receiver arrival, the first decodable keyframe, and
 natural completion after the video buffer drains. Python tests cover additive
 settings migration, strict automation overrides, exact targets and retriggering
 without stale completion events stopping the replacement.
+
+For a container capture/measurement with no TV or account involved, mount an
+empty private output directory at `/captures`, set `CAPTURE_OUTPUT=/captures`,
+and run `python3 tests/capture-sync.py` with the browser test's capability and
+shared-memory options. Run `airplayvideo-measure-sync /captures/captures/<id>.mkv`
+in the same image to measure the fixture's decoded flash/beep offsets. This is
+container capture, not a recording of the host desktop. See
+[timing and recording details](audio-video-timing.md).

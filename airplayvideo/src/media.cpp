@@ -262,6 +262,7 @@ struct Media::Impl {
   explicit Impl(Media &o,std::atomic<bool> &s,Note n):owner(o),stop(s),note(std::move(n)) {}
   static int interrupt(void *opaque) { auto *self=static_cast<Impl*>(opaque); return self->stop||self->closed; }
   void publish(std::shared_ptr<MediaPacket> p) {
+    p->available_us=std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-owner.epoch).count();
     std::lock_guard lock(mutex);
     if(p->audio) ++audio_count; else ++video_count;
     if(!ready && video_count>0 && (!owner.config.value("audio",true)||audio_count>0)) {
@@ -273,6 +274,12 @@ struct Media::Impl {
     for(auto &weak:subscribers) if(auto s=weak.lock()) {
       std::lock_guard qlock(s->mutex);
       if(s->closed) continue;
+      // A subscription may arrive while a pre-join frame is encoding. Do not
+      // expose that undecodable frame (or its audio) before the next IDR.
+      if(s->waiting_keyframe) {
+        if(p->audio||!p->video.keyframe)continue;
+        s->waiting_keyframe=false;
+      }
       size_t size=p->audio?p->pcm.size():p->video.payload.size();
       if(s->packets.size()>=600 || s->bytes+size>24*1024*1024) {
         s->error="Receiver cannot keep up; its connection was stopped"; s->closed=true;

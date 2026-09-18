@@ -1,4 +1,5 @@
 #include "stream.hpp"
+#include "recording.hpp"
 #include <iostream>
 #include <poll.h>
 #include <regex>
@@ -15,6 +16,7 @@ int run_stream(const Json &config,const std::filesystem::path &directory,
     ~Session() { stop=true; if(thread.joinable()) thread.join(); }
   };
   std::map<std::string,std::unique_ptr<Session>> sessions;
+  std::unique_ptr<Recording> recording;
   media.start();
   std::jthread commands([&](std::stop_token ending) {
     std::string buffer;
@@ -32,6 +34,12 @@ int run_stream(const Json &config,const std::filesystem::path &directory,
           auto command=Json::parse(line);
           std::string action=command.at("action");
           if(action=="stop") {stop=true;break;}
+          if(action=="record") {
+            require(!recording||recording->done(),"A recording is already running");
+            recording=std::make_unique<Recording>(media,directory.parent_path()/"captures",
+              command.at("id"),command.value("seconds",15),note);
+            continue;
+          }
           std::string id=command.at("id");
           require(std::regex_match(id,std::regex("[0-9a-f]{32}")),"Invalid receiver identifier");
           if(action=="remove") {
@@ -65,6 +73,7 @@ int run_stream(const Json &config,const std::filesystem::path &directory,
   });
   while(!stop&&!media.failed()&&!media.completed()) std::this_thread::sleep_for(std::chrono::milliseconds(50));
   stop=true; commands.request_stop(); commands.join();
+  recording.reset();
   for(auto &[id,s]:sessions) s->stop=true;
   media.close(); sessions.clear();
   if(media.completed()) note("source_finished",Json::object());

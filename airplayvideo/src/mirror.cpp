@@ -242,9 +242,13 @@ namespace lab {
 Json audio_timing_setup(int lead_ms) {
   require(lead_ms>=500&&lead_ms<=2000,"Invalid audio presentation lead");
   const int samples=lead_ms*44100/1000;
-  // A receiver can clamp the sync packet's latency to the SETUP bounds.
-  // Request exactly the shared A/V buffer, not an unrelated 250–2000 ms range.
-  return {{"latencyMin",samples},{"latencyMax",samples},{"usingScreen",true}};
+  // TimeAnnounce establishes the playout lead. SETUP describes its permitted
+  // window, not an additional minimum queue to add to that lead.
+  return {{"latencyMin",0},{"latencyMax",samples},{"usingScreen",true},{"isMedia",false}};
+}
+Json video_timing_setup(int lead_ms) {
+  require(lead_ms>=500&&lead_ms<=2000,"Invalid video presentation lead");
+  return {{"latencyMs",lead_ms}};
 }
 Bytes audio_sync_packet(uint64_t presentation_epoch,int64_t pts_us,
                         uint32_t timestamp,int lead_ms,bool first) {
@@ -286,6 +290,7 @@ class AudioTransport {
   bool first_=true;
   uint64_t epoch_;
   int lead_ms_;
+  int receiver_output_ms_=0;
 public:
   explicit AudioTransport(uint16_t port,uint64_t epoch,int lead):epoch_(epoch),lead_ms_(lead) {
     require(control_.fd()>=0&&data_.fd()>=0,"Audio socket allocation");
@@ -295,13 +300,16 @@ public:
   void setup(Rtsp &rtsp,const std::string &uri,const Credentials &c,uint16_t port) {
     key_=random_bytes(32);
     Json stream={{"type",96},{"audioFormat",0x800},{"audioMode","default"},{"ct",1},
-      {"sr",44100},{"spf",352},{"isMedia",true},{"controlPort",port},
+      {"sr",44100},{"spf",352},{"controlPort",port},
       {"shk",Json::binary(key_)},
       {"streamConnectionID",random_id()},{"supportsDynamicStreamID",false}};
     stream.update(audio_timing_setup(lead_ms_));
     auto reply=rtsp.plist("SETUP",uri,{{"streams",Json::array({stream})}});
     int cp=0,dp=0;
-    for(const auto &s:reply.value("streams",Json::array())) if(s.value("type",0)==96) { cp=s.value("controlPort",0); dp=s.value("dataPort",0); }
+    for(const auto &s:reply.value("streams",Json::array())) if(s.value("type",0)==96) {
+      cp=s.value("controlPort",0);dp=s.value("dataPort",0);
+      receiver_output_ms_=s.value("arrivalToRenderLatencyMs",0);
+    }
     require(cp>0&&cp<=65535&&dp>0&&dp<=65535,"Receiver did not offer PCM audio transport");
     peer_control_.sin_family=peer_data_.sin_family=AF_INET;
     require(inet_pton(AF_INET,c.receiver.address.c_str(),&peer_control_.sin_addr)==1,"Audio receiver address");
@@ -325,6 +333,11 @@ public:
     });
   }
   ~AudioTransport() { if(worker_.joinable()) {worker_.request_stop();worker_.join();} sodium_memzero(key_.data(),key_.size()); }
+  Json timing() const {
+    return {{"codec","pcm"},{"sample_rate",44100},{"samples_per_packet",352},
+      {"latency_min_samples",0},{"latency_max_samples",lead_ms_*44100/1000},
+      {"receiver_output_latency_ms",receiver_output_ms_},{"is_media",false},{"using_screen",true}};
+  }
   void send(const MediaPacket &p) {
     uint32_t timestamp=origin_+uint32_t((uint64_t(p.pts_us)*44100)/1000000);
     if(p.pts_us-last_sync_>=1000000) {
@@ -358,7 +371,8 @@ void mirror_stream(const Credentials &c,Media &media,uint16_t timing_port,
     Events events(c.receiver.address,ep,secret);
     int width=media.config.at("width"),height=media.config.at("height"),fps=media.config.at("fps");
     uint64_t stream_id=random_id();
-    Json stream={{"type",110},{"streamConnectionID",stream_id},{"width",width},{"height",height},{"maxFPS",fps},{"latencyMs",100},{"timestampInfo",Json::array({{{"name","SubSu"}},{{"name","BePxT"}},{{"name","AfPxT"}},{{"name","BefEn"}},{{"name","EmEnc"}}})}};
+    Json stream={{"type",110},{"streamConnectionID",stream_id},{"width",width},{"height",height},{"maxFPS",fps},{"timestampInfo",Json::array({{{"name","SubSu"}},{{"name","BePxT"}},{{"name","AfPxT"}},{{"name","BefEn"}},{{"name","EmEnc"}}})}};
+    stream.update(video_timing_setup(media.config.value("latency_ms",1500)));
     auto reply=control.plist("SETUP",uri,{{"streams",Json::array({stream})}});
     int dp=0;
     for(const auto &s:reply.value("streams",Json::array())) if(s.value("type",0)==110) {dp=s.value("dataPort",0);stream_id=s.value("streamConnectionID",stream_id);}
@@ -379,6 +393,7 @@ void mirror_stream(const Credentials &c,Media &media,uint16_t timing_port,
     note("connecting",{{"video",true},{"audio",bool(audio)}});
     uint64_t frames=0,audio_packets=0,nonce=0,wire_bytes=0;
     int64_t first_pts=-1,last_video=-1;
+    int64_t video_age=0,audio_age=0,video_queue=0,audio_queue=0;
     auto heartbeat=Clock::now(),metrics=Clock::now(),last_packet=Clock::now();
     Bytes last_config;
     while(!stop && !media.failed()) {
@@ -395,9 +410,11 @@ void mirror_stream(const Credentials &c,Media &media,uint16_t timing_port,
       if(p->pts_us<first_pts) continue;
       require(events.healthy(),"Receiver closed the event channel");
       int64_t age=std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-media.epoch).count()-p->pts_us;
+      int64_t queue=std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-media.epoch).count()-p->available_us;
       require(age<int64_t(media.config.value("latency_ms",1500))*1000,"Receiver is too far behind; playback stopped");
-      if(p->audio) { if(audio) {audio->send(*p);++audio_packets;} }
+      if(p->audio) { if(audio) {audio->send(*p);++audio_packets;audio_age=age;audio_queue=queue;} }
       else {
+        video_age=age;video_queue=queue;
         require(p->pts_us>last_video,"Nonmonotonic video timestamp"); last_video=p->pts_us;
         uint64_t presentation=media.epoch_ntp+ntp_delta(p->pts_us);
         if(last_config!=p->video.avcc) {
@@ -408,7 +425,10 @@ void mirror_stream(const Credentials &c,Media &media,uint16_t timing_port,
         data.write(packet); ++frames; wire_bytes+=packet.size();
       }
       if(Clock::now()-metrics>=std::chrono::seconds(1)) {
-        note("streaming",{{"video_frames",frames},{"audio_packets",audio_packets},{"wire_bytes",wire_bytes},{"timing_replies",timing.count()}}); metrics=Clock::now();
+        note("streaming",{{"video_frames",frames},{"audio_packets",audio_packets},{"wire_bytes",wire_bytes},{"timing_replies",timing.count()},
+          {"video_age_us",video_age},{"audio_age_us",audio_age},{"video_queue_us",video_queue},{"audio_queue_us",audio_queue},
+          {"video_setup_latency_ms",media.config.at("latency_ms")},{"presentation_lead_ms",media.config.at("latency_ms")},
+          {"audio_timing",audio?audio->timing():Json(nullptr)}}); metrics=Clock::now();
       }
       if(Clock::now()-heartbeat>=std::chrono::seconds(2)) {
         require(control.request("POST","/feedback").status==200,"Receiver feedback rejected"); heartbeat=Clock::now();

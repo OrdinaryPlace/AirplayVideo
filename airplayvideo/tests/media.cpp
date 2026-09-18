@@ -12,9 +12,9 @@ int main(int argc,char **argv) {
     require(sodium_init()>=0,"Crypto initialization");
     avdevice_register_all();av_log_set_level(AV_LOG_QUIET);
     require(ntp_delta(7200000000ULL)==(uint64_t(7200)<<32),"NTP conversion must remain correct beyond 71 minutes");
-    // Interpret the wire as a receiver does, including its permitted latency
-    // clamp. A fixed SETUP range can make audio stay at a different latency
-    // while the video timestamp moves with the user's buffer setting.
+    // Independently recover playout time from the two RTP positions and NTP.
+    // SETUP is checked separately: a self-imposed receiver clamp previously
+    // allowed a wrong hard audio minimum and fixed video SETUP to pass.
     const uint64_t capture_epoch=uint64_t(12345)<<32;
     auto network_integer=[](std::span<const uint8_t> value) {
       uint64_t result=0; for(auto byte:value) result=(result<<8)|byte; return result;
@@ -22,6 +22,9 @@ int main(int argc,char **argv) {
     for(int lead:{500,750,1000,1500,2000}) {
       const auto setup=audio_timing_setup(lead);
       require(setup.at("usingScreen")==true,"Audio belongs to the screen session");
+      require(setup.at("isMedia")==false,"Screen audio must not enter the receiver's main media path");
+      require(setup.at("latencyMin")==0&&setup.at("latencyMax")==lead*44100/1000,"Screen audio latency window");
+      require(video_timing_setup(lead).at("latencyMs")==lead,"Video SETUP must match its presentation timestamps");
       const uint64_t epoch=capture_epoch+ntp_delta(uint64_t(lead)*1000);
       for(int64_t pts:{0LL,2371234LL,7200123456LL,100000000000LL}) {
         uint32_t rtp=0xffffffe0U+uint32_t(uint64_t(pts)*44100/1000000);
@@ -30,14 +33,11 @@ int main(int argc,char **argv) {
         uint32_t playing=network_integer(std::span(sync).subspan(4,4));
         uint32_t sent=network_integer(std::span(sync).subspan(16,4));
         require(sent==rtp,"Sync reference identifies the transmitted PCM packet");
-        // Exercise receivers choosing either allowed endpoint (and the legacy
-        // 250 ms offset), including sample timestamp rollover and late joins.
-        for(int proposed:{0,int(uint32_t(sent-playing)),int(uint32_t(sent-playing))+11025,88200}) {
-          int actual=std::clamp(proposed,setup.at("latencyMin").get<int>(),setup.at("latencyMax").get<int>());
-          long double audio_time=network_integer(std::span(sync).subspan(8,8))/4294967296.0L+actual/44100.0L;
-          long double video_time=(epoch+ntp_delta(pts))/4294967296.0L;
-          require(std::abs(audio_time-video_time)<0.000024L,"Audio and video buffer agreement within one sample");
-        }
+        const uint32_t advance=sent-playing;
+        require(advance==uint32_t(lead*44100/1000),"Sync positions encode the requested lead");
+        long double audio_time=network_integer(std::span(sync).subspan(8,8))/4294967296.0L+advance/44100.0L;
+        long double video_time=(epoch+ntp_delta(pts))/4294967296.0L;
+        require(std::abs(audio_time-video_time)<0.000024L,"Audio and video wire presentation agree within one sample");
       }
     }
     auto header=mirror_header(10,1,ntp_now(),1280,720);

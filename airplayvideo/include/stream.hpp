@@ -10,6 +10,7 @@ inline uint64_t ntp_delta(uint64_t us) {
 struct MediaPacket {
   bool audio = false;
   int64_t pts_us = 0;
+  int64_t available_us = 0;
   EncodedFrame video;
   Bytes pcm;
 };
@@ -18,6 +19,7 @@ struct Subscriber {
   std::condition_variable ready;
   std::deque<std::shared_ptr<const MediaPacket>> packets;
   bool closed = false;
+  bool waiting_keyframe = true;
   std::string error;
   size_t bytes = 0;
   std::shared_ptr<const MediaPacket> next(const std::atomic<bool> &stop);
@@ -47,6 +49,7 @@ Bytes audio_packet(std::span<const uint8_t> pcm, std::span<const uint8_t> key,
                    uint64_t nonce, uint16_t sequence, uint32_t timestamp,
                    uint32_t ssrc, bool first);
 Json audio_timing_setup(int lead_ms);
+Json video_timing_setup(int lead_ms);
 Bytes audio_sync_packet(uint64_t presentation_epoch, int64_t pts_us,
                         uint32_t timestamp, int lead_ms, bool first);
 Json media_capabilities();

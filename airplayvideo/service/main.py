@@ -17,6 +17,7 @@ from .controller import PairingEngine, Controller
 from .hdhomerun import Channels, inspect as inspect_tuner, discover as discover_tuners
 from .mqtt import HomeAssistant
 from .network import ingress_listener
+from .recordings import Recordings
 
 ROOT = Path(os.environ.get("AIRPLAYVIDEO_DATA", "/data"))
 WEB = Path(os.environ.get("AIRPLAYVIDEO_WEB", "/opt/airplayvideo/web"))
@@ -54,6 +55,8 @@ class Application:
         self.browser = Browser(store.root, session)
         self.channels = Channels(store, session)
         self.controller = Controller(store, self.pairing, self.browser, self.channels)
+        self.recordings = Recordings(self.controller)
+        self.controller.recordings = self.recordings
         self.ha = HomeAssistant(store, self.controller, self.channels, session)
         self.controller.changed = self.ha.publish_state
         self.tickets = {}
@@ -61,9 +64,10 @@ class Application:
         self.configuration_lock = asyncio.Lock()
 
     def state(self):
-        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}
+        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "recordings": self.recordings.state(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}
 
     def require_idle(self):
+        check(not self.recordings.current, "Wait for the diagnostic recording to finish")
         check(not self.controller.stream and not self.controller.pending, "Stop playback before changing Setup")
 
     async def start(self):
@@ -88,6 +92,7 @@ class Application:
         for ws in list(self.preview_sockets):
             await ws.close()
         await self.ha.close()
+        await self.recordings.close()
         await self.controller.close()
         await self.pairing.close()
 
@@ -99,7 +104,12 @@ class Application:
         action = request.match_info["action"]
         controller = self.controller
         if action == "play":
+            check(not self.recordings.current or not self.recordings.owned, "Wait for the diagnostic recording to finish")
             await controller.play(data)
+        elif action == "record":
+            await self.recordings.start(data)
+        elif action == "remove_recording":
+            self.recordings.remove(data.get("id"))
         elif action == "preview_generated":
             from .model import validate_generated
             settings = validate_generated(data.get("generated", {}), self.store.data["setup"]["generated"])
@@ -109,6 +119,7 @@ class Application:
         elif action == "open_browser":
             await controller.open_browser(data)
         elif action == "close_browser":
+            check(not self.recordings.current, "Wait for the diagnostic recording to finish")
             await controller.close_browser()
         elif action == "browser":
             await self.browser.control(data.get("action"), data.get("text"))
@@ -128,6 +139,13 @@ class Application:
         else:
             raise UserError("Unknown playback action")
         return web.json_response(self.state())
+
+    async def recording_file(self, request):
+        extension = request.match_info['extension']
+        path = self.recordings.file(request.match_info['id'], extension)
+        return web.FileResponse(path, headers={
+            'Content-Disposition': 'attachment; filename="airplayvideo-capture.' + extension + '"',
+        })
 
     async def save_page(self, request):
         self.controller.require_mode("browser")
@@ -309,6 +327,7 @@ def make_app(application, standalone=False, web_root=WEB):
     app = web.Application(middlewares=[boundary], client_max_size=64 * 1024)
     app["standalone"] = standalone
     app.router.add_get("/api/state", application.get_state)
+    app.router.add_get("/api/recordings/{id}/{extension}", application.recording_file)
     app.router.add_post("/api/actions/{action}", application.action)
     app.router.add_post("/api/setup/{action}", application.setup)
     app.router.add_post("/api/pages/save", application.save_page)

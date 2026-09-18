@@ -4,7 +4,7 @@ Send browser pages, HDHomeRun channels, or generated videos to your Apple TVs fr
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.0.** This is an independent implementation in a new
+**Experimental, version 0.2.1.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -154,6 +154,12 @@ replace the topic/TV ID using the app's copied example. Messages and settings ca
 appear in Home Assistant traces and MQTT; avoid including secrets in video text.
 
 ## Current boundaries
+
+For delayed sound, open **Playback → Troubleshoot audio and video sync → Record
+15-second sample**. Download the video and timing reports to compare the actual
+container capture before AirPlay with TV output. Recording alone never starts a
+TV. See [audio/video timing](https://github.com/OrdinaryPlace/AirplayVideo/blob/main/docs/audio-video-timing.md)
+for buffer details and interpreting captures.
 
 - Up to eight saved TVs; one active browser page, channel, or generated video at a time. Receiver
   connections are independent, but this is not a claim of sample-accurate

@@ -155,6 +155,7 @@ class Controller:
         self.changed = lambda: None
         self.capabilities = {"encoders": ["libopenh264"]}
         self.cleanup_tasks = set()
+        self.recordings = None
 
     def status(self):
         return {"phase": self.phase, "source": self.source, "targets": sorted(self.targets), "receivers": self.receivers, "error": self.error, "metrics": self.metrics, "browser_open": self.browser.running}
@@ -178,6 +179,8 @@ class Controller:
         return {"source": source, "width": width, "height": height, "fps": video["fps"], "encoder": encoder, "bitrate": video["bitrate_mbps"] * 1_000_000, "deinterlace": video["deinterlace"], "audio": source["kind"] != "generated" and settings["audio"]["enabled"], "latency_ms": settings["audio"]["latency_ms"]}
 
     async def event(self, stream, event, fields):
+        if self.recordings:
+            await self.recordings.event(stream, event, fields)
         if stream is not self.stream and stream is not self.pending:
             return
         receiver_id = fields.get("id")
@@ -251,6 +254,8 @@ class Controller:
 
     async def play(self, request, add=False):
         async with self.lock:
+            check(not self.recordings or not self.recordings.current or not self.recordings.owned,
+                  "Wait for the diagnostic recording to finish")
             wanted = request.get("receivers", [])
             check(isinstance(wanted, list) and 0 < len(wanted) <= 8, "Choose one or more TVs")
             target = {self.store.receiver(r)["id"] for r in wanted}

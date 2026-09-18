@@ -1,0 +1,76 @@
+# Audio/video timing and diagnostic captures
+
+Playback → **Troubleshoot audio and video sync** → **Record 15-second sample**
+saves the current stream in the app container. With no TV playing, open the
+browser first, or choose a live channel; recording alone never starts a TV.
+Browser capture uses its existing page and does not navigate. Active playback
+uses the same encoded packets through an independent bounded subscriber.
+
+Download the Matroska video, JSON report, and packet timing CSV. H.264 is copied
+without re-encoding; stereo PCM is stored losslessly. Both keep their source
+timestamps relative to the same first video keyframe. The file is taken **before
+AirPlay**: it cannot show how long an Apple TV, HomePod, soundbar, or Bluetooth
+output subsequently holds the audio. Do not capture account/login screens.
+
+Recordings are private, explicit, and limited to 5–30 seconds through the API
+(15 seconds in the UI), 128 MiB each, and eight retained samples. Download and
+Remove control their lifetime. They are not uploaded anywhere. Settings and
+pairing files are never included. An app backup may include retained captures.
+
+## Where buffering occurs
+
+| Stage | Behavior |
+| --- | --- |
+| Browser capture | X11 video and PulseAudio samples use their source wall-clock timestamps. The 4096-byte stereo 48 kHz audio fragment is about 21 ms. |
+| Audio conversion | Resample to 44.1 kHz, then assemble 352-sample packets (about 8 ms). The FIFO is drained as soon as a packet is available; its size limit is not a prefill target. |
+| Video processing | H.264 has no B frames. Deinterlacing, conversion, and encoding take processing time; they do not rewrite PTS to send time. |
+| Per-TV queue | Packets are consumed immediately. A 600-packet/24 MiB ceiling and a source-age deadline stop a lagging receiver rather than accumulating unlimited delay. |
+| Playback buffer | The chosen 500–2000 ms is a future presentation deadline. Video timestamps, video SETUP, audio SETUP maximum, and audio RTP/NTP mapping describe that same lead. There is no sender sleep equal to this buffer. |
+| Audio recovery | A 512-packet ciphertext history services retransmissions. Keeping a history does not delay first transmission. |
+| Receiver output | The TV/output device controls its own decoder, mixer, and hardware delay. Its optional arrival-to-render report is recorded separately, not added blindly as another offset. |
+
+Version 0.2.0 had inconsistent negotiation: video SETUP always said 100 ms,
+audio had a hard minimum equal to the selected buffer, and `isMedia` was true
+despite screen mirroring. Version 0.2.1 makes video SETUP match the presentation
+lead and requests screen audio with `isMedia=false`, `usingScreen=true`, a zero
+minimum, and the selected maximum. This corrects inconsistent requests; it does
+not by itself prove that a particular receiver's physical output is aligned.
+
+## Reading the evidence
+
+- `pts_us`: source media time. Audio and video share an origin.
+- `available_us`: packet ready after capture/conversion/encoding.
+- `observed_us`: recording subscriber receives the packet.
+- `age_us`: source age, including capture/processing and subscriber queueing.
+- `queue_us`: time spent between publication and recording consumption.
+- `receiver_timing`: latest sender queue/source-age measurements and negotiated
+  audio/video timing when a TV was streaming during this recording.
+
+Watch the downloaded file independently. A visible offset already in the file
+points upstream, toward the source/capture/timestamps. A file that is aligned
+while the TV is delayed narrows the issue to AirPlay negotiation/delivery or
+receiver output. A small packet age alone does not prove content alignment.
+
+The development fixture schedules white flashes and 1 kHz beeps on one browser
+audio clock, captures the real X11/Pulse pipeline at 1080p, and measures decoded
+flash/beep PTS. It includes browser audio and display scheduling uncertainty,
+so frame-scale jitter is expected; hundreds of milliseconds are not.
+
+## Codec choices and earlier implementation lessons
+
+This release keeps encrypted PCM stereo at 44.1 kHz, with 352 samples per RTP
+packet. PCM has no compression lookahead and consumes about 1.41 Mbit/s before
+packet overhead. A codec change does not repair an incorrect presentation clock.
+ALAC is lossless; AAC-ELD is a distinct low-delay format, not ordinary AAC-LC.
+Receiver advertisement must gate any additional codec implementation.
+
+The upstream Doubletake sender prefers advertised ALAC, supports AAC-ELD when
+built for it, uses source timestamps, discards stale startup audio, and treats
+screen audio separately from a primary media session. Our earlier HDHomeRun fork
+also normalized GStreamer segment origins before mapping timestamps. The lesson
+is to preserve one A/V timeline, not transplant a GStreamer fix into FFmpeg.
+AirplayVideo's channel path instead normalizes one demuxer's shared start time.
+No Doubletake implementation is incorporated in this change.
+
+Primary references: [Doubletake](https://github.com/omarroth/doubletake),
+[FFmpeg PulseAudio input](https://ffmpeg.org/ffmpeg-devices.html#pulse).

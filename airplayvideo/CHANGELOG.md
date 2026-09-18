@@ -1,3 +1,18 @@
+# Changelog
+
+## 0.2.1
+
+- Advertise the selected video latency instead of a fixed 100 ms; identify audio
+  as screen audio, with a zero minimum and the selected maximum playout lead.
+- Add bounded container recordings of the actual pre-AirPlay H.264/PCM packets,
+  preserving relative timestamps, plus downloadable timing reports and CSVs.
+- Record an active stream without replacing it, or record an open browser/live
+  channel without starting a TV. Keep recordings behind authenticated ingress.
+- Expose receiver timing and sender packet age without recording credentials.
+- Make newly joined subscribers wait for a decodable keyframe.
+- Add real Chrome flash/beep capture measurement. Physical TV lip-sync still
+  needs receiver observation; aligned packet clocks alone are insufficient.
+
 ## 0.2.0
 
 - Add generated video as a third source: title, tagline, length and time/countdown/neither.
@@ -5,8 +20,6 @@
 - Start duration on the first TV connection and stop cleanly after its presentation deadline.
 - Add saved defaults, a native HA Play generated video button and custom multi-TV MQTT messages with copyable automation YAML.
 - Preserve existing settings, pairing identities and browser profiles through an additive upgrade.
-
-# Changelog
 
 ## 0.1.6
 

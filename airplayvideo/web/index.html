@@ -56,6 +56,7 @@
         <section class="card tv-card"><div class="card-header"><h2>Where to play</h2><button id="tvSetup" class="text-button">Manage TVs</button></div><p class="muted tight">The same source plays on every selected TV.</p><div id="tvList"></div></section>
       </div>
       <div class="card playback-footer"><p id="selectionHint" class="muted" aria-live="polite">Choose one or more TVs above.</p><div class="play-actions"><button id="play" class="primary" aria-describedby="selectionHint">Play on selected TVs</button><button id="stopAll" class="danger-outline">Stop all</button></div><p id="nowPlaying" class="muted" aria-live="polite">Choose a source and one or more TVs.</p></div>
+      <details class="card" id="recordingPanel"><summary>Troubleshoot audio and video sync</summary><p class="muted">Record 15 seconds from the current playback, open browser, or selected live TV channel. This saves the video and sound before AirPlay in the app container. It does not start a TV. Recordings may contain private page content; download or remove them here.</p><button id="recordCapture">Record 15-second sample</button><p id="recordingStatus" role="status" class="muted"></p><div id="recordingList"></div></details>
     </section>
       <section id="previewSection" class="card preview-card" hidden>
         <div class="card-header"><h2>Browser preview</h2><span id="previewHelp" class="muted">Sound plays on the TVs</span></div>
