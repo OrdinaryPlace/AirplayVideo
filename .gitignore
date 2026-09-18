@@ -1,0 +1,12 @@
+**/build/
+**/__pycache__/
+**/.pytest_cache/
+data/
+artifacts/
+*.log
+*.pem
+*.key
+.env
+.DS_Store
+
+.dev-data/

@@ -1,0 +1,60 @@
+name: AirplayVideo
+version: "0.1.0"
+slug: airplayvideo
+description: Send a browser page or HDHomeRun channel to your Apple TVs
+url: https://github.com/OrdinaryPlace/AirplayVideo
+arch: [amd64]
+startup: application
+boot: manual
+init: true
+timeout: 30
+ingress: true
+ingress_port: 8099
+ingress_stream: true
+panel_icon: mdi:cast-connected
+panel_title: AirplayVideo
+panel_admin: true
+hassio_api: true
+hassio_role: default
+services: [mqtt:want]
+video: true
+# Chrome's sandbox creates nested namespaces. Keep HA protection and the
+# browser sandbox enabled; do not replace this with --no-sandbox.
+privileged: [SYS_ADMIN]
+stage: experimental
+ports:
+  57100/udp: 57100
+  57101/udp: 57101
+  57102/udp: 57102
+  57103/udp: 57103
+  57104/udp: 57104
+  57105/udp: 57105
+  57106/udp: 57106
+  57107/udp: 57107
+  57108/udp: 57108
+  57109/udp: 57109
+  57110/udp: 57110
+  57111/udp: 57111
+  57112/udp: 57112
+  57113/udp: 57113
+  57114/udp: 57114
+  57115/udp: 57115
+ports_description:
+  57100/udp: AirPlay timing for TV slot 1
+  57101/udp: AirPlay timing for TV slot 2
+  57102/udp: AirPlay timing for TV slot 3
+  57103/udp: AirPlay timing for TV slot 4
+  57104/udp: AirPlay timing for TV slot 5
+  57105/udp: AirPlay timing for TV slot 6
+  57106/udp: AirPlay timing for TV slot 7
+  57107/udp: AirPlay timing for TV slot 8
+  57108/udp: AirPlay audio recovery for TV slot 1
+  57109/udp: AirPlay audio recovery for TV slot 2
+  57110/udp: AirPlay audio recovery for TV slot 3
+  57111/udp: AirPlay audio recovery for TV slot 4
+  57112/udp: AirPlay audio recovery for TV slot 5
+  57113/udp: AirPlay audio recovery for TV slot 6
+  57114/udp: AirPlay audio recovery for TV slot 7
+  57115/udp: AirPlay audio recovery for TV slot 8
+options: {}
+schema: {}

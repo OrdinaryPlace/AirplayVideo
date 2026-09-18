@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>AirplayVideo</title>
+  <link rel="stylesheet" href="assets/app.css">
+  <script type="module" src="assets/app.js"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#play" aria-label="AirplayVideo playback">
+      <svg viewBox="0 0 36 36" aria-hidden="true"><rect x="3" y="5" width="30" height="21" rx="5"/><path d="M18 19 8 32h20z"/></svg>
+      <span>AirplayVideo</span>
+    </a>
+    <nav aria-label="Application"><button id="playTab" class="nav active">Playback</button><button id="setupTab" class="nav">Setup</button></nav>
+    <span id="connection" class="connection">Connecting…</span>
+  </header>
+  <main>
+    <div id="notice" class="notice" role="status" hidden></div>
+    <div id="error" class="error" role="alert" hidden></div>
+    <section id="loading" class="card"><h1>Opening AirplayVideo</h1><p>Connecting to the app…</p></section>
+    <section id="wizard" hidden>
+      <div class="wizard-heading"><div><p class="eyebrow">APPLICATION SETUP</p><h1 id="wizardTitle">Choose your sources</h1><p id="wizardDescription" class="muted"></p></div><span id="stepCount" class="badge"></span></div>
+      <ol id="steps" class="steps" aria-label="Setup progress"></ol>
+      <form id="setupForm" class="card wizard-card"><div id="stepContent"></div><div class="wizard-footer"><button type="button" id="previous">Back</button><button type="submit" id="next" class="primary">Continue</button></div></form>
+    </section>
+    <section id="playback" hidden>
+      <div class="play-grid">
+        <section class="card source-card">
+          <div class="card-header"><h1>What to play</h1><span id="runtimeBadge" class="badge">Idle</span></div>
+          <div id="modeSwitch" class="segmented" aria-label="Source mode"></div>
+          <div id="browserSource">
+            <label for="browserKind">Source</label><select id="browserKind"><option value="page">Saved page</option><option value="youtube">YouTube video</option><option value="watch_later">Watch Later</option><option value="url">Web address</option></select>
+            <div id="savedPageFields"><div class="label-row"><label for="pageSelect">Page</label><button id="managePages" class="text-button">Manage pages</button></div><select id="pageSelect"></select></div>
+            <div id="urlFields" hidden><label id="urlLabel" for="sourceUrl">Video link</label><input id="sourceUrl" type="url" autocomplete="off" placeholder="https://www.youtube.com/watch?v=…"></div>
+            <p id="watchLaterHelp" class="muted" hidden>Uses the YouTube account signed in through the browser preview.</p>
+            <button id="openBrowser" class="secondary">Open browser</button>
+          </div>
+          <div id="channelSource" hidden>
+            <div class="label-row"><label for="channelSearch">Find a channel</label><button id="refreshChannels" class="text-button">Refresh</button></div>
+            <input id="channelSearch" type="search" placeholder="Number or name">
+            <div class="channel-row"><select id="channelSelect" aria-label="Channel"></select><button id="favorite" class="favorite" aria-label="Favorite selected channel">☆</button></div>
+            <label class="check-row"><input id="favoritesOnly" type="checkbox"> Favorites only</label>
+            <p id="channelHint" class="muted"></p>
+          </div>
+          <div class="play-actions"><button id="play" class="primary">Play on selected TVs</button><button id="stopAll" class="danger-outline">Stop all</button></div>
+          <p id="nowPlaying" class="muted" aria-live="polite">Choose a source and one or more TVs.</p>
+        </section>
+        <section class="card tv-card"><div class="card-header"><h2>TVs</h2><button id="tvSetup" class="text-button">Manage in Setup</button></div><p class="muted tight">The same source plays on every selected TV.</p><div id="tvList"></div></section>
+      </div>
+      <section id="previewSection" class="card preview-card" hidden>
+        <div class="card-header"><h2>Browser preview</h2><span class="muted">Sound plays on the TVs</span></div>
+        <div class="preview-toolbar" aria-label="Browser controls"><button data-browser="back" title="Back">←</button><button data-browser="forward" title="Forward">→</button><button data-browser="reload">Reload</button><button data-browser="play_pause">Play / pause</button><button data-browser="fullscreen">Fill video</button><button id="paste">Paste text</button><span class="spacer"></span><button id="expand">Expand</button><button id="closeBrowser">Close browser</button></div>
+        <div id="preview" tabindex="0" aria-label="Interactive remote browser preview"></div><p id="previewStatus" class="muted tight" role="status"></p>
+      </section>
+    </section>
+  </main>
+  <dialog id="pairDialog"><form id="pairForm"><h2 id="pairTitle">Pair your TV</h2><p>Enter the four-digit code shown on the TV.</p><label for="pin">TV code</label><input id="pin" type="password" inputmode="numeric" pattern="[0-9]{4}" maxlength="4" autocomplete="one-time-code" required><p id="pairError" class="error" hidden></p><div class="dialog-actions"><button id="cancelPair" type="button">Cancel</button><button id="completePair" class="primary">Complete pairing</button></div></form></dialog>
+  <dialog id="pagesDialog"><form id="pageForm"><h2>Saved pages</h2><div id="pagesList" class="saved-list"></div><input id="pageId" type="hidden"><label for="pageName">Name</label><input id="pageName" maxlength="60" required placeholder="Living room dashboard"><label for="pageUrl">Page URL</label><input id="pageUrl" type="url" required placeholder="https://…"><div class="dialog-actions"><button id="closePages" type="button">Close</button><button class="primary">Save page</button></div></form></dialog>
+  <dialog id="pasteDialog"><form id="pasteForm"><h2>Paste into the browser</h2><p>First select the field in the preview. This inserts text without submitting the page.</p><label for="pasteText">Text to insert</label><input id="pasteText" type="password" autocomplete="off" maxlength="16384"><div class="dialog-actions"><button id="cancelPaste" type="button">Cancel</button><button class="primary">Send text</button></div></form></dialog>
+  <footer><span>AirplayVideo <span id="version"></span></span><span>OrdinaryPlace · Experimental</span></footer>
+</body>
+</html>

@@ -1,0 +1,19 @@
+name: Verify
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  linux-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build and run C++ protocol/media tests
+        run: docker build --progress=plain -t airplayvideo:test airplayvideo
+      - name: Verify configuration, API boundaries, and playback lifecycle
+        run: docker run --rm airplayvideo:test python3 -m pytest tests -q -p no:cacheprovider
+      - name: Check browser module syntax
+        run: node --input-type=module --check < airplayvideo/web/app.js

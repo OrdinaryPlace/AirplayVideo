@@ -1,0 +1,2 @@
+# Preserve the vendored upstream source verbatim.
+airplayvideo/vendor/** linguist-vendored -whitespace
