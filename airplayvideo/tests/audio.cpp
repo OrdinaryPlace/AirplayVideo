@@ -17,6 +17,54 @@ int main() {
     auto setup=audio_format_setup();
     require(setup.at("ct")==2&&setup.at("audioFormat")==0x40000&&
             setup.at("sr")==44100&&setup.at("spf")==352,"ALAC negotiation");
+    auto key=random_bytes(32);
+    for(uint64_t features:{uint64_t(1)<<19,(uint64_t(1)<<19)|(uint64_t(1)<<59)}) {
+      // Exercise the serialized SETUP seen by a receiver, including its choice
+      // of encryption key. A local cipher round trip cannot catch a missing
+      // use-stream-key flag in the negotiated RTP connection.
+      auto request=plist_decode(plist_encode(audio_stream_setup(features,key,42,18201,500)));
+      require(request.at("usingScreen")==true&&request.at("isMedia")==false,
+              "Keep audio on the screen output path");
+      require(request.at("latencyMin")==0&&request.at("latencyMax")==22050,
+              "Connection negotiation must preserve the common presentation lead");
+      if(features&(uint64_t(1)<<59)) {
+        require(!request.contains("controlPort"),"Do not mix legacy and modern connections");
+        const auto &connections=request.at("streamConnections");
+        require(connections.at("streamConnectionTypeRTP").at("streamConnectionKeyUseStreamEncryptionKey")==true,
+                "Receiver must select the declared stream encryption key");
+        require(connections.at("streamConnectionTypeRTCP").at("streamConnectionKeyPort")==18201,
+                "Receiver can return sync and retransmission requests to the bound socket");
+      } else require(request.at("controlPort")==18201&&!request.contains("streamConnections"),
+                     "Retain legacy receivers without feature 59");
+      auto negotiated=request.at("shk").get_binary();
+      Bytes original(352*4,37);
+      auto wire=audio_packet(original,key,0x100000005ULL,123,456,0,true);
+      Bytes decoded(wire.size());unsigned long long length=0;
+      require(crypto_aead_chacha20poly1305_decrypt(decoded.data(),&length,nullptr,
+                wire.data()+12,wire.size()-20,wire.data()+4,8,
+                wire.data()+wire.size()-8,negotiated.data())==0,
+              "Receiver's original 64-bit-nonce cipher authenticates the negotiated key");
+      decoded.resize(length);require(decoded==alac_frame(original),"Negotiated payload is intact");
+    }
+    const Json legacy={{"type",96},{"dataPort",6000},{"controlPort",6001}};
+    Json modern={{"type",96},{"streamConnections",{
+      {"streamConnectionTypeRTP",{{"streamConnectionKeyPort",7000}}},
+      {"streamConnectionTypeRTCP",{{"streamConnectionKeyPort",7001}}}}}};
+    require(audio_stream_ports(plist_decode(plist_encode(legacy)))==std::pair<uint16_t,uint16_t>{6000,6001},
+            "Legacy receiver endpoint response");
+    require(audio_stream_ports(plist_decode(plist_encode(modern)))==std::pair<uint16_t,uint16_t>{7000,7001},
+            "Modern receiver endpoint response without legacy fields");
+    modern["dataPort"]=6000;modern["controlPort"]=6001;
+    require(audio_stream_ports(modern)==std::pair<uint16_t,uint16_t>{7000,7001},
+            "Use negotiated connection endpoints when both forms are present");
+    for(const Json &bad:std::vector<Json>{0,-1,65536,"7000",nullptr,true}) {
+      auto response=modern;
+      response["streamConnections"]["streamConnectionTypeRTP"]["streamConnectionKeyPort"]=bad;
+      bool rejected=false;try{audio_stream_ports(response);}catch(...){rejected=true;}
+      require(rejected,"Malformed modern endpoint must not silently downgrade to legacy");
+    }
+    bool missing=false;try{audio_stream_ports(Json{{"type",96},{"dataPort",7000}});}catch(...){missing=true;}
+    require(missing,"Both data and control endpoints are required");
     auto codec=avcodec_find_decoder(AV_CODEC_ID_ALAC);
     require(codec,"Independent ALAC decoder is required");
     auto free_context=[](AVCodecContext *p){avcodec_free_context(&p);};
@@ -36,7 +84,6 @@ int main() {
     require(context->extradata,"Decoder configuration allocation");
     context->extradata_size=config.size();std::copy(config.begin(),config.end(),context->extradata);
     require(avcodec_open2(context.get(),codec,nullptr)>=0,"Open independent decoder");
-    auto key=random_bytes(32);
     for(unsigned trial=0;trial<12;++trial) {
       Bytes pcm(352*4);
       for(size_t i=0;i<pcm.size()/2;++i) {

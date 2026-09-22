@@ -81,3 +81,9 @@ No Doubletake implementation is incorporated in this change.
 
 Primary references: [Doubletake](https://github.com/omarroth/doubletake),
 [FFmpeg PulseAudio input](https://ffmpeg.org/ffmpeg-devices.html#pulse).
+
+Version 0.2.5 also selects the advertised audio connection format (feature 59).
+Modern RTP connections explicitly select the stream encryption key; the sender
+reads RTP and RTCP ports from the returned connection dictionaries, with legacy
+port fields supported for older receivers. Timing reports identify the selected
+connection layout. This changes negotiation without adding a buffer or offset.

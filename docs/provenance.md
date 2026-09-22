@@ -51,6 +51,9 @@ module. Google Chrome is not covered by this repository's MIT license.
   (Apache-2.0): real-time ALAC compatibility reference; no source imported.
 - [Upstream Doubletake audio](https://github.com/omarroth/doubletake/blob/main/internal/airplay/audio.go)
   and our historical fork: protocol/behavior comparison only, no implementation imported.
+- [OpenAirPlay connection-format observations](https://github.com/openairplay/airplay2-receiver/blob/master/ap2/connections/stream_connection.py)
+  (MIT): reference for feature 59, the explicit stream-key selection flag and
+  negotiated RTP/RTCP endpoints. No receiver implementation is imported.
 - [OpenAirPlay protocol notes](https://openairplay.github.io/airplay-spec/)
 - [Shairport Sync timing receiver](https://github.com/mikebrady/shairport-sync/blob/master/rtp.c)
   (MIT) and [AirPlay 2 protocol notes](https://github.com/SteeBono/airplayreceiver/wiki/AirPlay2-Protocol):

@@ -293,23 +293,21 @@ class AudioTransport {
   uint64_t epoch_;
   int lead_ms_;
   int receiver_output_ms_=0;
+  bool modern_connections_=false;
 public:
   explicit AudioTransport(uint16_t port,uint64_t epoch,int lead):epoch_(epoch),lead_ms_(lead) {
     require(control_.fd()>=0&&data_.fd()>=0,"Audio socket allocation");
     sockaddr_in local{}; local.sin_family=AF_INET; local.sin_port=htons(port); local.sin_addr.s_addr=INADDR_ANY;
     require(bind(control_.fd(),reinterpret_cast<sockaddr*>(&local),sizeof(local))==0,"Audio control port unavailable");
   }
-  void setup(Rtsp &rtsp,const std::string &uri,const Credentials &c,uint16_t port) {
+  void setup(Rtsp &rtsp,const std::string &uri,const Credentials &c,uint16_t port,uint64_t features) {
     key_=random_bytes(32);
-    Json stream={{"type",96},{"audioMode","default"},{"controlPort",port},
-      {"shk",Json::binary(key_)},
-      {"streamConnectionID",random_id()},{"supportsDynamicStreamID",false}};
-    stream.update(audio_format_setup());
-    stream.update(audio_timing_setup(lead_ms_));
+    modern_connections_=(features&(uint64_t(1)<<59))!=0;
+    auto stream=audio_stream_setup(features,key_,random_id(),port,lead_ms_);
     auto reply=rtsp.plist("SETUP",uri,{{"streams",Json::array({stream})}});
     int cp=0,dp=0;
     for(const auto &s:reply.value("streams",Json::array())) if(s.value("type",0)==96) {
-      cp=s.value("controlPort",0);dp=s.value("dataPort",0);
+      const auto ports=audio_stream_ports(s);dp=ports.first;cp=ports.second;
       receiver_output_ms_=s.value("arrivalToRenderLatencyMs",0);
     }
     require(cp>0&&cp<=65535&&dp>0&&dp<=65535,"Receiver did not offer ALAC audio transport");
@@ -337,6 +335,7 @@ public:
   ~AudioTransport() { if(worker_.joinable()) {worker_.request_stop();worker_.join();} sodium_memzero(key_.data(),key_.size()); }
   Json timing() const {
     return {{"codec","alac"},{"sample_rate",44100},{"samples_per_packet",352},
+      {"connection_layout",modern_connections_?"streamConnections":"controlPort"},
       {"latency_min_samples",0},{"latency_max_samples",lead_ms_*44100/1000},
       {"receiver_output_latency_ms",receiver_output_ms_},{"is_media",false},{"using_screen",true}};
   }
@@ -387,7 +386,7 @@ void mirror_stream(const Credentials &c,Media &media,uint16_t timing_port,
     std::unique_ptr<AudioTransport> audio;
     if(media.config.value("audio",true)) {
       audio=std::make_unique<AudioTransport>(control_port,media.epoch_ntp,media.config.value("latency_ms",1500));
-      audio->setup(control,uri,c,control_port);
+      audio->setup(control,uri,c,control_port,receiver.value("features",uint64_t(0)));
     }
     auto record=control.request("RECORD",uri,{},"",{{"Range","npt=0-"}});
     require(record.status==200,"Receiver rejected playback");

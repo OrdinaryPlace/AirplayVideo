@@ -47,6 +47,9 @@ void mirror_stream(const Credentials &, Media &, uint16_t timing_port,
                    const Note &note);
 Bytes alac_frame(std::span<const uint8_t> pcm);
 Json audio_format_setup();
+Json audio_stream_setup(uint64_t features, std::span<const uint8_t> key,
+                        uint64_t stream_id, uint16_t control_port, int lead_ms);
+std::pair<uint16_t,uint16_t> audio_stream_ports(const Json &stream);
 Bytes audio_packet(std::span<const uint8_t> pcm, std::span<const uint8_t> key,
                    uint64_t nonce, uint16_t sequence, uint32_t timestamp,
                    uint32_t ssrc, bool first);

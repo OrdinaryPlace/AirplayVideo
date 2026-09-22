@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.5
+
+- Negotiate modern encrypted audio connections when advertised by the receiver.
+  Explicitly select the stream encryption key and accept modern RTP/RTCP ports.
+- Preserve legacy receiver connections, codec, and shared playback timing.
+- Test serialized negotiation, independent packet authentication, endpoint validation,
+  and lossless ALAC decoding. Physical sound and lip sync still require a TV check.
+
 ## 0.2.4
 
 - Send lossless ALAC frames instead of bare PCM on the AirPlay real-time audio

@@ -25,4 +25,43 @@ Bytes alac_frame(std::span<const uint8_t> pcm) {
 Json audio_format_setup() {
   return {{"ct",2},{"audioFormat",0x40000},{"sr",44100},{"spf",352}};
 }
+Json audio_stream_setup(uint64_t features, std::span<const uint8_t> key,
+                        uint64_t stream_id, uint16_t control_port, int lead_ms) {
+  require(key.size()==32&&control_port!=0,"Invalid encrypted audio transport");
+  Json stream={{"type",96},{"audioMode","default"},
+    {"shk",Json::binary(Bytes(key.begin(),key.end()))},
+    {"streamConnectionID",stream_id},{"supportsDynamicStreamID",false}};
+  stream.update(audio_format_setup());
+  stream.update(audio_timing_setup(lead_ms));
+  if(features&(uint64_t(1)<<59)) {
+    // A modern RTP connection must explicitly opt into the key supplied by
+    // this stream. Merely including shk in a legacy descriptor is not enough.
+    stream["streamConnections"]={
+      {"streamConnectionTypeRTP",{{"streamConnectionKeyUseStreamEncryptionKey",true}}},
+      {"streamConnectionTypeRTCP",{{"streamConnectionKeyPort",control_port}}}};
+  } else stream["controlPort"]=control_port;
+  return stream;
+}
+std::pair<uint16_t,uint16_t> audio_stream_ports(const Json &stream) {
+  auto port=[](const Json &object,const char *name)->uint16_t {
+    require(object.is_object(),"Invalid audio connection descriptor");
+    if(!object.contains(name)) return 0;
+    const auto &value=object.at(name);
+    require(value.is_number_integer()&&value>0&&value<=65535,"Invalid audio transport port");
+    return value.get<uint16_t>();
+  };
+  uint16_t data=0,control=0;
+  if(stream.contains("streamConnections")) {
+    const auto &connections=stream.at("streamConnections");
+    require(connections.is_object(),"Invalid audio connections");
+    if(connections.contains("streamConnectionTypeRTP"))
+      data=port(connections.at("streamConnectionTypeRTP"),"streamConnectionKeyPort");
+    if(connections.contains("streamConnectionTypeRTCP"))
+      control=port(connections.at("streamConnectionTypeRTCP"),"streamConnectionKeyPort");
+  }
+  if(!data) data=port(stream,"dataPort");
+  if(!control) control=port(stream,"controlPort");
+  require(data&&control,"Receiver did not offer ALAC audio transport");
+  return {data,control};
+}
 }
