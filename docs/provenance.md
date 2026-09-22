@@ -44,6 +44,13 @@ module. Google Chrome is not covered by this repository's MIT license.
 - [pyatv AirPlay 2 sender](https://github.com/postlund/pyatv/blob/master/pyatv/protocols/raop/protocols/airplayv2.py)
   and its packet/audio implementations (MIT): protocol reference for PCM setup,
   packet authentication, sync and resend behavior; not a runtime dependency.
+- [Apple ALAC format and reference codec](https://github.com/macosforge/alac)
+  (Apache-2.0): bitstream documentation for the independently written fixed
+  stereo escape-frame writer. No Apple codec implementation is incorporated.
+- [AirPlay 2 sender interoperability notes](https://github.com/akustikrausch/airplay2-sender-cpp)
+  (Apache-2.0): real-time ALAC compatibility reference; no source imported.
+- [Upstream Doubletake audio](https://github.com/omarroth/doubletake/blob/main/internal/airplay/audio.go)
+  and our historical fork: protocol/behavior comparison only, no implementation imported.
 - [OpenAirPlay protocol notes](https://openairplay.github.io/airplay-spec/)
 - [Shairport Sync timing receiver](https://github.com/mikebrady/shairport-sync/blob/master/rtp.c)
   (MIT) and [AirPlay 2 protocol notes](https://github.com/SteeBono/airplayreceiver/wiki/AirPlay2-Protocol):

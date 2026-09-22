@@ -11,7 +11,8 @@ docker run --rm --platform linux/amd64 airplayvideo:dev \
 CMake/CTest runs during the image build. It exercises normal PIN pairing and
 identity verification with generated keys, authenticated framing and tamper
 rejection, media timestamps beyond two hours, shared subscriber delivery, stereo
-PCM, and a generated MPEG-TS input through the actual source pipeline.
+PCM, independent FFmpeg decoding of encrypted ALAC wire packets, and a
+generated MPEG-TS input through the actual source pipeline.
 Python tests cover configuration persistence, guarded API access, mode/format
 validation, source replacement, Stop during warmup, independent receivers,
 MQTT discovery and stale command rejection. Host-network tests verify that

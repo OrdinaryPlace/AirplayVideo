@@ -267,10 +267,10 @@ Bytes audio_sync_packet(uint64_t presentation_epoch,int64_t pts_us,
 Bytes audio_packet(std::span<const uint8_t> pcm, std::span<const uint8_t> key,
                    uint64_t nonce, uint16_t sequence, uint32_t timestamp,
                    uint32_t ssrc, bool first) {
-  require(pcm.size()==352*4,"PCM packet must contain 352 stereo samples");
+  auto encoded=alac_frame(pcm);
   Bytes header(12); header[0]=0x80; header[1]=first?0xe0:0x60;
   be(header,2,sequence,2); be(header,4,timestamp,4); be(header,8,ssrc,4);
-  auto cipher=seal(key,nonce,std::span(header).subspan(4,8),pcm);
+  auto cipher=seal(key,nonce,std::span(header).subspan(4,8),encoded);
   header.insert(header.end(),cipher.begin(),cipher.end());
   size_t end=header.size(); header.resize(end+8); le(header,end,nonce,8);
   return header;
@@ -301,10 +301,10 @@ public:
   }
   void setup(Rtsp &rtsp,const std::string &uri,const Credentials &c,uint16_t port) {
     key_=random_bytes(32);
-    Json stream={{"type",96},{"audioFormat",0x800},{"audioMode","default"},{"ct",1},
-      {"sr",44100},{"spf",352},{"controlPort",port},
+    Json stream={{"type",96},{"audioMode","default"},{"controlPort",port},
       {"shk",Json::binary(key_)},
       {"streamConnectionID",random_id()},{"supportsDynamicStreamID",false}};
+    stream.update(audio_format_setup());
     stream.update(audio_timing_setup(lead_ms_));
     auto reply=rtsp.plist("SETUP",uri,{{"streams",Json::array({stream})}});
     int cp=0,dp=0;
@@ -312,7 +312,7 @@ public:
       cp=s.value("controlPort",0);dp=s.value("dataPort",0);
       receiver_output_ms_=s.value("arrivalToRenderLatencyMs",0);
     }
-    require(cp>0&&cp<=65535&&dp>0&&dp<=65535,"Receiver did not offer PCM audio transport");
+    require(cp>0&&cp<=65535&&dp>0&&dp<=65535,"Receiver did not offer ALAC audio transport");
     peer_control_.sin_family=peer_data_.sin_family=AF_INET;
     require(inet_pton(AF_INET,c.receiver.address.c_str(),&peer_control_.sin_addr)==1,"Audio receiver address");
     peer_data_.sin_addr=peer_control_.sin_addr;
@@ -336,7 +336,7 @@ public:
   }
   ~AudioTransport() { if(worker_.joinable()) {worker_.request_stop();worker_.join();} sodium_memzero(key_.data(),key_.size()); }
   Json timing() const {
-    return {{"codec","pcm"},{"sample_rate",44100},{"samples_per_packet",352},
+    return {{"codec","alac"},{"sample_rate",44100},{"samples_per_packet",352},
       {"latency_min_samples",0},{"latency_max_samples",lead_ms_*44100/1000},
       {"receiver_output_latency_ms",receiver_output_ms_},{"is_media",false},{"using_screen",true}};
   }
@@ -360,6 +360,9 @@ void mirror_stream(const Credentials &c,Media &media,uint16_t timing_port,
   Rtsp control(c.receiver.address,c.receiver.port,c.sender_id);
   auto receiver=probe(control,c.receiver.name);
   require(receiver.value("deviceID",c.receiver.device_id)==c.receiver.device_id,"Receiver identity changed; saved pairing retained");
+  if(media.config.value("audio",true))
+    require((receiver.value("features",uint64_t(0))&(uint64_t(1)<<19))!=0,
+            "Receiver does not advertise ALAC audio support");
   auto secret=verify_pair(control,c,note);
   Timing timing(timing_port,c.receiver.address);
   auto uri="rtsp://"+c.receiver.address+"/"+std::to_string(random_id());

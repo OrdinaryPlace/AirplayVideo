@@ -58,11 +58,18 @@ so frame-scale jitter is expected; hundreds of milliseconds are not.
 
 ## Codec choices and earlier implementation lessons
 
-This release keeps encrypted PCM stereo at 44.1 kHz, with 352 samples per RTP
-packet. PCM has no compression lookahead and consumes about 1.41 Mbit/s before
-packet overhead. A codec change does not repair an incorrect presentation clock.
-ALAC is lossless; AAC-ELD is a distinct low-delay format, not ordinary AAC-LC.
-Receiver advertisement must gate any additional codec implementation.
+Version 0.2.4 sends encrypted ALAC stereo at 44.1 kHz, with 352 samples per RTP
+packet. Its lossless escape frames preserve every PCM sample and add only four
+bytes of framing, with no compression lookahead or additional buffer. The wire
+packet is 1448 bytes (1476 with IPv4/UDP headers), within a 1500-byte MTU.
+Recordings still contain lossless PCM before AirPlay framing.
+
+Earlier versions sent bare PCM. A receiver advertising PCM and accepting SETUP
+does not establish that its real-time screen-audio decoder accepts bare PCM.
+The new path requires the receiver's advertised ALAC capability. An independent
+FFmpeg decoder now checks decrypted RTP payloads sample by sample; encryption
+round trips alone did not detect this compatibility gap. Physical TV sound and
+lip sync still require an actual receiver trial.
 
 The upstream Doubletake sender prefers advertised ALAC, supports AAC-ELD when
 built for it, uses source timestamps, discards stale startup audio, and treats

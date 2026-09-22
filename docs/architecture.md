@@ -39,7 +39,8 @@ Video is letterboxed to the configured canvas, optionally deinterlaced, converte
 to limited-range YUV, and encoded as H.264 without B frames. Browser video and
 PulseAudio input timestamps are mapped to a shared epoch. Channel audio/video
 preserve their relative presentation timestamps from one demuxer. Stereo PCM is
-resampled to 44.1 kHz and sent in 352-frame encrypted RTP packets. Presentation
+resampled to 44.1 kHz and wrapped in lossless 352-sample ALAC escape frames
+before encrypted RTP delivery. This adds four framing bytes and no extra delay. Presentation
 lead is configurable in Setup. Bounded audio timestamp gaps are filled with
 silence, and overlaps are trimmed; jumps of two seconds or more stop the source.
 This preserves the common timeline when a capture device skips silent samples.

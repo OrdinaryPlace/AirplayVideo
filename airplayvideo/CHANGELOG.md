@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.4
+
+- Send lossless ALAC frames instead of bare PCM on the AirPlay real-time audio
+  stream, for both browser and live TV. Keep the existing capture, sample rate,
+  presentation clock and playback buffer. Require advertised ALAC support.
+- Verify decrypted RTP audio with an independent FFmpeg decoder, checking every
+  stereo sample, full-scale values, channel order, packet size and counter wrap.
+- Keep diagnostic recordings as lossless PCM before AirPlay transport.
+
 ## 0.2.3
 
 - Keep a quiet AirPlay event connection alive. The sender previously treated

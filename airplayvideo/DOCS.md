@@ -4,7 +4,7 @@ Send browser pages, HDHomeRun channels, or generated videos to your Apple TVs fr
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.3.** This is an independent implementation in a new
+**Experimental, version 0.2.4.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -166,7 +166,7 @@ for buffer details and interpreting captures.
   synchronization between TVs.
 - Unprotected HDHomeRun MPEG-2/H.264 video with AC-3/AAC/MP2/MP3 audio. DRM,
   HEVC and AC-4 channels are marked unsupported. No ATSC 3.0 decryption.
-- AirPlay H.264 video and encrypted stereo PCM audio. The earlier video-only
+- AirPlay H.264 video and encrypted lossless ALAC stereo audio. The earlier video-only
   experiment was physically confirmed on one Apple TV. This app's combined
   audio/video and additional receiver compatibility need physical acceptance.
 - 720p/1080p at 30/60 fps. A 1080p output canvas does not improve a lower-quality

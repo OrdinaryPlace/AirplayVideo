@@ -45,10 +45,10 @@ int main(int argc,char **argv) {
     require(std::bit_cast<float>(uint32_t(read_le(std::span(header).subspan(20,4))))==720,"720p header height");
     Bytes pcm(352*4,37),key=random_bytes(32);
     auto wire=audio_packet(pcm,key,5,65535,0xffffffe0,12345,true);
-    require(wire.size()==1444&&wire[0]==0x80&&wire[1]==0xe0,"PCM packet framing and MTU");
+    require(wire.size()==1448&&wire[0]==0x80&&wire[1]==0xe0,"ALAC packet framing and MTU");
     require(wire[2]==0xff&&wire[3]==0xff,"RTP sequence encoding");
     require(read_le(std::span(wire).last(8))==5,"Audio nonce trailer");
-    require(open_sealed(key,5,std::span(wire).subspan(4,8),std::span(wire).subspan(12,wire.size()-20))==pcm,"Audio payload authentication");
+    require(open_sealed(key,5,std::span(wire).subspan(4,8),std::span(wire).subspan(12,wire.size()-20))==alac_frame(pcm),"Audio payload authentication");
     bool rejected=false;wire[8]^=1;
     try{open_sealed(key,5,std::span(wire).subspan(4,8),std::span(wire).subspan(12,wire.size()-20));}catch(...){rejected=true;}
     require(rejected,"Audio SSRC tamper rejection");
