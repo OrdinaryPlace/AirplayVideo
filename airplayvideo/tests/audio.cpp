@@ -1,6 +1,7 @@
 #include "stream.hpp"
 #include <iostream>
 #include <memory>
+#include <openssl/evp.h>
 #include <sodium.h>
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -39,12 +40,24 @@ int main() {
       auto negotiated=request.at("shk").get_binary();
       Bytes original(352*4,37);
       auto wire=audio_packet(original,key,0x100000005ULL,123,456,0,true);
-      Bytes decoded(wire.size());unsigned long long length=0;
-      require(crypto_aead_chacha20poly1305_decrypt(decoded.data(),&length,nullptr,
-                wire.data()+12,wire.size()-20,wire.data()+4,8,
-                wire.data()+wire.size()-8,negotiated.data())==0,
-              "Receiver's original 64-bit-nonce cipher authenticates the negotiated key");
-      decoded.resize(length);require(decoded==alac_frame(original),"Negotiated payload is intact");
+      // AirPlay uses RFC 7539 authentication with a 64-bit nonce, equivalent
+      // to a zero-prefixed IETF nonce for these bounded packets. Sodium's
+      // pre-RFC crypto_aead_chacha20poly1305 has a different MAC construction.
+      Bytes iv(12),decoded(wire.size());
+      std::copy(wire.end()-8,wire.end(),iv.begin()+4);
+      std::unique_ptr<EVP_CIPHER_CTX,decltype(&EVP_CIPHER_CTX_free)>
+        cipher(EVP_CIPHER_CTX_new(),EVP_CIPHER_CTX_free);
+      int length=0,total=0;
+      const size_t payload_size=wire.size()-12-16-8;
+      require(cipher&&EVP_DecryptInit_ex(cipher.get(),EVP_chacha20_poly1305(),nullptr,negotiated.data(),iv.data())==1&&
+              EVP_DecryptUpdate(cipher.get(),nullptr,&length,wire.data()+4,8)==1&&
+              EVP_DecryptUpdate(cipher.get(),decoded.data(),&length,wire.data()+12,payload_size)==1,
+              "Independent receiver decrypts the negotiated stream");
+      total=length;
+      require(EVP_CIPHER_CTX_ctrl(cipher.get(),EVP_CTRL_AEAD_SET_TAG,16,wire.data()+12+payload_size)==1&&
+              EVP_DecryptFinal_ex(cipher.get(),decoded.data()+total,&length)==1,
+              "Independent receiver authenticates the negotiated key and RTP header");
+      decoded.resize(total+length);require(decoded==alac_frame(original),"Negotiated payload is intact");
     }
     const Json legacy={{"type",96},{"dataPort",6000},{"controlPort",6001}};
     Json modern={{"type",96},{"streamConnections",{
