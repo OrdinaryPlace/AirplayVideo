@@ -49,17 +49,21 @@ async def _gather(*coroutines):
 
 
 def parse_capabilities(text, kind):
-    """Parse FFmpeg's stable tabular protocol/codec/muxer/filter inventories."""
+    """Parse protocol/codec/muxer/filter inventories across FFmpeg releases."""
     names = set()
     for line in text.splitlines():
         parts = line.split()
         if kind == "protocols" and len(parts) == 1 and re.fullmatch(r"[a-z0-9_]+", parts[0]):
             names.add(parts[0])
+        elif len(parts) < 2 or not re.fullmatch(r"[a-z0-9_][a-z0-9_-]*(?:,[a-z0-9_][a-z0-9_-]*)*", parts[1]):
+            # Inventory legends use '=' where real rows carry a name.
+            continue
         elif kind in {"encoders", "decoders"} and len(parts) >= 2 and re.fullmatch(r"[VAS\.][A-Z\.]{5}", parts[0]):
             names.add(parts[1])
         elif kind == "muxers" and len(parts) >= 2 and parts[0] == "E":
             names.update(parts[1].split(","))
-        elif kind == "filters" and len(parts) >= 2 and re.fullmatch(r"[TSC\.]{3}", parts[0]):
+        elif kind == "filters" and re.fullmatch(r"[T.][S.](?:[C.])?", parts[0]):
+            # FFmpeg 8 removed the third (command-support) flag column.
             names.add(parts[1])
     if kind == "decoders" and {"libdav1d", "libaom-av1"} & names:
         names.add("av1")

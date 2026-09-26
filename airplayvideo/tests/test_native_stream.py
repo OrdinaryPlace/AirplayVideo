@@ -46,6 +46,33 @@ def test_capability_inventory_parsing_uses_actual_ffmpeg_columns():
     assert parse_capabilities(" V....D libdav1d text", "decoders") == {"av1", "libdav1d"}
 
 
+@pytest.mark.parametrize("rows", [
+    " ..C color |->V\n ... hwupload V->V\n TS. bwdif V->V\n",
+    " .. color |->V\n .. hwupload V->V\n TS bwdif V->V\n",
+])
+def test_filter_inventory_accepts_legacy_and_ffmpeg_8_flag_columns(rows):
+    # n8.0.1 fftools/opt_common.c::show_filters prints two flags; earlier
+    # releases also printed the command-support flag in a third column.
+    header = "Filters:\n  T.. = Timeline support\n  .S. = Slice threading\n  ..C = Command support\n"
+    assert parse_capabilities(header + rows, "filters") == {"color", "hwupload", "bwdif"}
+
+
+@pytest.mark.parametrize("kind, text", [
+    ("filters", "Filters:\n T.. = Timeline support\n .S. = Slice threading\n ..C = Command support\n CCC noise V->V\n"),
+    ("encoders", "Encoders:\n V..... = Video\n A..... = Audio\n ------\n"),
+    ("decoders", "Decoders:\n V..... = Video\n A..... = Audio\n ------\n"),
+    ("muxers", "File formats:\n D.. = Demuxing supported\n .E. = Muxing supported\n ..d = Is a device\n ---\n"),
+])
+def test_inventory_headers_and_flag_legends_are_not_capabilities(kind, text):
+    assert parse_capabilities(text, kind) == set()
+
+
+def test_ffmpeg_8_muxer_rows_retain_space_flags_despite_dotted_legend():
+    # n8.0.1 show_formats_devices uses dots in the legend, spaces in rows.
+    output = "File formats:\n .E. = Muxing supported\n ..d = Is a device\n ---\n  E  hls description\n  E  mp4 description\n"
+    assert parse_capabilities(output, "muxers") == {"hls", "mp4"}
+
+
 def test_child_environment_does_not_inherit_service_credentials_or_arbitrary_import_paths(monkeypatch):
     monkeypatch.setenv("SUPERVISOR_TOKEN", "private")
     monkeypatch.setenv("MQTT_PASSWORD", "private")
