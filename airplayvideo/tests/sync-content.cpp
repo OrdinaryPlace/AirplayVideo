@@ -225,6 +225,9 @@ Json measure(const Json &config,std::optional<double> expected_ms) {
   Meter capture,wire;std::unique_ptr<Decoder> captured_video,wire_video;Decoder audio(AV_CODEC_ID_ALAC,alac_config());
   auto key=random_bytes(32);uint64_t video_nonce=0,audio_nonce=0;uint16_t sequence=65500;
   const uint32_t rtp_origin=0xffff0000U;Bytes sync;int64_t last_sync=-1000000;double max_schedule_error=0;
+  uint64_t video_bytes=0,window_bytes=0,peak_window_bytes=0;
+  int64_t first_video=-1,last_video=-1;
+  std::deque<std::pair<int64_t,size_t>> video_window;
   const auto deadline=Clock::now()+std::chrono::seconds(18);
   while(Clock::now()<deadline&&(capture.flashes.size()<6||capture.beeps.size()<6)) {
     auto p=sink->next(stop);
@@ -253,6 +256,13 @@ Json measure(const Json &config,std::optional<double> expected_ms) {
       auto payload=decrypt(key,std::span(packet).last(8),std::span(packet).subspan(4,8),std::span(packet).subspan(12,packet.size()-20));
       audio.consume(payload,time,wire,true);
     } else {
+      if(first_video<0)first_video=p->pts_us;
+      last_video=p->pts_us;video_bytes+=p->video.payload.size();
+      video_window.emplace_back(p->pts_us,p->video.payload.size());window_bytes+=p->video.payload.size();
+      while(!video_window.empty()&&p->pts_us-video_window.front().first>=1000000) {
+        window_bytes-=video_window.front().second;video_window.pop_front();
+      }
+      peak_window_bytes=std::max(peak_window_bytes,window_bytes);
       if(!captured_video) {
         captured_video=std::make_unique<Decoder>(AV_CODEC_ID_H264,p->video.avcc);
         wire_video=std::make_unique<Decoder>(AV_CODEC_ID_H264,p->video.avcc);
@@ -270,6 +280,10 @@ Json measure(const Json &config,std::optional<double> expected_ms) {
   stop=true;media.close();sink->close();
   auto before=capture.report("capture"),after=wire.report("decoded_airplay_packets");
   Json result={{"buffer_ms",lead},{"encoder",config.at("encoder")},{"capture",before},{"wire",after},
+    {"video_encoding",{{"rate_control",config.value("rate_control",std::string("auto"))},
+      {"target_bps",config.at("bitrate")},{"maximum_bps",config.value("rate_control",std::string("auto"))=="vbr"?config.at("max_bitrate"):Json(nullptr)},
+      {"average_mbps",video_bytes*8.0/(last_video-first_video+1000000.0/config.at("fps").get<int>())},
+      {"peak_one_second_mbps",peak_window_bytes*8.0/1000000}}},
     {"maximum_schedule_error_us",max_schedule_error}};
   if(expected_ms)result["reference_audio_minus_video_ms"]=*expected_ms;
   std::cout<<result.dump()<<'\n';

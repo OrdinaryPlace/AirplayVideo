@@ -193,8 +193,7 @@ class Application:
                 previous = self.store.data["setup"]
                 settings = (patch_setup(previous, data.get("changes"), data.get("expected"))
                             if action == "update" else validate_setup(data))
-                encoder = settings["video"]["encoder"]
-                check(encoder == "auto" or encoder in self.controller.capabilities["encoders"], "Choose an encoder available on this host")
+                self.controller.video_encoder(settings)
                 for tuner in settings["hdhomerun"]["devices"]:
                     if not any(t["id"] == tuner["id"] and t["address"] == tuner["address"] for t in previous["hdhomerun"]["devices"]):
                         verified = await inspect_tuner(self.session, tuner["address"])

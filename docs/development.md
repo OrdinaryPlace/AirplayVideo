@@ -16,6 +16,11 @@ generated MPEG-TS input through the actual source pipeline.
 The frame-rate regression checks jitter and clock phase at 30 and 60 fps:
 browser capture is already paced by X11, while tuner input still needs its
 independent output-rate limit.
+The video-rate regression rejects invalid target/maximum pairs and software VBR,
+checks explicit FFmpeg mode selection, and preserves legacy automatic requests.
+Host capabilities query VAAPI's H.264 Main / EncSlice VBR support. A successful
+installed-container measurement with VBR selected verifies the actual encoder
+opens without a fallback; software-only CI cannot establish hardware support.
 Python tests cover configuration persistence, guarded API access, mode/format
 validation, source replacement, Stop during warmup, independent receivers,
 MQTT discovery and stale command rejection. Host-network tests verify that
@@ -40,6 +45,13 @@ the production engine. Each trial reports actual capture timestamps, frame gaps,
 capture age, and the browser's decoded/dropped frame counters. Keep host load
 comparable between versions; emulation results do not establish HA hardware
 performance. Encoded frame counts alone do not prove that every frame is fresh.
+
+The installed diagnostic reports requested rate control, average encoded Mbps
+and peak bytes in a sliding one-second window. Its flash reference is mostly
+static, so a low bitrate there is expected and does not prove motion quality.
+VBR uses the configured target, maximum and a half-second coded-bit reservoir.
+That reservoir constrains encoder bursts; it does not add an application queue,
+change source timestamps or alter the shared A/V presentation lead.
 
 ```sh
 mkdir -m 700 browser-benchmark

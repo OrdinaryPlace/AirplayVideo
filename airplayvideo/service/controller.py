@@ -172,15 +172,23 @@ class Controller:
         check(setup["complete"], "Finish Setup first")
         check(setup["modes"].get(mode), "Enable this mode in Setup first")
 
-    def source_config(self, source):
-        settings = self.store.data["setup"]
+    def video_encoder(self, settings):
         video = settings["video"]
         encoder = video["encoder"]
         if encoder == "auto":
             encoder = "h264_vaapi" if "h264_vaapi" in self.capabilities["encoders"] else "libopenh264"
         check(encoder in self.capabilities["encoders"], "The configured encoder is unavailable; review Setup")
+        if video["rate_control"] == "vbr":
+            check(encoder in self.capabilities.get("vbr_encoders", []),
+                  "Variable bitrate is unavailable with this encoder on this host; review Picture & sound")
+        return encoder
+
+    def source_config(self, source):
+        settings = self.store.data["setup"]
+        video = settings["video"]
+        encoder = self.video_encoder(settings)
         width, height = (1920, 1080) if video["resolution"] == "1080p" else (1280, 720)
-        return {"source": source, "width": width, "height": height, "fps": video["fps"], "encoder": encoder, "bitrate": video["bitrate_mbps"] * 1_000_000, "deinterlace": video["deinterlace"], "audio": source["kind"] != "generated" and settings["audio"]["enabled"], "latency_ms": settings["audio"]["latency_ms"]}
+        return {"source": source, "width": width, "height": height, "fps": video["fps"], "encoder": encoder, "bitrate": video["bitrate_mbps"] * 1_000_000, "rate_control": video["rate_control"], "max_bitrate": video["max_bitrate_mbps"] * 1_000_000, "deinterlace": video["deinterlace"], "audio": source["kind"] != "generated" and settings["audio"]["enabled"], "latency_ms": settings["audio"]["latency_ms"]}
 
     async def event(self, stream, event, fields):
         if self.recordings:

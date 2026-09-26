@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.2.9"
+VERSION = "0.2.10"
 IDENTIFIER = re.compile(r"[a-f0-9]{32}\Z")
 
 
@@ -154,7 +154,7 @@ def default_setup():
         "generated": generated_defaults(),
         "browser": {"home_url": "https://www.youtube.com/", "youtube_quality": "1080p"},
         "hdhomerun": {"devices": []},
-        "video": {"resolution": "1080p", "fps": 30, "codec": "h264", "encoder": "auto", "bitrate_mbps": 8, "deinterlace": True},
+        "video": {"resolution": "1080p", "fps": 30, "codec": "h264", "encoder": "auto", "bitrate_mbps": 8, "rate_control": "auto", "max_bitrate_mbps": 16, "deinterlace": True},
         "audio": {"enabled": True, "latency_ms": 1500},
         "home_assistant": {"enabled": True},
     }
@@ -184,12 +184,20 @@ def validate_setup(value):
             ids.add(device_id)
             result["hdhomerun"]["devices"].append({"id": device_id, "name": text(device["name"], "device name"), "address": local_address(device["address"])})
         check(not result["modes"]["hdhomerun"] or devices, "Find or add your HDHomeRun before enabling live TV")
-        video = value["video"]
+        video = dict(value["video"])
         check(video["resolution"] in {"1080p", "720p"}, "Choose 1080p or 720p")
         check(type(video["fps"]) is int and video["fps"] in {30, 60}, "Choose 30 or 60 fps")
         check(video["codec"] == "h264", "This release supports H.264 video")
         check(video["encoder"] in {"auto", "libopenh264", "h264_vaapi"}, "Invalid encoder")
         check(type(video["bitrate_mbps"]) is int and 2 <= video["bitrate_mbps"] <= 20, "Video bitrate must be between 2 and 20 Mbps")
+        video.setdefault("rate_control", "auto")
+        video.setdefault("max_bitrate_mbps", max(16, video["bitrate_mbps"]))
+        check(video["rate_control"] in {"auto", "vbr"}, "Choose automatic or variable bitrate")
+        check(type(video["max_bitrate_mbps"]) is int and 2 <= video["max_bitrate_mbps"] <= 40,
+              "Maximum bitrate must be between 2 and 40 Mbps")
+        if video["rate_control"] == "vbr":
+            check(video["encoder"] != "libopenh264", "Variable bitrate requires hardware encoding")
+            check(video["max_bitrate_mbps"] >= video["bitrate_mbps"], "Maximum bitrate must be at least the target bitrate")
         check(type(video["deinterlace"]) is bool, "Invalid deinterlace choice")
         result["video"] = {key: video[key] for key in result["video"]}
         audio = value["audio"]
@@ -236,6 +244,11 @@ class Store:
                 migrated = "generated" not in self.data["setup"] or "generated" not in self.data["setup"]["modes"]
                 self.data["setup"].setdefault("generated", generated_defaults())
                 self.data["setup"]["modes"].setdefault("generated", True)
+                video = self.data["setup"]["video"]
+                for key, value in {"rate_control": "auto", "max_bitrate_mbps": max(16, video["bitrate_mbps"])}.items():
+                    if key not in video:
+                        video[key] = value
+                        migrated = True
                 if self.data["setup"]["complete"]:
                     validate_setup(self.data["setup"])
                 if migrated:

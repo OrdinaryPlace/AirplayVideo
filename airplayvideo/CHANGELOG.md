@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.10
+
+- Add explicit hardware variable bitrate with separate target and maximum controls in Picture & sound. The driver must advertise VBR support; unsupported selections fail without silently changing encoder or rate control.
+- Preserve automatic rate control and all existing bitrate, frame-rate and playback-buffer settings on upgrade. For 1080p30, a 16 Mbps target and 30 Mbps maximum are suggested starting points for motion quality.
+- Include requested rate control and measured encoded bitrate in the container diagnostic report. Audio timing and the shared presentation clock are unchanged.
+
 ## 0.2.9
 
 - Preserve browser frames already paced by screen capture. A redundant frame-rate gate could discard valid frames when capture timestamps jittered across its rounding boundaries. Tuner frame-rate conversion is retained.

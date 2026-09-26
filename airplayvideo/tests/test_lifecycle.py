@@ -107,6 +107,26 @@ async def test_browser_capture_uses_the_allocated_display(setup):
     assert Stream.created[-1].config['source']['display'] == ':42.0'
     await control.stop()
 
+
+@pytest.mark.asyncio
+async def test_variable_bitrate_reaches_shared_encoder_and_requires_host_support(setup):
+    store, control = setup
+    store.data['setup']['video'].update(rate_control='vbr', bitrate_mbps=16, max_bitrate_mbps=30)
+    before = copy.deepcopy(store.data)
+    # Encoder availability alone is insufficient; ask for supported rate control.
+    control.capabilities = {'encoders': ['libopenh264', 'h264_vaapi']}
+    with pytest.raises(UserError, match='Variable bitrate is unavailable'):
+        await control.play(request())
+    assert not Stream.created and store.data == before
+    control.capabilities['vbr_encoders'] = ['h264_vaapi']
+    await control.play(request())
+    config = control.stream.config
+    assert (config['encoder'], config['rate_control'], config['bitrate'], config['max_bitrate']) == ('h264_vaapi', 'vbr', 16000000, 30000000)
+    assert config['fps'] == 30 and config['latency_ms'] == before['setup']['audio']['latency_ms']
+    await control.play(request(B), add=True)
+    assert len(Stream.created) == 1
+    await control.stop()
+
 @pytest.mark.asyncio
 async def test_join_shares_source_and_stop_only_removes_requested_tv(setup):
     _, control = setup
@@ -222,6 +242,17 @@ async def test_isolated_settings_keep_browser_tuner_and_mqtt_session(tmp_path, m
             application.channels.refresh.assert_not_awaited()
             application.ha.close.assert_not_awaited()
             application.ha.start.assert_not_awaited()
+            before = store.path.read_bytes()
+            rate_changes = {'video': {'rate_control': 'vbr', 'bitrate_mbps': 16, 'max_bitrate_mbps': 30}}
+            rate_expected = {'video': {'rate_control': 'auto', 'bitrate_mbps': 8, 'max_bitrate_mbps': 16}}
+            response = await edit(rate_changes, rate_expected)
+            assert response.status == 409 and store.path.read_bytes() == before
+            application.controller.capabilities = {'encoders': ['libopenh264', 'h264_vaapi'], 'vbr_encoders': ['h264_vaapi']}
+            response = await edit(rate_changes, rate_expected)
+            assert response.status == 200
+            assert Store(tmp_path).data['setup']['video']['max_bitrate_mbps'] == 30
+            application.browser.close.assert_not_awaited()
+            inspect.assert_not_awaited()
             before = store.path.read_bytes()
             response = await edit({'audio':{'latency_ms':1000}}, {'audio':{'latency_ms':1500}})
             assert response.status == 409 and store.path.read_bytes() == before
