@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.2.13
+
+- Enable the browser's hardware video decoder through ANGLE/Vulkan when an
+  accessible render device is mapped, allowing compatible Linux GPUs to decode
+  HEVC camera feeds. Include the Vulkan runtime and driver-inspection utility.
+- Preserve ordinary Chrome, its sandbox, existing profile and native controls;
+  hosts without a usable render device keep the existing software browser path.
+
 ## 0.2.12
 
 - Add an explicitly started direct-video diagnostic for one selected TV, using

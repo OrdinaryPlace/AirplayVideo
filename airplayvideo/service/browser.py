@@ -12,6 +12,7 @@ from Cryptodome.Cipher import DES
 from .model import UserError, check, browser_url
 from .network import unused_loopback_port
 from .companion import Companion, install as install_companion
+from .browser_gpu import chrome_gpu_arguments
 
 
 def child_environment():
@@ -159,7 +160,7 @@ class Browser:
                 self.companion = Companion(self.root, identity)
                 await self.companion.start()
                 self.environment.update(AIRPLAYVIDEO_COMPANION_ID=identity, AIRPLAYVIDEO_COMPANION_SOCKET=str(self.companion.path))
-                self.chrome_process = await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--start-fullscreen", "about:blank")
+                self.chrome_process = await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--start-fullscreen", *chrome_gpu_arguments(), "about:blank")
                 await self.companion.wait_ready()
                 self.running = True
                 self.url = ""
