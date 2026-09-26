@@ -12,6 +12,9 @@ int main() {
     require(encoder,"VAAPI encoder is built in");
     auto *context=avcodec_alloc_context3(encoder);
     require(context,"Encoder context");
+    // Match the stream encoder's explicit no-reordering policy; FFmpeg's
+    // newly allocated VAAPI context can default to enabling B-frames.
+    context->max_b_frames=0;
     VideoRate::parse(config).apply(context);
     int64_t selected=0;
     require(av_opt_get_int(context->priv_data,"rc_mode",0,&selected)>=0&&selected!=0,
