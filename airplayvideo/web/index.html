@@ -60,6 +60,8 @@
         <p class="muted">Measure a generated 1080p flash-and-beep reference using this host's encoder and a temporary browser. Close the browser and stop playback first. Saved settings, sign-ins and recordings are preserved. The test takes about a minute.</p>
         <div class="play-actions"><button id="measureSync">Measure sync without a TV</button><button id="measureSyncTV">Measure sync and test selected TVs</button><button id="cancelSync" hidden>Cancel measurement</button></div>
         <p class="muted">The TV test plays flashes and beeps for 15 seconds, then stops. The report measures capture and packet timing; physical screen and speaker timing needs a recording of the TV.</p>
+        <p class="muted" id="nativeVideoHelp">Test direct video on exactly one selected TV. This replaces the TV's current playback with a generated picture-and-sound sample for up to 30 seconds. Close the browser and stop app playback first. Check the TV's picture and sound yourself; the report only records delivery.</p>
+        <button id="testNativeVideo" aria-describedby="nativeVideoHelp">Test direct video</button>
         <p id="syncStatus" role="status" class="muted"></p><div id="syncResults"></div><a id="syncDownload" href="api/sync-report" download hidden>Download sync report</a>
         <p class="muted">Record 15 seconds from the current playback, open browser, or selected live TV channel. This saves the video and sound before AirPlay in the app container. It does not start a TV. Recordings may contain private page content; download or remove them here.</p><button id="recordCapture">Record 15-second sample</button><p id="recordingStatus" role="status" class="muted"></p><div id="recordingList"></div></details>
     </section>

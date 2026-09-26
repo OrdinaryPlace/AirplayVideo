@@ -367,9 +367,16 @@ function renderUsage(){
 
 function renderRecordings(){
   const diagnostic=state.diagnostics||{}, report=diagnostic.report;
-  $('syncStatus').textContent=report?(diagnostic.active?report.stage+'…':report.status==='complete'?'Measurement complete. Positive values mean audio is late; negative values mean audio is early.':report.error||'Measurement '+report.status):'';
+  const native=report?.kind==='native';
+  $('syncStatus').textContent=report?(diagnostic.active?report.stage+'…':report.status==='complete'?(native?'Direct video trial finished. Picture and sound on the TV still need your confirmation.':'Measurement complete. Positive values mean audio is late; negative values mean audio is early.'):report.error||(native?'Direct video trial ':'Measurement ')+report.status):'';
   $('syncDownload').hidden=!report;
+  $('syncDownload').textContent=native?'Download direct video report':'Download sync report';
+  $('cancelSync').textContent=native?'Cancel direct video test':'Cancel measurement';
   const stages=report?.stages||{}, results=[];
+  if(native&&stages.native_delivery){
+    const delivered=stages.native_delivery.counters?.receiver||{};
+    results.push(`<p>TV media requests: <strong>${Number(delivered.requests||0)}</strong> · Media bytes sent: <strong>${Number(delivered.bytes_sent||0).toLocaleString()}</strong>. These counts do not confirm visible playback or sound.</p>`);
+  }
   for(const [key,label] of [['browser_500','Browser · 500 ms buffer'],['browser_1500','Browser · 1500 ms buffer'],['during_delivery','Browser while sending to TVs']]){
     const entry=stages[key]?.[0], offset=(entry?.capture||entry)?.audio_minus_video_ms;
     if(offset)results.push(`<p>${label}: <strong>${offset.median.toFixed(2)} ms</strong> median (${offset.min.toFixed(2)} to ${offset.max.toFixed(2)} ms).</p>`);
@@ -422,6 +429,7 @@ function updateButtons(){
   const unavailable=busy||measuring||!!state.recordings?.active||state.runtime.browser_open||!!state.runtime.targets.length||['preparing','connecting'].includes(state.runtime.phase)||!state.setup.complete;
   $('measureSync').disabled=unavailable;
   $('measureSyncTV').disabled=unavailable||!chosenTVs.size;
+  $('testNativeVideo').disabled=unavailable||chosenTVs.size!==1;
   $('cancelSync').hidden=!measuring;
   $('recordCapture').disabled=busy||measuring||!!state.recordings?.active;
   $('play').disabled=busy||measuring||!chosenTVs.size||!state.setup.complete;
@@ -478,6 +486,7 @@ $('stopAll').onclick=()=>act('stop',{},true);
 $('recordCapture').onclick=()=>act('record',{...requestSource(),seconds:15});
 $('measureSync').onclick=()=>act('measure_sync');
 $('measureSyncTV').onclick=()=>act('measure_sync',{receivers:[...chosenTVs]});
+$('testNativeVideo').onclick=()=>act('test_native_video',{receivers:[...chosenTVs]});
 $('cancelSync').onclick=()=>act('cancel_sync',{},true);
 $('openBrowser').onclick=()=>act('open_browser',requestSource());
 $('closeBrowser').onclick=()=>act('close_browser');

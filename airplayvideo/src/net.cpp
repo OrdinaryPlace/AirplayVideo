@@ -83,9 +83,9 @@ Bytes Socket::read_exact(size_t size, int timeout) {
   }
   return b;
 }
-void Socket::write(std::span<const uint8_t> data) {
+void Socket::write(std::span<const uint8_t> data, int timeout) {
   size_t pos = 0;
-  auto end = Clock::now() + std::chrono::seconds(5);
+  auto end = Clock::now() + std::chrono::milliseconds(timeout);
   while (pos < data.size()) {
     auto left = std::chrono::duration_cast<std::chrono::milliseconds>(
                     end - Clock::now())
@@ -103,6 +103,16 @@ void Socket::shutdown() {
   if (fd_ >= 0)
     ::shutdown(fd_, SHUT_RDWR);
 }
+std::string Socket::local_address() const {
+  sockaddr_in address{};
+  socklen_t size = sizeof(address);
+  require(getsockname(fd_, reinterpret_cast<sockaddr *>(&address), &size) == 0 &&
+              address.sin_family == AF_INET, "Local socket address unavailable");
+  char text[INET_ADDRSTRLEN]{};
+  require(inet_ntop(AF_INET, &address.sin_addr, text, sizeof(text)) != nullptr,
+          "Local socket address unavailable");
+  return text;
+}
 void Channel::encrypt(std::span<const uint8_t> secret, pair_channel kind,
                       const char *suffix) {
   require(!cipher_ && pending_.empty(),
@@ -111,9 +121,9 @@ void Channel::encrypt(std::span<const uint8_t> secret, pair_channel kind,
                                 secret.size(), suffix));
   require(bool(cipher_), "Channel cipher initialization failed");
 }
-void Channel::write(std::span<const uint8_t> data) {
+void Channel::write(std::span<const uint8_t> data, int timeout) {
   if (!cipher_) {
-    socket_.write(data);
+    socket_.write(data, timeout);
     return;
   }
   uint8_t *out = nullptr;
@@ -121,15 +131,18 @@ void Channel::write(std::span<const uint8_t> data) {
   auto n = pair_encrypt(&out, &len, data.data(), data.size(), cipher_.get());
   std::unique_ptr<uint8_t, decltype(&free)> hold(out, free);
   require(n == ssize_t(data.size()), "Channel encryption failed");
-  socket_.write(std::span(out, len));
+  socket_.write(std::span(out, len), timeout);
 }
 Bytes Channel::read_block(int timeout) {
   if (!cipher_)
     return socket_.read_some(timeout);
+  const auto deadline = Clock::now() + std::chrono::milliseconds(timeout);
   auto head = socket_.read_exact(2, timeout);
   size_t n = read_le(head);
   require(n > 0 && n <= 16384, "Invalid encrypted block length");
-  auto tail = socket_.read_exact(n + 16, timeout);
+  const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+  require(remaining > 0, "Encrypted message timeout");
+  auto tail = socket_.read_exact(n + 16, int(remaining));
   head.insert(head.end(), tail.begin(), tail.end());
   uint8_t *plain = nullptr;
   size_t len = 0;
@@ -228,28 +241,59 @@ Bytes event_response(const Message &event) {
   }
   return bytes(response+"\r\n");
 }
-Rtsp::Rtsp(const std::string &ip, uint16_t port, const std::string &id)
-    : channel_(Socket::connect(ip, port)), id_(id), dacp_(hex(random_bytes(8))),
+Rtsp::Rtsp(const std::string &ip, uint16_t port, const std::string &id, int timeout)
+    : Rtsp(Socket::connect(ip, port, timeout), id) {}
+Rtsp::Rtsp(Socket socket, const std::string &id)
+    : channel_(std::move(socket)), id_(id), dacp_(hex(random_bytes(8))),
       active_(random_id() & 0xffffffff) {}
 Message Rtsp::request(const std::string &method, const std::string &path,
                       const Bytes &body, const std::string &type,
-                      const std::map<std::string, std::string> &headers) {
+                      const std::map<std::string, std::string> &headers,
+                      const RtspOptions &options) {
+  require(options.timeout_ms > 0 && options.timeout_ms <= 60000,
+          "Invalid request timeout");
+  require(options.user_agent.find_first_of("\r\n") == std::string::npos,
+          "Invalid request user agent");
+  require(!method.empty() && method.find_first_of(" \r\n\t") == std::string::npos &&
+              !path.empty() && path.find_first_of(" \r\n\t") == std::string::npos,
+          "Invalid request target");
+  for (const auto &[key, value] : headers) {
+    require(!key.empty() && key.find_first_of(": \r\n\t") == std::string::npos &&
+                value.find_first_of("\r\n") == std::string::npos,
+            "Invalid request header");
+    auto lower = key;
+    std::transform(lower.begin(), lower.end(), lower.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    require(lower != "cseq" && lower != "content-length" && lower != "user-agent" &&
+                lower != "dacp-id" && lower != "active-remote" &&
+                !(options.client_instance && lower == "client-instance") &&
+                !(lower == "content-type" && !type.empty()) &&
+                !(options.session_headers && (lower == "session" || lower == "x-apple-session-id")),
+            "Duplicate reserved request header");
+  }
   std::ostringstream s;
   s << method << " " << path << " RTSP/1.0\r\nCSeq: " << ++seq_
-    << "\r\nUser-Agent: AirPlay/409.16\r\nDACP-ID: " << dacp_
-    << "\r\nActive-Remote: " << active_ << "\r\nX-Apple-Session-ID: " << id_
-    << "\r\nContent-Length: " << body.size() << "\r\n";
+    << "\r\nUser-Agent: " << options.user_agent << "\r\nDACP-ID: " << dacp_
+    << "\r\nActive-Remote: " << active_ << "\r\n";
+  if (options.session_headers)
+    s << "X-Apple-Session-ID: " << id_ << "\r\n";
+  if (options.client_instance)
+    s << "Client-Instance: " << dacp_ << "\r\n";
+  s << "Content-Length: " << body.size() << "\r\n";
   if (!type.empty())
     s << "Content-Type: " << type << "\r\n";
-  if (!session_.empty())
+  if (options.session_headers && !session_.empty())
     s << "Session: " << session_ << "\r\n";
   for (auto &[k, v] : headers)
     s << k << ": " << v << "\r\n";
   s << "\r\n";
   auto wire = bytes(s.str());
   wire.insert(wire.end(), body.begin(), body.end());
-  channel_.write(wire);
-  auto m = channel_.read_message();
+  const auto deadline = Clock::now() + std::chrono::milliseconds(options.timeout_ms);
+  channel_.write(wire, options.timeout_ms);
+  const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+  require(remaining > 0, "Request timeout");
+  auto m = channel_.read_message(int(remaining));
   if (m.headers.contains("cseq"))
     require(m.headers.at("cseq") == std::to_string(seq_),
             "Response sequence mismatch");

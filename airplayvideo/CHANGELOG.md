@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.10
+
+- Add an explicitly started direct-video diagnostic for one selected TV, using
+  its saved pairing and a temporary generated reference. Protocol stages and
+  receiver fetches are reported separately; picture and sound need observation.
+- Add an experimental modern native AirPlay control worker with bounded
+  cancellation and cleanup. Normal browser and live TV playback remain unchanged.
+- Add optional public YouTube quality planning and progressive HLS preparation
+  experiments that preserve compatible tracks and source resolution/frame rate.
+  These are not yet the daily playback path or production dependencies.
+
 ## 0.2.9
 
 - Preserve browser frames already paced by screen capture. A redundant frame-rate gate could discard valid frames when capture timestamps jittered across its rounding boundaries. Tuner frame-rate conversion is retained.

@@ -1,8 +1,9 @@
 # Native YouTube media experiment
 
-This is an isolated prototype, not an option in the installed app. Daily
-YouTube playback still uses the existing browser capture path. No release or
-production dependency change is included.
+This is an experimental native path. Daily YouTube playback still uses the
+existing browser capture path. The candidate adds an explicit direct-video
+diagnostic; the YouTube resolver and progressive preparer remain separate
+experiments. No production dependency change is included.
 
 ## Delivery and quality
 
@@ -59,8 +60,7 @@ partial evidence. Download requests use clip-sized bitrate estimates within
 hard byte caps. Direct HTTPS variants must match the best available dimensions
 and frame rate. Prefix downloads are an experiment shortcut and can fail
 when required media/index data is unavailable within the bound. Final probing
-must succeed before the output is marked ready. Full-length playback will need
-a separate streaming/cache design. Initial effective audio/video presentation
+must succeed before the output is marked ready. Initial effective audio/video presentation
 times are checked with audio priming applied. Differently offset source tracks
 are rejected until offset preservation is implemented; output must retain the
 source offset.
@@ -70,6 +70,8 @@ supports GET/HEAD byte ranges, restricts clients to explicit IPs, and expires
 automatically. It is separate from ingress and must never serve app state or
 browser profiles. `tests/native-origin-trial.py` is a finite standalone origin
 for an explicitly authorized receiver; it also does not send playback commands.
+Receiver request/byte counters are separate from local preflight traffic. These
+counters measure sender writes, not TV rendering or audible output.
 
 `service.native_airplay.NativePlayer` accepts the selected receiver and its
 existing saved pairing in memory. It converts identity fields without re-pairing
@@ -77,6 +79,58 @@ and contains pyatv in a bounded worker process. Do not put credentials in CLI
 arguments, environment variables, reports, or logs. This adapter has synthetic
 identity/lifecycle tests; its actual saved app identity has not been exercised
 on a receiver.
+
+## Modern native control candidate
+
+The C++ engine now has a separate `--native` worker. It reads its existing
+receiver pairing in place, verifies it for this connection, and tries a modern
+RCS queue session with type-130 control. The legacy mirroring path keeps its
+RTSP defaults. Python supplies only a selected receiver ID, the scoped local
+media URL, and the trial duration through a private temporary request file.
+An expected receiver address is matched against the saved pairing before
+network access. No pairing keys leave the engine or appear in child arguments.
+
+The queue protocol is experimental. It requires a queue identity returned by
+authenticated receiver information; it does not assume a pairing identifier
+is interchangeable. PTP session metadata is negotiated, but this candidate does
+not implement a general IEEE-1588 clock. An acknowledgement is not playback.
+Safe stage/status events identify where startup fails, while finite HTTP and
+worker lifetimes bound each trial. Cancellation waits for child creation,
+teardown, resource closure and reaping, including a forced-stop fallback.
+
+The candidate's authenticated troubleshooting panel offers **Test direct
+video** for exactly one selected TV. It prepares the existing generated
+H.264/AAC reference, uses the saved pairing, and stops within a bounded trial.
+It reports receiver fetches separately from protocol responses and leaves
+physical picture, sound and synchronization for observation. This diagnostic
+does not select native YouTube playback as the default.
+
+`python -m service.native_probe --help` describes the equivalent manual
+bounded sample trial for an operator already inside the owning app environment.
+Do not export pairing files or weaken Home Assistant protection to run it.
+Use the normal tested app update and authenticated diagnostic for Home Assistant.
+
+## Progressive media preparation candidate
+
+`service.native_stream.NativeHLSStream` prepares rolling fragmented-MP4 HLS
+without waiting for a full video download. Compatible video and AAC tracks
+remain compressed; other tracks need an explicitly available compatible
+encoder. The selected resolution and frame rate stay fixed. An actual bounded
+encode and the first generated segment are checked before readiness is reported.
+
+`service.native_hls_origin.NativeHLSOrigin` serves only finalized playlist,
+initialization and segment filenames from one pinned session directory. It
+supports atomic playlist replacement, byte ranges, rolling segment deletion,
+per-receiver byte counters and a separate preflight role. Temporary files,
+symlinks, hardlinks and unrelated directory contents are not exposed.
+
+The playlist retains a rolling buffer, so seeking is limited to that buffer.
+Session time and disk usage are bounded; the disk check is a periodic limit,
+not a filesystem quota. A production release still needs full playback/seek
+integration, mixed-receiver variants and throughput testing on the actual host.
+HEVC VAAPI support must be proven by an encode, not merely opening a render node.
+GPL software encoders require an explicit experiment opt-in and are not added
+to the production image.
 
 ## Evidence and limits, 2026-09-26
 
@@ -90,6 +144,17 @@ on a receiver.
 - The preparation CLI passed a complete public YouTube test: resolve, bounded
   download, source probe, stream-copy, and final verification produced a
   2-second 1080p60 H.264/AAC sample. Effective A/V start offset remained zero.
+- Progressive HLS from those prepared local samples became ready after 6.02
+  seconds while generation continued. SHA-256 packet comparisons retained all
+  1,201 H.264 video / 862 AAC packets at 1080p60 and all 600 HEVC video / 431 AAC
+  packets at 4K60. Both streams reached their expected end and cleaned up their
+  generated directories. This proves repackaging, not receiver playback or
+  real-time VP9/AV1 conversion on the Home Assistant host.
+- The actual public YouTube progressive path also passed without injected
+  metadata or local inputs: resolution, HTTPS source probes and first-segment
+  validation reached readiness in 11.77 seconds at 1080p60 H.264/AAC with no
+  encoding. It continued five seconds, then cancelled and cleaned up. Full
+  upstream video completion and receiver playback were not part of that test.
 - Native Home Assistant playback on a tvOS 26.6 Apple TV failed before any
   receiver media fetch. A disconnected HA control session was first refreshed;
   the connected retry then reported a native streaming failure. The cause is
@@ -107,14 +172,21 @@ anything. Connect it with `remote.turn_on` and verify it is on before a trial;
 PYTHONPATH=airplayvideo python -m pytest airplayvideo/tests/test_native_*.py -q
 ```
 
-All 153 native tests passed with the optional dependencies installed. The
-complete Python suite also passed in the existing Linux test image; no C++
-engine, browser capture, production controller, or UI code changed. The origin
-supports both Debian's older aiohttp and the current optional version.
+The first bounded preparation prototype passed 153 native Python tests. The
+modern control, progressive HLS, process cleanup and diagnostic integration add
+separate regressions, including fake-receiver failures at each protocol stage.
+Both media origins are checked against Debian's older aiohttp and the current
+optional version. Current candidate validation is recorded with its commit.
+
+The 0.2.10 candidate passes 222 optional-native Python tests, the complete Linux
+Python suite, all 10 C++ suites, sandboxed browser/profile/coexistence checks,
+and the installed-style local sync diagnostic. The authenticated diagnostic UI
+was inspected at desktop and 390-pixel widths. These are local checks; the
+candidate has not established native playback on a physical receiver.
 
 Keep this path experimental until the native startup failure is understood and
 bounded trials establish picture, sound, sync, and 4K60 playback on actual TVs.
-Production work still includes controller/UI integration, receiver-specific
-variants, full-length buffering/seek/stop, audio-route behavior, dependency
+Production work still includes daily playback integration, receiver-specific
+variants, full-length seek/stop, audio-route behavior, dependency
 packaging, and retained-pairing verification. Do not change the installed path
 or claim native playback success based on a successful media conversion.

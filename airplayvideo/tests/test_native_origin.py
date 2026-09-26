@@ -159,3 +159,25 @@ async def test_close_completion_is_shared_and_survives_cancelled_waiter(tmp_path
     async with aiohttp.ClientSession() as client:
         with pytest.raises(aiohttp.ClientError):
             await client.get(url)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('receiver,role', [(True, 'receiver'), (False, 'preflight')])
+async def test_media_bytes_are_attributed_to_receiver_or_preflight(tmp_path, receiver, role):
+    clip = tmp_path / 'sample.mp4'
+    clip.write_bytes(b'0123456789')
+    origin = await MediaOrigin({'sample.mp4': clip}, ['127.0.0.1'],
+                               receiver_clients=['127.0.0.1'] if receiver else [],
+                               bind_address='127.0.0.1').start()
+    try:
+        async with aiohttp.ClientSession() as client:
+            async with client.get(origin.url('sample.mp4'), headers={'Range': 'bytes=2-5'}) as response:
+                assert await response.read() == b'2345'
+            async with client.head(origin.url('sample.mp4')) as response:
+                assert response.status == 200
+        assert origin.counters()[role] == {'requests': 2, 'bytes_sent': 4}
+        assert all(record['role'] == role and record['completed'] for record in origin.requests)
+        assert origin.requests[0]['status'] == 206
+        assert '127.0.0.1' not in str(origin.requests)
+    finally:
+        await origin.close()

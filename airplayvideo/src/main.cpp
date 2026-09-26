@@ -1,5 +1,6 @@
 #include "stream.hpp"
 #include "generated.hpp"
+#include "native.hpp"
 #include <csignal>
 #include <httplib.h>
 #include <iostream>
@@ -98,12 +99,27 @@ int main(int argc,char **argv) {
       if(arg=="--data") data=value();
       else if(arg=="--port") port=std::stoi(value());
       else if(arg=="--stream") {mode="stream";argument=value();}
+      else if(arg=="--native") {mode="native";argument=value();}
       else if(arg=="--capabilities") mode="capabilities";
       else if(arg=="--discover") mode="discover";
       else if(arg=="--sample") {mode="sample";argument=value();}
       else throw std::runtime_error("Unknown engine argument");
     }
     if(mode=="stream") return run_stream(Json::parse(private_read(argument)),data,exiting,event);
+    if(mode=="native") {
+      // The owning engine reads its existing pairing in place. The private
+      // request file contains only a receiver ID and this session's media URL.
+      auto request=Json::parse(private_read(argument));
+      std::string id=request.at("receiver_id");validate_id(id);
+      const int seconds=request.at("seconds");
+      require(seconds>=1&&seconds<=600,"Native trial duration out of range");
+      auto credentials=Credentials::from_json(Json::parse(private_read(data/(id+".json"))));
+      if(request.contains("receiver_address"))
+        require(request.at("receiver_address")==credentials.receiver.address,
+                "Selected receiver address changed; saved pairing retained");
+      native_play(credentials,request.at("media_url"),exiting,event,seconds);
+      return 0;
+    }
     if(mode=="capabilities") {std::cout<<media_capabilities().dump()<<std::endl;return 0;}
     if(mode=="discover") {Json list=Json::array();for(const auto &r:discover())list.push_back(r.json());std::cout<<list.dump()<<std::endl;return 0;}
     if(mode=="sample") {write_sample(argument,3);return 0;}

@@ -109,7 +109,9 @@ class Application:
         action = request.match_info["action"]
         controller = self.controller
         if action == "measure_sync":
-            await self.diagnostics.start(data)
+            await self.diagnostics.start({**data, 'kind': 'sync'})
+        elif action == "test_native_video":
+            await self.diagnostics.start({**data, 'kind': 'native'})
         elif action == "cancel_sync":
             await self.diagnostics.close()
         elif action == "play":

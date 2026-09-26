@@ -20,7 +20,7 @@ async def run(args):
         bind = route.getsockname()[0]
     origin = MediaOrigin({'sample.mp4': Path(args.file)},
                          [args.receiver, bind, *args.allow], bind_address=bind,
-                         lifetime=args.seconds)
+                         lifetime=args.seconds, receiver_clients=[args.receiver])
     await origin.start()
     loop = asyncio.get_running_loop()
     for signum in (signal.SIGINT, signal.SIGTERM):
@@ -33,7 +33,8 @@ async def run(args):
         await origin.closed.wait()
     finally:
         await origin.close()
-        result = {'event': 'origin_closed', 'requests': origin.requests}
+        result = {'event': 'origin_closed', 'requests': origin.requests,
+                  'counters': origin.counters()}
         if args.report:
             Path(args.report).write_text(json.dumps(result, indent=2) + '\n')
         print(json.dumps(result), flush=True)

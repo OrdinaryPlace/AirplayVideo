@@ -69,8 +69,9 @@ public:
                         int timeout_ms = 5000);
   Bytes read_some(int timeout_ms = 5000);
   Bytes read_exact(size_t size, int timeout_ms = 5000);
-  void write(std::span<const uint8_t> data);
+  void write(std::span<const uint8_t> data, int timeout_ms = 5000);
   void shutdown();
+  std::string local_address() const;
 };
 struct Message {
   std::string first_line;
@@ -90,11 +91,18 @@ public:
   explicit Channel(Socket socket) : socket_(std::move(socket)) {}
   void encrypt(std::span<const uint8_t> secret, pair_channel kind,
                const char *suffix = nullptr);
-  void write(std::span<const uint8_t> data);
+  void write(std::span<const uint8_t> data, int timeout_ms = 5000);
   Message read_message(int timeout_ms = 5000);
   std::optional<Message> read_event(int idle_timeout_ms = 250,
                                   int message_timeout_ms = 5000);
   void shutdown() { socket_.shutdown(); }
+  std::string local_address() const { return socket_.local_address(); }
+};
+struct RtspOptions {
+  int timeout_ms = 5000;
+  bool session_headers = true;
+  std::string user_agent = "AirPlay/409.16";
+  bool client_instance = false;
 };
 class Rtsp {
   Channel channel_;
@@ -103,15 +111,21 @@ class Rtsp {
   uint32_t seq_ = 0;
 
 public:
-  Rtsp(const std::string &ip, uint16_t port, const std::string &id);
+  Rtsp(const std::string &ip, uint16_t port, const std::string &id,
+       int connect_timeout_ms = 5000);
+  // Socket injection supports local protocol tests without a receiver.
+  Rtsp(Socket socket, const std::string &id);
   Message request(const std::string &method, const std::string &path,
                   const Bytes &body = {}, const std::string &type = "",
-                  const std::map<std::string, std::string> &headers = {});
+                  const std::map<std::string, std::string> &headers = {},
+                  const RtspOptions &options = {});
   Json plist(const std::string &method, const std::string &path,
              const Json &body);
   void encrypt(std::span<const uint8_t> secret) {
     channel_.encrypt(secret, PAIR_CHANNEL_CONTROL);
   }
+  void shutdown() { channel_.shutdown(); }
+  std::string local_address() const { return channel_.local_address(); }
 };
 struct Receiver {
   std::string name, address, device_id, model, version;

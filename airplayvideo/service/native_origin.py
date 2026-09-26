@@ -21,7 +21,7 @@ from aiohttp import web
 
 class MediaOrigin:
     def __init__(self, files: dict[str, Path], allowed_clients, *, bind_address,
-                 lifetime=180):
+                 lifetime=180, receiver_clients=()):
         if not files or not 1 <= lifetime <= 600:
             raise ValueError('Choose media files and a bounded lifetime')
         address = ipaddress.ip_address(bind_address)
@@ -34,6 +34,11 @@ class MediaOrigin:
         self.allowed = {str(item) for item in clients}
         if not self.allowed:
             raise ValueError('Choose allowed clients')
+        self.receiver_clients = {str(ipaddress.ip_address(item)) for item in receiver_clients}
+        if not self.receiver_clients <= self.allowed:
+            raise ValueError('Receiver clients must be allowlisted')
+        self._counters = {role: {'requests': 0, 'bytes_sent': 0}
+                          for role in ('receiver', 'preflight')}
         self.files = {}
         self._identities = {}
         for name, path in files.items():
@@ -59,6 +64,10 @@ class MediaOrigin:
             raise ValueError('Start the origin with the requested media first')
         return f'http://{self.bind_address}:{self.port}/{self.token}/{name}'
 
+    def counters(self):
+        """Transport evidence only; bytes written do not prove visible playback."""
+        return {role: dict(values) for role, values in self._counters.items()}
+
     async def _serve(self, request):
         if (self._close_task is not None or request.remote not in self.allowed
                 or request.match_info['token'] != self.token):
@@ -69,8 +78,12 @@ class MediaOrigin:
         # Do not put URL, query, headers, IPs or pairing information into
         # diagnostics. Never use FileResponse here: it can automatically choose
         # adjacent .gz/.br files which are outside this exact-file allowlist.
-        self.requests.append({'method': request.method, 'file': request.match_info['name'],
-                              'range': bool(request.headers.get('Range'))})
+        role = 'receiver' if request.remote in self.receiver_clients else 'preflight'
+        record = {'method': request.method, 'file': request.match_info['name'],
+                  'range': bool(request.headers.get('Range')), 'role': role,
+                  'status': 0, 'bytes_sent': 0, 'completed': False}
+        self.requests.append(record)
+        self._counters[role]['requests'] += 1
         self.requests[:] = self.requests[-256:]
         try:
             descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
@@ -99,11 +112,13 @@ class MediaOrigin:
                         raise ValueError('Unsatisfiable range')
                     end = min(end if end is not None else size, size)
                 except ValueError:
+                    record['status'] = 416
                     raise web.HTTPRequestRangeNotSatisfiable(
                         headers={**headers, 'Content-Range': f'bytes */{size}'}) from None
                 status = 206
                 headers['Content-Range'] = f'bytes {start}-{end - 1}/{size}'
             response = web.StreamResponse(status=status, headers=headers)
+            record['status'] = status
             response.content_type = mimetypes.guess_type(request.match_info['name'])[0] or 'application/octet-stream'
             response.content_length = end - start
             await response.prepare(request)
@@ -115,8 +130,11 @@ class MediaOrigin:
                     if not chunk:
                         raise ConnectionResetError('Prepared media changed during streaming')
                     await response.write(chunk)
+                    record['bytes_sent'] += len(chunk)
+                    self._counters[role]['bytes_sent'] += len(chunk)
                     remaining -= len(chunk)
             await response.write_eof()
+            record['completed'] = True
             return response
 
     async def start(self):
