@@ -93,11 +93,7 @@ public:
           const auto &m = *event;
           if (m.status != 0)
             continue;
-          std::string response = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\n";
-          if (m.headers.contains("cseq"))
-            response += "CSeq: " + m.headers.at("cseq") + "\r\n";
-          response += "\r\n";
-          channel_.write(bytes(response));
+          channel_.write(event_response(m));
         } catch (...) {
           if (!stop.stop_requested())
             healthy_ = false;
@@ -266,9 +262,9 @@ Bytes audio_sync_packet(uint64_t presentation_epoch,int64_t pts_us,
 }
 Bytes audio_packet(std::span<const uint8_t> pcm, std::span<const uint8_t> key,
                    uint64_t nonce, uint16_t sequence, uint32_t timestamp,
-                   uint32_t ssrc, bool first) {
+                   uint32_t ssrc, bool /*first*/) {
   auto encoded=alac_frame(pcm);
-  Bytes header(12); header[0]=0x80; header[1]=first?0xe0:0x60;
+  Bytes header(12); header[0]=0x80; header[1]=0x60;
   be(header,2,sequence,2); be(header,4,timestamp,4); be(header,8,ssrc,4);
   auto cipher=seal(key,nonce,std::span(header).subspan(4,8),encoded);
   header.insert(header.end(),cipher.begin(),cipher.end());
@@ -283,7 +279,7 @@ class AudioTransport {
   Bytes key_;
   uint64_t nonce_=0;
   uint16_t sequence_=uint16_t(random_id());
-  uint32_t origin_=uint32_t(random_id()),ssrc_=uint32_t(random_id());
+  uint32_t origin_=uint32_t(random_id());
   std::mutex mutex_;
   std::map<uint16_t,Bytes> history_;
   std::deque<uint16_t> order_;
@@ -300,10 +296,10 @@ public:
     sockaddr_in local{}; local.sin_family=AF_INET; local.sin_port=htons(port); local.sin_addr.s_addr=INADDR_ANY;
     require(bind(control_.fd(),reinterpret_cast<sockaddr*>(&local),sizeof(local))==0,"Audio control port unavailable");
   }
-  void setup(Rtsp &rtsp,const std::string &uri,const Credentials &c,uint16_t port,uint64_t features) {
+  void setup(Rtsp &rtsp,const std::string &uri,const Credentials &c,uint16_t port,uint64_t features,uint64_t stream_id) {
     key_=random_bytes(32);
     modern_connections_=(features&(uint64_t(1)<<59))!=0;
-    auto stream=audio_stream_setup(features,key_,random_id(),port,lead_ms_);
+    auto stream=audio_stream_setup(features,key_,stream_id,port,lead_ms_);
     auto reply=rtsp.plist("SETUP",uri,{{"streams",Json::array({stream})}});
     int cp=0,dp=0;
     for(const auto &s:reply.value("streams",Json::array())) if(s.value("type",0)==96) {
@@ -346,7 +342,8 @@ public:
       require(sendto(control_.fd(),sync.data(),sync.size(),0,reinterpret_cast<sockaddr*>(&peer_control_),sizeof(peer_control_))==ssize_t(sync.size()),"Audio synchronization send failed");
       last_sync_=p.pts_us;
     }
-    auto packet=audio_packet(p.pcm,key_,nonce_++,sequence_,timestamp,ssrc_,first_);
+    // Screen audio uses the fixed zero SSRC, including its authenticated AAD.
+    auto packet=audio_packet(p.pcm,key_,nonce_++,sequence_,timestamp,0,first_);
     { std::lock_guard lock(mutex_); history_[sequence_]=packet; order_.push_back(sequence_); if(order_.size()>512) {history_.erase(order_.front());order_.pop_front();} }
     require(sendto(data_.fd(),packet.data(),packet.size(),0,reinterpret_cast<sockaddr*>(&peer_data_),sizeof(peer_data_))==ssize_t(packet.size()),"Audio send failed");
     ++sequence_; first_=false;
@@ -364,7 +361,8 @@ void mirror_stream(const Credentials &c,Media &media,uint16_t timing_port,
             "Receiver does not advertise ALAC audio support");
   auto secret=verify_pair(control,c,note);
   Timing timing(timing_port,c.receiver.address);
-  auto uri="rtsp://"+c.receiver.address+"/"+std::to_string(random_id());
+  const uint64_t audio_id=random_id();
+  auto uri="rtsp://"+c.receiver.address+":"+std::to_string(c.receiver.port)+"/"+std::to_string(audio_id);
   Bytes key;
   bool setup=false;
   try {
@@ -373,23 +371,28 @@ void mirror_stream(const Credentials &c,Media &media,uint16_t timing_port,
     setup=true;
     int ep=root.value("eventPort",0); require(ep>0&&ep<=65535,"Receiver event port unavailable");
     Events events(c.receiver.address,ep,secret);
+    // The control session must be running before a real-time stream is added.
+    // Some receivers start it in SETUP and explicitly tell us to skip RECORD.
+    if(!root.value("skipRecord",false)) {
+      auto record=control.request("RECORD",uri,{},"",{{"Range","npt=0-"},{"RTP-Info","seq=0;rtptime=0"}});
+      require(record.status==200,"Receiver rejected playback");
+    }
+    std::unique_ptr<AudioTransport> audio;
+    if(media.config.value("audio",true)) {
+      audio=std::make_unique<AudioTransport>(control_port,media.epoch_ntp,media.config.value("latency_ms",1500));
+      audio->setup(control,uri,c,control_port,receiver.value("features",uint64_t(0)),audio_id);
+    }
     int width=media.config.at("width"),height=media.config.at("height"),fps=media.config.at("fps");
     uint64_t stream_id=random_id();
     Json stream={{"type",110},{"streamConnectionID",stream_id},{"width",width},{"height",height},{"maxFPS",fps},{"timestampInfo",Json::array({{{"name","SubSu"}},{{"name","BePxT"}},{{"name","AfPxT"}},{{"name","BefEn"}},{{"name","EmEnc"}}})}};
     stream.update(video_timing_setup(media.config.value("latency_ms",1500)));
-    auto reply=control.plist("SETUP",uri,{{"streams",Json::array({stream})}});
+    auto video_uri="rtsp://"+c.receiver.address+":"+std::to_string(c.receiver.port)+"/"+std::to_string(stream_id);
+    auto reply=control.plist("SETUP",video_uri,{{"streams",Json::array({stream})}});
     int dp=0;
     for(const auto &s:reply.value("streams",Json::array())) if(s.value("type",0)==110) {dp=s.value("dataPort",0);stream_id=s.value("streamConnectionID",stream_id);}
     require(dp>0&&dp<=65535,"Receiver mirroring port unavailable");
     key=hkdf(secret,"DataStream-Salt"+std::to_string(stream_id),"DataStream-Output-Encryption-Key");
     Socket data=Socket::connect(c.receiver.address,dp);
-    std::unique_ptr<AudioTransport> audio;
-    if(media.config.value("audio",true)) {
-      audio=std::make_unique<AudioTransport>(control_port,media.epoch_ntp,media.config.value("latency_ms",1500));
-      audio->setup(control,uri,c,control_port,receiver.value("features",uint64_t(0)));
-    }
-    auto record=control.request("RECORD",uri,{},"",{{"Range","npt=0-"}});
-    require(record.status==200,"Receiver rejected playback");
     auto volume=control.request("SET_PARAMETER",uri,bytes("volume: 0.000000\r\n"),"text/parameters");
     // Request digital unity gain for this audio stream.
     require(!audio||volume.status==200,"Receiver rejected audio gain");

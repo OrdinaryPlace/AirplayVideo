@@ -40,6 +40,8 @@ int main() {
       auto negotiated=request.at("shk").get_binary();
       Bytes original(352*4,37);
       auto wire=audio_packet(original,key,0x100000005ULL,123,456,0,true);
+      require(wire[1]==0x60&&std::all_of(wire.begin()+8,wire.begin()+12,[](uint8_t b){return b==0;}),
+              "First screen audio packet uses PT 96 without a marker and fixed zero SSRC");
       // AirPlay uses RFC 7539 authentication with a 64-bit nonce, equivalent
       // to a zero-prefixed IETF nonce for these bounded packets. Sodium's
       // pre-RFC crypto_aead_chacha20poly1305 has a different MAC construction.

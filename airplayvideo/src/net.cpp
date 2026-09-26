@@ -213,6 +213,21 @@ Message Channel::read_message(int timeout) {
   pending_.erase(pending_.begin(), pending_.begin() + header_end + body_size);
   return m;
 }
+Bytes event_response(const Message &event) {
+  require(event.status==0,"Cannot acknowledge an event response");
+  const bool rtsp=event.first_line.ends_with(" RTSP/1.0");
+  require(rtsp||event.first_line.ends_with(" HTTP/1.1"),"Unsupported event protocol");
+  // Event replies have no media latency or body. Apple RTSP events require
+  // a minimal acknowledgement on the same protocol as the incoming request.
+  std::string response=rtsp?"RTSP/1.0 200 OK\r\n":"HTTP/1.1 200 OK\r\nContent-Length: 0\r\n";
+  if(auto it=event.headers.find("cseq");it!=event.headers.end()) {
+    require(!it->second.empty()&&it->second.size()<=10&&
+      std::all_of(it->second.begin(),it->second.end(),[](unsigned char c){return std::isdigit(c);}),
+      "Invalid event sequence");
+    response+="CSeq: "+it->second+"\r\n";
+  }
+  return bytes(response+"\r\n");
+}
 Rtsp::Rtsp(const std::string &ip, uint16_t port, const std::string &id)
     : channel_(Socket::connect(ip, port)), id_(id), dacp_(hex(random_bytes(8))),
       active_(random_id() & 0xffffffff) {}

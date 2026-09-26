@@ -73,6 +73,7 @@ struct Message {
   std::map<std::string, std::string> headers;
   Bytes body;
 };
+Bytes event_response(const Message &event);
 class Channel {
   Socket socket_;
   std::unique_ptr<pair_cipher_context, decltype(&pair_cipher_free)> cipher_{

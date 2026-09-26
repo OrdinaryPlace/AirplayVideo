@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.6
+
+- Start the receiver control session before adding audio and video streams, honor
+  skipRecord, and use distinct stream URIs.
+- Acknowledge RTSP receiver events with minimal RTSP replies; retain HTTP event
+  compatibility. Use screen-audio RTP headers with zero SSRC and no marker bit.
+- Retain ALAC, source capture and the shared playback clock. Physical audio
+  acceptance is pending the receiver trial.
+
 ## 0.2.5
 
 - Negotiate modern encrypted audio connections when advertised by the receiver.
