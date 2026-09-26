@@ -6,6 +6,30 @@
 #include <sys/socket.h>
 #include <unistd.h>
 namespace lab {
+Bytes timing_response(std::span<const uint8_t> request, uint64_t received,
+                      uint64_t transmitted) {
+  Bytes reply;
+  if (request.size() == 48 && (request[0] & 7) == 3) {
+    reply = Bytes(48);
+    reply[0] = (request[0] & 0x38) | 4;
+    reply[1] = 1;
+    reply[2] = 2;
+    reply[3] = 0xec;
+    reply[12] = 'A'; reply[13] = 'I'; reply[14] = 'R'; reply[15] = 'P';
+    std::copy(request.begin() + 40, request.end(), reply.begin() + 24);
+    be(reply, 32, screen_to_ntp(received), 8);
+    be(reply, 40, screen_to_ntp(transmitted), 8);
+  } else if (request.size() == 32 && (request[1] & 0x7f) == 0x52) {
+    reply = Bytes(32);
+    reply[0] = 0x80;
+    reply[1] = 0xd3;
+    reply[2] = request[2]; reply[3] = request[3];
+    std::copy(request.begin() + 24, request.end(), reply.begin() + 8);
+    be(reply, 16, screen_to_ntp(received), 8);
+    be(reply, 24, screen_to_ntp(transmitted), 8);
+  }
+  return reply;
+}
 namespace {
 class Timing {
   Socket socket_;
@@ -36,33 +60,10 @@ public:
         socklen_t size = sizeof(from);
         ssize_t n = recvfrom(socket_.fd(), b.data(), b.size(), 0,
                              reinterpret_cast<sockaddr *>(&from), &size);
-        if (from.sin_addr.s_addr != peer.s_addr)
+        if (n <= 0 || from.sin_addr.s_addr != peer.s_addr)
           continue;
-        Bytes reply;
         uint64_t received = ntp_now();
-        if (n == 48 && (b[0] & 7) == 3) {
-          reply = Bytes(48);
-          reply[0] = (b[0] & 0x38) | 4;
-          reply[1] = 1;
-          reply[2] = 2;
-          reply[3] = 0xec;
-          reply[12] = 'A';
-          reply[13] = 'I';
-          reply[14] = 'R';
-          reply[15] = 'P';
-          std::copy(b.begin() + 40, b.begin() + 48, reply.begin() + 24);
-          be(reply, 32, received, 8);
-          be(reply, 40, ntp_now(), 8);
-        } else if (n == 32 && (b[1] & 0x7f) == 0x52) {
-          reply = Bytes(32);
-          reply[0] = 0x80;
-          reply[1] = 0xd3;
-          reply[2] = b[2];
-          reply[3] = b[3];
-          std::copy(b.begin() + 24, b.begin() + 32, reply.begin() + 8);
-          be(reply, 16, received, 8);
-          be(reply, 24, ntp_now(), 8);
-        }
+        auto reply = timing_response(std::span(b).first(size_t(n)), received, ntp_now());
         if (!reply.empty() && sendto(socket_.fd(), reply.data(), reply.size(),
                                      0, reinterpret_cast<sockaddr *>(&from),
                                      sizeof(from)) == ssize_t(reply.size()))
@@ -256,7 +257,8 @@ Bytes audio_sync_packet(uint64_t presentation_epoch,int64_t pts_us,
   // Field 4 is the sample playing at the NTP instant; field 16 is the
   // corresponding packet being sent ahead. Both must describe the same clock.
   be(sync,4,timestamp-uint32_t(lead_ms*44100/1000),4);
-  be(sync,8,presentation_epoch+ntp_delta(pts_us)-ntp_delta(uint64_t(lead_ms)*1000),8);
+  // Unlike the video header, audio/control NTP includes the protocol epoch.
+  be(sync,8,screen_to_ntp(presentation_epoch+ntp_delta(pts_us)-ntp_delta(uint64_t(lead_ms)*1000)),8);
   be(sync,16,timestamp,4);
   return sync;
 }

@@ -19,6 +19,27 @@ int main(int argc,char **argv) {
     auto network_integer=[](std::span<const uint8_t> value) {
       uint64_t result=0; for(auto byte:value) result=(result<<8)|byte; return result;
     };
+    // Receiver model: control and audio include the NTP epoch; screen headers
+    // do not. Checking only equal raw A/V fields missed this wire distinction.
+    const uint64_t ntp_epoch=2208988800ULL<<32;
+    const uint64_t receiver_clock=capture_epoch+ntp_delta(7654321);
+    int64_t receiver_offset=0;
+    for(size_t size:{32U,48U}) {
+      Bytes request(size);request[0]=size==32?0x80:0x23;
+      if(size==32){request[1]=0xd2;request[2]=0x12;request[3]=0x34;}
+      const size_t origin=size==32?8:24,received=size==32?16:32,transmitted=size==32?24:40;
+      be(request,size-8,0xfedcba9876543210ULL,8);
+      auto reply=timing_response(request,capture_epoch,capture_epoch+ntp_delta(1000));
+      require(reply.size()==size,"Timing response framing");
+      require(network_integer(std::span(reply).subspan(origin,8))==0xfedcba9876543210ULL,"Echo receiver timestamp unchanged");
+      require(network_integer(std::span(reply).subspan(received,8))==ntp_epoch+capture_epoch,"Control receive time uses NTP epoch");
+      require(network_integer(std::span(reply).subspan(transmitted,8))==ntp_epoch+capture_epoch+ntp_delta(1000),"Control transmit time uses NTP epoch");
+      if(size==32)require(reply[1]==0xd3&&reply[2]==0x12&&reply[3]==0x34,"Timing response type and sequence");
+      else require((reply[0]&7)==4,"NTP server response mode");
+      require(timing_response(reply,capture_epoch,capture_epoch).empty(),"Never answer a timing response");
+      require(timing_response(std::span(request).first(size-1),capture_epoch,capture_epoch).empty(),"Ignore truncated timing requests");
+      receiver_offset=receiver_clock-(network_integer(std::span(reply).subspan(received,8))-ntp_epoch);
+    }
     for(int lead:{500,750,1000,1500,2000}) {
       const auto setup=audio_timing_setup(lead);
       require(setup.at("usingScreen")==true,"Audio belongs to the screen session");
@@ -35,9 +56,13 @@ int main(int argc,char **argv) {
         require(sent==rtp,"Sync reference identifies the transmitted PCM packet");
         const uint32_t advance=sent-playing;
         require(advance==uint32_t(lead*44100/1000),"Sync positions encode the requested lead");
-        long double audio_time=network_integer(std::span(sync).subspan(8,8))/4294967296.0L+advance/44100.0L;
-        long double video_time=(epoch+ntp_delta(pts))/4294967296.0L;
-        require(std::abs(audio_time-video_time)<0.000024L,"Audio and video wire presentation agree within one sample");
+        uint64_t audio_clock=network_integer(std::span(sync).subspan(8,8))-ntp_epoch;
+        long double audio_time=(audio_clock+receiver_offset)/4294967296.0L+advance/44100.0L;
+        auto frame=mirror_header(10,0,epoch+ntp_delta(pts),1280,720);
+        uint64_t video_clock=read_le(std::span(frame).subspan(8,8));
+        long double video_time=(video_clock+receiver_offset)/4294967296.0L;
+        require(std::abs(audio_time-video_time)<0.000024L,"Receiver-mapped A/V presentation agrees within one sample");
+        require(video_clock+receiver_offset==receiver_clock+ntp_delta(uint64_t(lead)*1000)+ntp_delta(pts),"Receiver presents video at the configured deadline");
       }
     }
     auto header=mirror_header(10,1,ntp_now(),1280,720);

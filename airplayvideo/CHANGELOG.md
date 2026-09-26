@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.7
+
+- Encode audio synchronization and control timing with AirPlay's NTP epoch while
+  retaining the boot-relative video clock. Receivers can now map both tracks to
+  the same presentation deadline instead of interpreting incompatible clocks.
+- Test the receiver-side conversion from actual timing, audio and video packets,
+  including every playback buffer, RTP wrap and long streams. Keep capture,
+  ALAC, session startup and playback-buffer settings unchanged.
+- Physical lip-sync acceptance remains subject to a receiver trial.
+
 ## 0.2.6
 
 - Start the receiver control session before adding audio and video streams, honor

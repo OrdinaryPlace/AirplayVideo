@@ -79,6 +79,9 @@ uint64_t ntp_now() {
   return (uint64_t(n / 1000000000) << 32) |
          ((uint64_t(n % 1000000000) << 32) / 1000000000);
 }
+uint64_t screen_to_ntp(uint64_t screen_time) {
+  return screen_time + (uint64_t(2208988800) << 32);
+}
 Bytes hkdf(std::span<const uint8_t> secret, std::string_view salt,
            std::string_view info, size_t n) {
   std::unique_ptr<EVP_PKEY_CTX, decltype(&EVP_PKEY_CTX_free)> c(

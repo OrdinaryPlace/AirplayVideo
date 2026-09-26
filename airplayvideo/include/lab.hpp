@@ -35,7 +35,12 @@ uint64_t random_id();
 void le(Bytes &b, size_t offset, uint64_t value, size_t width);
 void be(Bytes &b, size_t offset, uint64_t value, size_t width);
 uint64_t read_le(std::span<const uint8_t> b);
+// Screen timestamps use monotonic seconds.32; audio/control NTP adds the
+// 1900-to-1970 offset even though the underlying clock is still monotonic.
 uint64_t ntp_now();
+uint64_t screen_to_ntp(uint64_t screen_time);
+Bytes timing_response(std::span<const uint8_t> request, uint64_t received,
+                      uint64_t transmitted);
 Bytes hkdf(std::span<const uint8_t> secret, std::string_view salt,
            std::string_view info, size_t size = 32);
 Bytes seal(std::span<const uint8_t> key, uint64_t nonce,
