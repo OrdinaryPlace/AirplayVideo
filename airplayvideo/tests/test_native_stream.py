@@ -237,10 +237,77 @@ async def test_encoder_verification_actually_attempts_requested_hardware_geometr
     monkeypatch.setattr(stream, "_command", command)
     with pytest.raises(StreamError, match="could not encode"):
         await stream._verify_encoder({"encoders": {"hevc_vaapi"}, "decoders": {"vp9"}, "filters": {"color"}})
-    args, = seen
+    assert len(seen) == 2 and stream.vaapi_mode is None
+    args, low_power = seen
     assert "color=c=black:s=3840x2160:r=60/1" in args
     assert "vaapi=airplay:/dev/dri/renderD128" in args
     assert args[args.index("-profile:v") + 1] == "main"
+    assert '-low_power' not in args and low_power[low_power.index('-low_power') + 1] == '1'
+    await stream.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('four_k,encoder', [(False, 'h264_vaapi'), (True, 'hevc_vaapi')])
+@pytest.mark.parametrize('requires_low_power', [False, True])
+async def test_verified_vaapi_entrypoint_is_retained_without_quality_changes(tmp_path, monkeypatch, four_k, encoder, requires_low_power):
+    stream = session(tmp_path, video_encoder=encoder, vaapi_device='/dev/dri/renderD128')
+    stream.plan = plan(four_k=four_k, convert_video=True)
+    original = json.dumps(stream.plan, sort_keys=True)
+    probes = []
+    async def command(args, **kwargs):
+        probes.append(args)
+        assert kwargs['timeout'] == 20
+        if requires_low_power and '-low_power' not in args:
+            raise StreamError('private hardware failure detail')
+        return b''
+    monkeypatch.setattr(stream, '_command', command)
+    await stream._verify_encoder({'encoders': {encoder}, 'decoders': {'vp9'}, 'filters': {'color'}})
+    assert len(probes) == (2 if requires_low_power else 1)
+    assert stream.vaapi_mode == ('low_power' if requires_low_power else 'default')
+    assert stream.status['vaapi_mode'] == stream.vaapi_mode
+    if requires_low_power:
+        index = probes[1].index('-low_power')
+        assert probes[1][index + 1] == '1'
+        assert probes[1][:index] + probes[1][index + 2:] == probes[0]
+    args = hls_arguments('ffmpeg', 'video.source', 'audio.source', tmp_path, stream.plan,
+                         encoder=stream.encoder, vaapi_device=stream.vaapi_device,
+                         low_power=stream.vaapi_mode == 'low_power', remote=False)
+    assert ('-low_power' in args) is requires_low_power
+    for option in ('-c:v', '-profile:v', '-b:v', '-maxrate', '-bufsize', '-g', '-bf'):
+        assert args[args.index(option) + 1] == probes[-1][probes[-1].index(option) + 1]
+    assert args[args.index('-c:a') + 1] == 'copy'
+    assert '-r' not in args and '-s' not in args and json.dumps(stream.plan, sort_keys=True) == original
+    await stream.close()
+
+
+@pytest.mark.asyncio
+async def test_software_encoder_failure_does_not_try_a_vaapi_mode(tmp_path, monkeypatch):
+    stream = session(tmp_path)
+    stream.plan = plan(convert_video=True)
+    probes = []
+    async def command(args, **kwargs):
+        probes.append(args)
+        raise StreamError('private encoder diagnostic')
+    monkeypatch.setattr(stream, '_command', command)
+    with pytest.raises(StreamError, match='could not encode') as error:
+        await stream._verify_encoder({'encoders': {'libopenh264'}, 'decoders': {'vp9'}, 'filters': {'color'}})
+    assert len(probes) == 1 and '-low_power' not in probes[0]
+    assert stream.vaapi_mode is None and 'private' not in str(error.value)
+    await stream.close()
+
+
+@pytest.mark.asyncio
+async def test_cancelling_vaapi_probe_does_not_start_a_second_mode(tmp_path, monkeypatch):
+    stream = session(tmp_path, vaapi_device='/dev/dri/renderD128')
+    stream.plan = plan(four_k=True)
+    probes = []
+    async def command(args, **kwargs):
+        probes.append(args)
+        raise asyncio.CancelledError()
+    monkeypatch.setattr(stream, '_command', command)
+    with pytest.raises(asyncio.CancelledError):
+        await stream._verify_encoder({'encoders': {'hevc_vaapi'}, 'decoders': {'vp9'}, 'filters': {'color'}})
+    assert len(probes) == 1 and stream.vaapi_mode is None
     await stream.close()
 
 

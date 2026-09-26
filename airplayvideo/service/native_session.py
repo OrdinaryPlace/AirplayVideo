@@ -201,6 +201,13 @@ class NativeSession:
         self._quality = {'width': width, 'height': height, 'fps': rate,
                          'video_codec': target['video_codec'], 'audio_codec': 'aac', 'hdr': 'sdr',
                          'copy_video': plan['copy_video'], 'copy_audio': plan['copy_audio']}
+        producer_status = self.producer.status
+        encoder = producer_status.get('video_encoder')
+        if encoder in ('libopenh264', 'h264_vaapi', 'hevc_vaapi'):
+            self._quality['video_encoder'] = encoder
+        vaapi_mode = producer_status.get('vaapi_mode')
+        if vaapi_mode in ('default', 'low_power'):
+            self._quality['vaapi_mode'] = vaapi_mode
         self._copy_video, self._copy_audio = plan['copy_video'], plan['copy_audio']
 
     async def prepare(self, url):

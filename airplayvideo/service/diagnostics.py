@@ -106,6 +106,7 @@ class Diagnostics:
             check(kind in ('sync', 'native'), 'Choose a diagnostic test')
             check(not self.active, 'A sync measurement is already running')
             check(not c.stream and not c.pending, 'Stop playback before measuring sync')
+            check(not c.tearing_down, 'Wait for playback to finish stopping')
             check(not c.recordings or not c.recordings.current, 'Wait for the recording to finish')
             check(not c.browser.running, 'Close the browser before measuring sync')
             check(c.store.data['setup']['complete'], 'Finish Setup first')

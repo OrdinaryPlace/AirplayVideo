@@ -73,6 +73,7 @@ class Application:
         self.controller.require_no_diagnostic()
         check(not self.recordings.current, "Wait for the diagnostic recording to finish")
         check(not self.controller.stream and not self.controller.pending, "Stop playback before changing Setup")
+        check(not self.controller.tearing_down, "Wait for playback to finish stopping")
 
     async def start(self):
         await self.pairing.start()

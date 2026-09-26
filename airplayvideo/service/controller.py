@@ -167,7 +167,12 @@ class Controller:
         check(not self.diagnostics or not self.diagnostics.active, "Wait for the sync measurement to finish or cancel it")
 
     def status(self):
-        return {"phase": self.phase, "source": self.source, "targets": sorted(self.targets), "receivers": self.receivers, "error": self.error, "metrics": self.metrics, "native": self.native_report, "browser_open": self.browser.running}
+        phase = "stopping" if self.phase == "idle" and self.tearing_down else self.phase
+        return {"phase": phase, "source": self.source, "targets": sorted(self.targets), "receivers": self.receivers, "error": self.error, "metrics": self.metrics, "native": self.native_report, "browser_open": self.browser.running}
+
+    @property
+    def tearing_down(self):
+        return any(not task.done() for task in self.retiring.values())
 
     def notify(self):
         self.changed()

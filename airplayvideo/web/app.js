@@ -373,7 +373,7 @@ function renderUsage(){
   setOptions($('pageSelect'),state.pages.map(page=>({value:page.id,label:page.name})),'Add a saved page');
   browserKindChanged();renderChannels();
   const runtime=state.runtime;
-  const label={idle:'Idle',preparing:'Preparing',connecting:'Connecting',playing:'Sending',error:'Needs attention'}[runtime.phase]||runtime.phase;
+  const label={idle:'Idle',preparing:'Preparing',connecting:'Connecting',playing:'Sending',stopping:'Stopping',error:'Needs attention'}[runtime.phase]||runtime.phase;
   $('runtimeBadge').textContent=label;
   $('nowPlaying').textContent=runtime.source?`${runtime.source.label} · ${runtime.targets.length} TV${runtime.targets.length===1?'':'s'}`:'Choose a source and one or more TVs.';
   const native=runtime.native, quality=native?.quality;
@@ -462,7 +462,7 @@ function browserKindChanged(){
 function updateButtons(){
   if(!state)return;
   const measuring=!!state.diagnostics?.active;
-  const unavailable=busy||measuring||!!state.recordings?.active||state.runtime.browser_open||!!state.runtime.targets.length||['preparing','connecting'].includes(state.runtime.phase)||!state.setup.complete;
+  const unavailable=busy||measuring||!!state.recordings?.active||state.runtime.browser_open||!!state.runtime.targets.length||['preparing','connecting','stopping'].includes(state.runtime.phase)||!state.setup.complete;
   $('measureSync').disabled=unavailable;
   $('measureSyncTV').disabled=unavailable||!chosenTVs.size;
   $('testNativeVideo').disabled=unavailable||chosenTVs.size!==1;

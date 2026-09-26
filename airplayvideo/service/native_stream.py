@@ -92,7 +92,7 @@ def choose_encoder(plan, available, *, requested=None, vaapi_device=None, allow_
     return encoder
 
 
-def video_arguments(plan, encoder):
+def video_arguments(plan, encoder, *, low_power=False):
     if plan["copy_video"]:
         return ["-c:v", "copy"] + (["-tag:v", "hvc1"] if plan["target"]["video_codec"] == "hevc" else [])
     target = plan["target"]
@@ -104,6 +104,8 @@ def video_arguments(plan, encoder):
         args += ["-vf", "format=nv12,hwupload", "-profile:v", "main" if encoder == "hevc_vaapi" else "high",
                  "-b:v", str(bitrate), "-maxrate", str(bitrate), "-bufsize", str(bitrate * 2),
                  "-g", str(gop), "-bf", "0"]
+        if low_power:
+            args += ["-low_power", "1"]
     elif encoder == "libopenh264":
         args += ["-pix_fmt", "yuv420p", "-profile:v", "high", "-b:v", str(bitrate),
                  "-maxrate", str(bitrate), "-bufsize", str(bitrate * 2), "-g", str(gop)]
@@ -129,7 +131,8 @@ def hardware_arguments(encoder, device):
     return []
 
 
-def hls_arguments(ffmpeg, video, audio, directory, plan, *, encoder=None, vaapi_device=None, remote=True):
+def hls_arguments(ffmpeg, video, audio, directory, plan, *, encoder=None, vaapi_device=None, remote=True,
+                  low_power=False):
     """Build shell-free arguments; source values must never be put in logs."""
     args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-n"]
     args += hardware_arguments(encoder, vaapi_device)
@@ -142,7 +145,7 @@ def hls_arguments(ffmpeg, video, audio, directory, plan, *, encoder=None, vaapi_
         # Reading at media speed prevents the rolling window outrunning the TV.
         args += ["-readrate", "1", "-i", str(source)]
     args += ["-map", "0:v:0", "-map", "1:a:0", "-map_metadata", "-1", "-map_chapters", "-1"]
-    args += video_arguments(plan, encoder)
+    args += video_arguments(plan, encoder, low_power=low_power)
     args += (["-c:a", "copy"] if plan["copy_audio"] else
              ["-c:a", "aac", "-profile:a", "aac_low", "-b:a", "192k", "-ac", "2", "-ar", "48000"])
     return args + ["-shortest", "-fps_mode", "passthrough", "-f", "hls", "-hls_segment_type", "fmp4",
@@ -245,6 +248,7 @@ class NativeHLSStream:
         self.directory = None
         self.plan = None
         self.encoder = None
+        self.vaapi_mode = None
         self.process = None
         self._jobs = set()
         self._spawning = set()
@@ -275,6 +279,7 @@ class NativeHLSStream:
                 "receiver_playback_verified": False,
                 "quality": self.plan["target"] if self.plan else None,
                 "video_encoder": self.encoder,
+                "vaapi_mode": self.vaapi_mode,
                 "expected_duration_seconds": self.expected_duration,
                 "prepared_duration_seconds": float(self._prepared_duration)}
 
@@ -425,6 +430,7 @@ class NativeHLSStream:
             raise StreamError("The initial presentation timestamp could not be verified") from None
 
     async def _verify_encoder(self, capabilities):
+        self.vaapi_mode = None
         if not self.plan["copy_audio"] and "aac" not in capabilities["encoders"]:
             raise StreamError("The required AAC audio encoder is unavailable")
         missing = set(self.plan["required_codecs"]["decoders"]) - capabilities["decoders"]
@@ -440,11 +446,19 @@ class NativeHLSStream:
         args = [self.ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin"]
         args += hardware_arguments(self.encoder, self.vaapi_device)
         args += ["-f", "lavfi", "-i", f"color=c=black:s={target['width']}x{target['height']}:r={target['fps']}",
-                 "-frames:v", "3", "-an"] + video_arguments(self.plan, self.encoder) + ["-f", "null", "-"]
-        try:
-            await self._command(args, timeout=20)
-        except StreamError:
-            raise StreamError("The selected encoder could not encode the requested profile, dimensions and frame rate") from None
+                 "-frames:v", "3", "-an"]
+        vaapi = self.encoder.endswith("_vaapi")
+        for low_power in ((False, True) if vaapi else (False,)):
+            probe = args + video_arguments(self.plan, self.encoder, low_power=low_power) + ["-f", "null", "-"]
+            try:
+                await self._command(probe, timeout=20)
+            except StreamError:
+                continue
+            # Some drivers expose only EncSliceLP. Retain only the mode that
+            # actually encoded these same profile/dimensions/FPS/bitrate values.
+            self.vaapi_mode = ("low_power" if low_power else "default") if vaapi else None
+            return
+        raise StreamError("The selected encoder could not encode the requested profile, dimensions and frame rate") from None
 
     async def start(self, url, receiver_model, *, max_resolution=None):
         if self._state != "new":
@@ -492,7 +506,8 @@ class NativeHLSStream:
         await self._verify_encoder(capabilities)
         self.directory = Path(tempfile.mkdtemp(prefix="native-stream-", dir=self.root))
         self.process = await self._spawn(
-            hls_arguments(self.ffmpeg, video, audio, self.directory, self.plan, encoder=self.encoder, vaapi_device=self.vaapi_device),
+            hls_arguments(self.ffmpeg, video, audio, self.directory, self.plan, encoder=self.encoder,
+                          vaapi_device=self.vaapi_device, low_power=self.vaapi_mode == "low_power"),
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         self._monitor_task = asyncio.create_task(self._monitor())
         await self._ready.wait()

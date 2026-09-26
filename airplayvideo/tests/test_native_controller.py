@@ -195,6 +195,7 @@ async def test_new_play_waits_for_stop_teardown_and_keeps_its_state(native):
     old.close = delayed_close
     stopping = asyncio.create_task(c.stop())
     await closing.wait()
+    assert c.status()['phase'] == 'stopping'
     starting = asyncio.create_task(c.play(native_request()))
     while not Session.created:
         await asyncio.sleep(0)
