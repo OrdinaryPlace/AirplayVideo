@@ -26,7 +26,7 @@ using Packet=std::unique_ptr<AVPacket,PacketDelete>;
 
 // The independent input has 100 ms white/1 kHz pulses at exact integer seconds.
 // PCM avoids codec priming in the reference; the app still resamples 48->44.1 kHz.
-void make_fixture(const std::filesystem::path &path) {
+void make_fixture(const std::filesystem::path &path,int audio_shift_ms=0) {
   AVFormatContext *raw=nullptr;
   check(avformat_alloc_output_context2(&raw,nullptr,"matroska",path.c_str()),"Fixture muxer");
   auto release=[](AVFormatContext *p){if(p){if(p->pb)avio_closep(&p->pb);avformat_free_context(p);}};
@@ -67,7 +67,7 @@ void make_fixture(const std::filesystem::path &path) {
     frame->pts=tick;check(avcodec_send_frame(codec.get(),frame.get()),"Fixture encode");drain();
     check(av_new_packet(packet.get(),1600*4),"Fixture audio storage");
     for(int sample=0;sample<1600;++sample) {
-      const int position=tick*1600+sample;
+      const int position=tick*1600+sample-audio_shift_ms*48;
       int16_t value=position>=48000&&position%48000<4800?
         int16_t(12000*std::sin(2*3.14159265358979323846*1000*position/48000.0)):0;
       for(int channel=0;channel<2;++channel) {
@@ -142,7 +142,7 @@ public:
   }
 };
 
-Json reference(const std::filesystem::path &path) {
+Json reference(const std::filesystem::path &path,double expected_ms) {
   AVFormatContext *raw=nullptr;check(avformat_open_input(&raw,path.c_str(),nullptr,nullptr),"Reference open");
   auto close=[](AVFormatContext *p){avformat_close_input(&p);};
   std::unique_ptr<AVFormatContext,decltype(close)> input(raw,close);
@@ -166,9 +166,9 @@ Json reference(const std::filesystem::path &path) {
     }
   }
   auto result=meter.report("decoded_reference");std::cout<<result.dump()<<'\n';
-  require(std::abs(result.at("audio_minus_video_ms").at("min").get<double>())<0.1&&
-          std::abs(result.at("audio_minus_video_ms").at("max").get<double>())<0.1,
-          "Independently decoded reference must start sound and picture within 0.1 ms");
+  require(std::abs(result.at("audio_minus_video_ms").at("min").get<double>()-expected_ms)<0.1&&
+          std::abs(result.at("audio_minus_video_ms").at("max").get<double>()-expected_ms)<0.1,
+          "Independently decoded reference must measure the intended offset within 0.1 ms");
   return result;
 }
 
@@ -197,7 +197,7 @@ Bytes alac_config() {
   return {0,0,0,36,'a','l','a','c',0,0,0,0,0,0,1,96,0,16,40,10,14,2,0,255,
           0,0,0,0,0,0,0,0,0,0,172,68};
 }
-Json measure(const std::filesystem::path &path,int lead) {
+Json measure(const std::filesystem::path &path,int lead,double expected_ms) {
   Json config={{"source",{{"kind","fixture"},{"url",path.string()}}},{"width",width},{"height",height},
     {"fps",fps},{"bitrate",4000000},{"encoder","libopenh264"},{"audio",true},{"deinterlace",true},{"latency_ms",lead}};
   std::atomic<bool> stop{false};
@@ -250,12 +250,13 @@ Json measure(const std::filesystem::path &path,int lead) {
   }
   stop=true;media.close();sink->close();
   auto before=capture.report("capture"),after=wire.report("decoded_airplay_packets");
-  Json result={{"buffer_ms",lead},{"capture",before},{"wire",after},{"maximum_schedule_error_us",max_schedule_error}};
+  Json result={{"buffer_ms",lead},{"reference_audio_minus_video_ms",expected_ms},{"capture",before},{"wire",after},
+    {"maximum_schedule_error_us",max_schedule_error}};
   std::cout<<result.dump()<<'\n';
   for(const auto &report:{before,after}) {
     const auto &offset=report.at("audio_minus_video_ms");
-    require(std::abs(offset.at("min").get<double>())<2&&std::abs(offset.at("max").get<double>())<2,
-      "Controlled content must remain aligned within 2 ms");
+    require(std::abs(offset.at("min").get<double>()-expected_ms)<2&&std::abs(offset.at("max").get<double>()-expected_ms)<2,
+      "Measured content offset must stay within 2 ms of the independent reference");
   }
   require(max_schedule_error<24,"Packetization must preserve PTS within one audio sample");
   return result;
@@ -266,8 +267,11 @@ int main() {
   try {
     require(sodium_init()>=0,"Crypto initialization");avdevice_register_all();av_log_set_level(AV_LOG_ERROR);
     make_fixture(path);
-    reference(path);
-    for(int lead:{500,1500})measure(path,lead);
+    reference(path,0);
+    for(int lead:{500,1500})measure(path,lead,0);
+    // Measurement control: move the waveform without changing its timestamps.
+    // Equal track endpoints must not hide 75 ms of incorrect source content.
+    make_fixture(path,75);reference(path,75);measure(path,500,75);
     std::filesystem::remove(path);return 0;
   } catch(const std::exception &e) {
     std::filesystem::remove(path);std::cerr<<e.what()<<'\n';return 1;

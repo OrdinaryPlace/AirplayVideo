@@ -36,7 +36,7 @@ COPY src ./src
 COPY vendor ./vendor
 COPY tests ./tests
 RUN cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release \
- && cmake --build build -j4 && ctest --test-dir build --output-on-failure
+ && cmake --build build -j4 && ctest --test-dir build --output-on-failure --verbose
 
 FROM debian:bookworm-slim AS runtime
 RUN apt-get update && apt-get install -y --no-install-recommends \

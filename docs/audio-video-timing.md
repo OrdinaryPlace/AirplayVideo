@@ -56,6 +56,36 @@ audio clock, captures the real X11/Pulse pipeline at 1080p, and measures decoded
 flash/beep PTS. It includes browser audio and display scheduling uncertainty,
 so frame-scale jitter is expected; hundreds of milliseconds are not.
 
+## Objective synchronization checks
+
+Audio and video must retain one common presentation timeline for every receiver.
+There is no per-TV audio offset to tune. The playback buffer changes both tracks'
+presentation deadline; room-to-room playback calibration is a separate concern.
+
+The native `sync-content` regression creates an account-free 1080p30 reference
+with simultaneous white flashes and 1 kHz beeps. It independently decodes that
+file, then measures the same events after the shared file/tuner processing path
+and after decrypting and decoding the H.264 and ALAC AirPlay packet formats.
+The packet check reconstructs presentation times from the video header and
+audio RTP/NTP announcements, including RTP rollover and successive announcements.
+It runs with 500 ms and 1500 ms buffers. A second fixture deliberately puts sound
+75 ms late without changing track endpoints, to verify that content measurement
+detects an error that timestamp-only comparisons cannot.
+
+CI prints signed audio-minus-video measurements for each stage. The controlled
+fixture allows 2 ms of additional content error and one audio sample of packet
+scheduling error. These are test limits, not a claim of sub-frame browser capture
+or physical TV accuracy. This test uses software H.264; installed VAAPI, the
+browser's display/audio clocks, network arrival and the physical output still
+need their own evidence. No TV, LAN connection, pairing or user media is needed.
+
+To measure the final output, record a known flash/beep pattern with a camera and
+microphone on a common recording clock and compare it against the source. Account
+for that recording device's own A/V offset, frame interval and microphone
+distance. AirPlay timing replies and packet counters cannot measure the instant
+the panel emits light or a speaker emits sound. Physical measurements should
+validate the common scheduling implementation, not create guessed per-TV delays.
+
 ## Codec choices and earlier implementation lessons
 
 Version 0.2.4 sends encrypted ALAC stereo at 44.1 kHz, with 352 samples per RTP
