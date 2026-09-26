@@ -41,6 +41,39 @@ def test_hdhr_requires_a_configured_device():
     assert validate_setup(settings)["complete"]
 
 
+def test_bitrate_upgrade_preserves_existing_state(tmp_path):
+    store = Store(tmp_path)
+    settings = default_setup()
+    settings['video'].update(bitrate_mbps=20, fps=60)
+    store.setup(settings)
+    store.save_page({'name': 'Keep me', 'url': 'https://example.com/'})
+    for key in ('rate_control', 'max_bitrate_mbps'):
+        del store.data['setup']['video'][key]
+    store.save()
+    before = copy.deepcopy(store.data)
+    reopened = Store(tmp_path)
+    assert reopened.data['setup']['video']['rate_control'] == 'auto'
+    assert reopened.data['setup']['video']['max_bitrate_mbps'] == 20
+    assert Store(tmp_path).data == reopened.data
+    for key in ('rate_control', 'max_bitrate_mbps'):
+        del reopened.data['setup']['video'][key]
+    assert reopened.data == before
+
+
+@pytest.mark.parametrize('changes', [dict(max_bitrate_mbps=15), dict(max_bitrate_mbps=41),
+    dict(max_bitrate_mbps=True), dict(max_bitrate_mbps=30.5), dict(rate_control='crf'),
+    dict(encoder='libopenh264')])
+def test_invalid_variable_bitrate_is_atomic(tmp_path, changes):
+    store = Store(tmp_path)
+    before = store.path.read_bytes()
+    settings = default_setup()
+    settings['video'].update(encoder='h264_vaapi', rate_control='vbr', bitrate_mbps=16, max_bitrate_mbps=30)
+    settings['video'].update(changes)
+    with pytest.raises(UserError):
+        store.setup(settings)
+    assert store.path.read_bytes() == before
+
+
 def test_isolated_edit_preserves_other_fields_and_detects_conflicts():
     current = validate_setup(default_setup())
     current['video']['fps'] = 60  # another page/client's saved edit

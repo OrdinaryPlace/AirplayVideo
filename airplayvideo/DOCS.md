@@ -4,7 +4,7 @@ Send browser pages, HDHomeRun channels, or generated videos to your Apple TVs fr
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.9.** This is an independent implementation in a new
+**Experimental, version 0.2.11.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -42,6 +42,21 @@ The separate five-step **Setup** wizard handles:
 
 Setup changes require playback to be stopped. Settings do not start playback.
 Use **Manage pages** on the playback page to add named browser shortcuts.
+
+In **Settings → Picture & sound**, supported hardware offers **Variable** bitrate
+with separate target (2–20 Mbps) and maximum (up to 40 Mbps). For 1080p30, try
+**16 Mbps target / 30 Mbps maximum**. Simple scenes can use less; detailed motion
+can use more, within the encoder's rate-control budget. These are starting
+points, not a guarantee of invisible compression. A higher output bitrate cannot
+restore detail already missing from YouTube or another source.
+
+The maximum bounds encoded bitrate over the encoder's buffering window, not
+every individual network write. Existing installations retain **Automatic** and
+their saved bitrate on upgrade. OpenH264 retains automatic rate control; explicit
+VBR requires a VAAPI driver advertising support. Unsupported selections are
+rejected rather than silently changing encoder or rate mode. These controls apply
+to the shared browser, tuner and generated-video encoder and do not change the
+playback buffer or audio timing.
 
 After setup, **Settings** has direct navigation between pages. **Save this page**
 saves only edited fields; drafts on other pages remain available while you move

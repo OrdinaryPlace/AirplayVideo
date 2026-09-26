@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.10
+## 0.2.11
 
 - Add an explicitly started direct-video diagnostic for one selected TV, using
   its saved pairing and a temporary generated reference. Protocol stages and
@@ -10,6 +10,11 @@
 - Add optional public YouTube quality planning and progressive HLS preparation
   experiments that preserve compatible tracks and source resolution/frame rate.
   These are not yet the daily playback path or production dependencies.
+## 0.2.10
+
+- Add explicit hardware variable bitrate with separate target and maximum controls in Picture & sound. The driver must advertise VBR support; unsupported selections fail without silently changing encoder or rate control.
+- Preserve automatic rate control and all existing bitrate, frame-rate and playback-buffer settings on upgrade. For 1080p30, a 16 Mbps target and 30 Mbps maximum are suggested starting points for motion quality.
+- Include requested rate control and measured encoded bitrate in the container diagnostic report. Audio timing and the shared presentation clock are unchanged.
 
 ## 0.2.9
 

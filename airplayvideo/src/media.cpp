@@ -2,6 +2,7 @@
 #include "stream.hpp"
 #include "generated.hpp"
 #include "frame_rate.hpp"
+#include "video_rate.hpp"
 #include <cstring>
 #include <bit>
 extern "C" {
@@ -13,6 +14,7 @@ extern "C" {
 #include <libavfilter/buffersrc.h>
 #include <libavutil/audio_fifo.h>
 #include <libavutil/hwcontext.h>
+#include <libavutil/hwcontext_vaapi.h>
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libavutil/time.h>
@@ -138,7 +140,7 @@ public:
     const auto *c=avcodec_find_encoder_by_name(encoder.c_str()); require(c,"Encoder unavailable");
     codec_.reset(avcodec_alloc_context3(c)); require(bool(codec_),"Video codec allocation");
     auto *v=codec_.get(); v->width=width_; v->height=height_;
-    v->time_base={1,90000}; v->framerate={fps_,1}; v->bit_rate=o.at("bitrate").get<int64_t>();
+    v->time_base={1,90000}; v->framerate={fps_,1}; VideoRate::parse(o).apply(v);
     v->gop_size=fps_*2; v->max_b_frames=0; v->thread_count=2;
     v->profile=AV_PROFILE_H264_MAIN; v->color_range=AVCOL_RANGE_MPEG;
     v->colorspace=AVCOL_SPC_BT709; v->color_primaries=AVCOL_PRI_BT709; v->color_trc=AVCOL_TRC_BT709;
@@ -496,7 +498,7 @@ Media::Media(Json c,std::atomic<bool> &s,Note n):config(std::move(c)),epoch_ntp(
   require(config.at("width")==1920||config.at("width")==1280,"Unsupported canvas");
   require((config.at("width")==1920&&config.at("height")==1080)||(config.at("width")==1280&&config.at("height")==720),"Unsupported canvas");
   require(config.at("fps")==30||config.at("fps")==60,"Unsupported frame rate");
-  require(config.at("bitrate").get<int>()>=2000000&&config.at("bitrate").get<int>()<=20000000,"Invalid bitrate");
+  VideoRate::parse(config);
   require(config.value("latency_ms",1500)>=500&&config.value("latency_ms",1500)<=2000,"Invalid presentation lead");
   impl_=std::make_unique<Impl>(*this,s,std::move(n));
 }
@@ -514,7 +516,15 @@ bool Media::completed() const { return impl_->completed; }
 Json media_capabilities() {
   AVBufferRef *device=nullptr;
   bool hardware=avcodec_find_encoder_by_name("h264_vaapi")&&av_hwdevice_ctx_create(&device,AV_HWDEVICE_TYPE_VAAPI,"/dev/dri/renderD128",nullptr,0)>=0;
+  bool vbr=false;
+  if(hardware) {
+    const auto *context=reinterpret_cast<AVHWDeviceContext*>(device->data);
+    const auto *vaapi=static_cast<AVVAAPIDeviceContext*>(context->hwctx);
+    VAConfigAttrib attribute{VAConfigAttribRateControl,0};
+    vbr=vaGetConfigAttributes(vaapi->display,VAProfileH264Main,VAEntrypointEncSlice,&attribute,1)==VA_STATUS_SUCCESS &&
+      attribute.value!=VA_ATTRIB_NOT_SUPPORTED && (attribute.value&VA_RC_VBR);
+  }
   av_buffer_unref(&device);
-  return {{"codecs",Json::array({"h264"})},{"encoders",hardware?Json::array({"libopenh264","h264_vaapi"}):Json::array({"libopenh264"})},{"resolutions",Json::array({"1080p","720p"})},{"frame_rates",Json::array({30,60})},{"audio","PCM stereo 44.1 kHz"}};
+  return {{"codecs",Json::array({"h264"})},{"encoders",hardware?Json::array({"libopenh264","h264_vaapi"}):Json::array({"libopenh264"})},{"vbr_encoders",vbr?Json::array({"h264_vaapi"}):Json::array()},{"resolutions",Json::array({"1080p","720p"})},{"frame_rates",Json::array({30,60})},{"audio","PCM stereo 44.1 kHz"}};
 }
 }

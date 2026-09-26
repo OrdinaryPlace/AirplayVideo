@@ -129,7 +129,9 @@ class Diagnostics:
                            'targets': [r['name'] for r in receivers], 'stages': {},
                            'physical_output_measured': False}
             if kind == 'sync':
-                self.report.update(encoder=config['encoder'], buffer_ms=config['latency_ms'])
+                self.report.update(encoder=config['encoder'], buffer_ms=config['latency_ms'],
+                                   rate_control=config['rate_control'], bitrate=config['bitrate'],
+                                   max_bitrate=config['max_bitrate'])
             else:
                 self.report.update(trial_seconds=NATIVE_SECONDS, physical_observation='pending')
             self.targets = set(wanted)

@@ -103,6 +103,13 @@ function collectStep(validate = true) {
     draft.video.codec = 'h264';
     draft.video.encoder = $('encoder').value;
     draft.video.bitrate_mbps = Number($('bitrate').value);
+    draft.video.rate_control = $('rateControl').value;
+    draft.video.max_bitrate_mbps = Number($('maxBitrate').value);
+    if (validate && draft.video.rate_control === 'vbr') {
+      const encoder = draft.video.encoder === 'auto' ? (state.capabilities.encoders.includes('h264_vaapi') ? 'h264_vaapi' : 'libopenh264') : draft.video.encoder;
+      if (!(state.capabilities.vbr_encoders || []).includes(encoder)) throw new Error('Variable bitrate requires supported hardware encoding.');
+      if (draft.video.max_bitrate_mbps < draft.video.bitrate_mbps) throw new Error('Maximum bitrate must be at least the target bitrate.');
+    }
     draft.video.deinterlace = $('deinterlace').checked;
     draft.audio.enabled = $('enableAudio').checked;
     draft.audio.latency_ms = Number($('latency').value);
@@ -224,10 +231,26 @@ function renderStep() {
       <div><label for="frameRate">Frame rate</label><select id="frameRate"><option value="30" ${selected(draft.video.fps,30)}>30 fps</option><option value="60" ${selected(draft.video.fps,60)}>60 fps</option></select></div>
       <div><label for="codec">Video codec</label><select id="codec" disabled><option>H.264 · Apple TV compatible</option></select></div>
       <div><label for="encoder">Encoding</label><select id="encoder"><option value="auto" ${selected(draft.video.encoder,'auto')}>Automatic</option><option value="libopenh264" ${selected(draft.video.encoder,'libopenh264')}>Software · OpenH264</option><option value="h264_vaapi" ${selected(draft.video.encoder,'h264_vaapi')} ${hardware?'':'disabled'}>Hardware · VAAPI ${hardware?'':'(unavailable)'}</option></select></div>
-      <div><label for="bitrate">Video bitrate · <span id="bitrateValue">${draft.video.bitrate_mbps}</span> Mbps</label><input id="bitrate" type="range" min="2" max="20" step="1" value="${draft.video.bitrate_mbps}"></div>
+      <div><label for="rateControl">Bitrate mode</label><select id="rateControl"><option value="auto" ${selected(draft.video.rate_control,'auto')}>Automatic</option><option value="vbr" ${selected(draft.video.rate_control,'vbr')}>Variable · hardware</option></select></div>
+      <div><label for="bitrate">Target bitrate · <span id="bitrateValue">${draft.video.bitrate_mbps}</span> Mbps</label><input id="bitrate" type="range" min="2" max="20" step="1" value="${draft.video.bitrate_mbps}"></div>
+      <div id="maxBitrateField"><label for="maxBitrate">Maximum bitrate · Mbps</label><input id="maxBitrate" type="number" min="2" max="40" step="1" value="${draft.video.max_bitrate_mbps}"></div>
       <div><label for="latency">Playback buffer</label><select id="latency">${[500,750,1000,1500,2000].map(value=>`<option value="${value}" ${selected(draft.audio.latency_ms,value)}>${value} ms${value===1500?' · recommended for live TV':''}</option>`).join('')}</select></div>
-    </div><label class="check-row"><input id="enableAudio" type="checkbox" ${checked(draft.audio.enabled)}> Send sound to the TVs</label><label class="check-row"><input id="deinterlace" type="checkbox" ${checked(draft.video.deinterlace)}> Deinterlace broadcast video when needed</label><p class="muted">Start with 1080p at 30 fps. A higher frame rate or bitrate needs more processing and network capacity. Generated videos are silent. The buffer delays picture and sound together. A longer buffer gives live broadcasts more time to arrive. Changing resolution closes the browser; other picture and sound edits keep it open.</p>`;
+    </div><p id="bitrateHelp" class="muted"></p><label class="check-row"><input id="enableAudio" type="checkbox" ${checked(draft.audio.enabled)}> Send sound to the TVs</label><label class="check-row"><input id="deinterlace" type="checkbox" ${checked(draft.video.deinterlace)}> Deinterlace broadcast video when needed</label><p class="muted">Start with 1080p at 30 fps. A higher frame rate or bitrate needs more processing and network capacity. Generated videos are silent. The buffer delays picture and sound together. A longer buffer gives live broadcasts more time to arrive. Changing resolution closes the browser; other picture and sound edits keep it open.</p>`;
     $('bitrate').oninput = () => $('bitrateValue').textContent = $('bitrate').value;
+    const updateRateFields = () => {
+      const encoder = $('encoder').value === 'auto' ? (hardware ? 'h264_vaapi' : 'libopenh264') : $('encoder').value;
+      const available = (state.capabilities.vbr_encoders || []).includes(encoder);
+      const variable = $('rateControl').value === 'vbr';
+      $('rateControl').options[1].disabled = !available;
+      $('maxBitrateField').hidden = !variable;
+      $('bitrateHelp').textContent = variable ? (available ?
+        'Variable bitrate gives detailed motion more data, up to the maximum. Try a 16 Mbps target and 30 Mbps maximum for 1080p30. Simple scenes can use less than the target.' :
+        'Variable bitrate is unavailable with this encoder. Choose supported hardware encoding or Automatic bitrate mode.') :
+        'Automatic keeps the encoder’s default rate control. Variable bitrate offers a separate maximum on supported hardware.';
+    };
+    $('rateControl').onchange = updateRateFields;
+    $('encoder').onchange = updateRateFields;
+    updateRateFields();
   } else {
     const connected = state.home_assistant.connected;
     $('stepContent').innerHTML = `<label class="check-row"><input id="enableHA" type="checkbox" ${checked(draft.home_assistant.enabled)}> Create TV controls in Home Assistant</label><p class="muted">Each paired TV gets Play and Stop buttons, saved-page shortcuts, channel selection, generated video, and status for your dashboards and automations. For custom text, use Generated video in Playback and expand Use in a Home Assistant automation.</p><div class="integration"><strong>${connected ? 'Home Assistant connection ready' : 'Home Assistant connection needs attention'}</strong><p class="muted">${connected ? 'The app found the MQTT service automatically. Controls appear for paired TVs when enabled.' : escape(state.home_assistant.error || 'Enable MQTT in Home Assistant to create playback entities. You can still use the app directly.')}</p><button type="button" id="retryHA" class="text-button">Check connection again</button></div><dl class="review"><dt>Modes</dt><dd>${Object.entries(draft.modes).filter(([,enabled])=>enabled).map(([key])=>modeNames[key]).join(' + ')}</dd><dt>Paired TVs</dt><dd>${state.receivers.length ? escape(state.receivers.map(r=>r.name).join(', ')) : 'None yet — add them in Setup later'}</dd><dt>Picture</dt><dd>${draft.video.resolution} · ${draft.video.fps} fps · H.264</dd><dt>Sound</dt><dd>${draft.audio.enabled ? 'Stereo audio for browser and live TV' : 'Video only'}</dd><dt>After saving</dt><dd>Playback stays idle until you press Play.</dd></dl>`;
