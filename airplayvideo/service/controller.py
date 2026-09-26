@@ -156,6 +156,10 @@ class Controller:
         self.capabilities = {"encoders": ["libopenh264"]}
         self.cleanup_tasks = set()
         self.recordings = None
+        self.diagnostics = None
+
+    def require_no_diagnostic(self):
+        check(not self.diagnostics or not self.diagnostics.active, "Wait for the sync measurement to finish or cancel it")
 
     def status(self):
         return {"phase": self.phase, "source": self.source, "targets": sorted(self.targets), "receivers": self.receivers, "error": self.error, "metrics": self.metrics, "browser_open": self.browser.running}
@@ -244,16 +248,19 @@ class Controller:
         return {"kind": "browser", "key": "browser", "label": label, "url": url, "page_id": request.get("page"), "browser_source": kind}, {"kind": "browser", "pulse": "airplayvideo.monitor"}
 
     async def open_browser(self, request):
-        self.require_mode("browser")
-        request = {**request, "mode": "browser"}
-        source, _ = self.requested_source(request)
-        await self.browser.navigate(source["url"], self.store.data["setup"], source["browser_source"] == "youtube", source["browser_source"] == "watch_later")
-        if self.source and self.source["kind"] == "browser":
-            self.source = source
-        self.notify()
+        async with self.lock:
+            self.require_no_diagnostic()
+            self.require_mode("browser")
+            request = {**request, "mode": "browser"}
+            source, _ = self.requested_source(request)
+            await self.browser.navigate(source["url"], self.store.data["setup"], source["browser_source"] == "youtube", source["browser_source"] == "watch_later")
+            if self.source and self.source["kind"] == "browser":
+                self.source = source
+            self.notify()
 
     async def play(self, request, add=False):
         async with self.lock:
+            self.require_no_diagnostic()
             check(not self.recordings or not self.recordings.current or not self.recordings.owned,
                   "Wait for the diagnostic recording to finish")
             wanted = request.get("receivers", [])
@@ -316,6 +323,9 @@ class Controller:
 
     async def stop(self, receiver_id=None):
         # Deliberately does not acquire the start lock: Stop cancels decoder warmup.
+        if self.diagnostics and self.diagnostics.active:
+            if not receiver_id or receiver_id in self.diagnostics.targets:
+                await self.diagnostics.close()
         if receiver_id:
             self.store.receiver(receiver_id)
             if receiver_id not in self.targets:

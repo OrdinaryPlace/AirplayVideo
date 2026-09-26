@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.8
+
+- Add an opt-in installed-container sync measurement using the configured encoder, a generated 1080p reference, isolated Chrome capture, and independently decoded AirPlay packet formats. Compare 500 and 1500 ms buffers without changing settings.
+- Optionally send a bounded flash-and-beep test to selected paired TVs, measure capture during delivery, and report the minimum time remaining after sender writes. Physical light/sound timing remains a separate measurement.
+- Preserve saved profiles, pairings and recordings; support cancellation and retain the last numeric report through authenticated ingress. No A/V compensation is added.
+
 ## 0.2.7
 
 - Encode audio synchronization and control timing with AirPlay's NTP epoch while

@@ -403,6 +403,7 @@ void mirror_stream(const Credentials &c,Media &media,uint16_t timing_port,
     uint64_t frames=0,audio_packets=0,nonce=0,wire_bytes=0;
     int64_t first_pts=-1,last_video=-1;
     int64_t video_age=0,audio_age=0,video_queue=0,audio_queue=0;
+    int64_t video_margin=INT64_MAX,audio_margin=INT64_MAX;
     auto heartbeat=Clock::now(),metrics=Clock::now(),last_packet=Clock::now();
     Bytes last_config;
     while(!stop && !media.failed()) {
@@ -433,9 +434,14 @@ void mirror_stream(const Credentials &c,Media &media,uint16_t timing_port,
         auto packet=mirror_packet(p->video,key,nonce++,presentation,width,height);
         data.write(packet); ++frames; wire_bytes+=packet.size();
       }
+      // Completed sender writes, not receiver arrival or physical presentation.
+      const auto margin=int64_t(media.config.at("latency_ms").get<int>())*1000+p->pts_us-
+        std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-media.epoch).count();
+      if(p->audio)audio_margin=std::min(audio_margin,margin);else video_margin=std::min(video_margin,margin);
       if(Clock::now()-metrics>=std::chrono::seconds(1)) {
         note("streaming",{{"video_frames",frames},{"audio_packets",audio_packets},{"wire_bytes",wire_bytes},{"timing_replies",timing.count()},
           {"video_age_us",video_age},{"audio_age_us",audio_age},{"video_queue_us",video_queue},{"audio_queue_us",audio_queue},
+          {"min_video_send_margin_us",video_margin},{"min_audio_send_margin_us",audio_margin},
           {"video_setup_latency_ms",media.config.at("latency_ms")},{"presentation_lead_ms",media.config.at("latency_ms")},
           {"audio_timing",audio?audio->timing():Json(nullptr)}}); metrics=Clock::now();
       }

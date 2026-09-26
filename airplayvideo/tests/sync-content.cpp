@@ -4,6 +4,8 @@
 #include <cmath>
 #include <cstring>
 #include <iostream>
+#include <fstream>
+#include <optional>
 #include <openssl/evp.h>
 #include <sodium.h>
 extern "C" {
@@ -89,21 +91,27 @@ void make_fixture(const std::filesystem::path &path,int audio_shift_ms=0) {
 
 struct Meter {
   std::vector<double> flashes,beeps;
-  bool white=false;
-  double last_tone=-10;
+  bool white=false,seen_dark=false;
+  double last_tone=-10,audio_start=-1;
   void video(AVFrame *f,double time) {
     require(f->format==AV_PIX_FMT_YUV420P&&f->width==width&&f->height==height,"Decoded 1080p picture");
     int total=0,count=0;
     for(int y=0;y<height;y+=32)for(int x=0;x<width;x+=32){total+=f->data[0][y*f->linesize[0]+x];++count;}
-    bool bright=total/count>180;if(bright&&!white)flashes.push_back(time);white=bright;
+    bool bright=total/count>180;
+    if(bright&&!white&&seen_dark)flashes.push_back(time);
+    if(!bright)seen_dark=true;
+    white=bright;
   }
   void audio(AVFrame *f,double time) {
-    require(f->format==AV_SAMPLE_FMT_S16||f->format==AV_SAMPLE_FMT_S16P,"Decoded 16-bit audio");
+    if(audio_start<0)audio_start=time;
+    const bool floating=f->format==AV_SAMPLE_FMT_FLT||f->format==AV_SAMPLE_FMT_FLTP;
+    require(floating||f->format==AV_SAMPLE_FMT_S16||f->format==AV_SAMPLE_FMT_S16P,"Decoded audio format");
     const auto *samples=reinterpret_cast<const int16_t*>(f->extended_data[0]);
-    const int stride=f->format==AV_SAMPLE_FMT_S16P?1:f->ch_layout.nb_channels;
-    for(int i=0;i<f->nb_samples;++i)if(std::abs(int(samples[i*stride]))>3000) {
+    const auto *floats=reinterpret_cast<const float*>(f->extended_data[0]);
+    const int stride=av_sample_fmt_is_planar(AVSampleFormat(f->format))?1:f->ch_layout.nb_channels;
+    for(int i=0;i<f->nb_samples;++i)if(std::abs(floating?double(floats[i*stride])*32768:samples[i*stride])>3000) {
       double now=time+double(i)/f->sample_rate;
-      if(now-last_tone>0.25)beeps.push_back(now);last_tone=now;
+      if(now-last_tone>0.25&&now-audio_start>0.25)beeps.push_back(now);last_tone=now;
     }
   }
   Json report(const std::string &stage) const {
@@ -147,7 +155,7 @@ public:
   }
 };
 
-Json reference(const std::filesystem::path &path,double expected_ms) {
+Json reference(const std::filesystem::path &path,std::optional<double> expected_ms) {
   AVFormatContext *raw=nullptr;check(avformat_open_input(&raw,path.c_str(),nullptr,nullptr),"Reference open");
   auto close=[](AVFormatContext *p){avformat_close_input(&p);};
   std::unique_ptr<AVFormatContext,decltype(close)> input(raw,close);
@@ -171,8 +179,8 @@ Json reference(const std::filesystem::path &path,double expected_ms) {
     }
   }
   auto result=meter.report("decoded_reference");std::cout<<result.dump()<<'\n';
-  require(std::abs(result.at("audio_minus_video_ms").at("min").get<double>()-expected_ms)<0.1&&
-          std::abs(result.at("audio_minus_video_ms").at("max").get<double>()-expected_ms)<0.1,
+  if(expected_ms)require(std::abs(result.at("audio_minus_video_ms").at("min").get<double>()-*expected_ms)<0.1&&
+          std::abs(result.at("audio_minus_video_ms").at("max").get<double>()-*expected_ms)<0.1,
           "Independently decoded reference must measure the intended offset within 0.1 ms");
   return result;
 }
@@ -202,17 +210,16 @@ Bytes alac_config() {
   return {0,0,0,36,'a','l','a','c',0,0,0,0,0,0,1,96,0,16,40,10,14,2,0,255,
           0,0,0,0,0,0,0,0,0,0,172,68};
 }
-Json measure(const std::filesystem::path &path,int lead,double expected_ms) {
-  Json config={{"source",{{"kind","fixture"},{"url",path.string()}}},{"width",width},{"height",height},
-    {"fps",fps},{"bitrate",4000000},{"encoder","libopenh264"},{"audio",true},{"deinterlace",true},{"latency_ms",lead}};
+Json measure(const Json &config,std::optional<double> expected_ms) {
+  const int lead=config.at("latency_ms");
   std::atomic<bool> stop{false};
   Media media(config,stop,[](const auto &name,const auto &detail){if(name=="source_error")std::cerr<<detail.at("message")<<'\n';});
   auto sink=media.subscribe();media.start();
   Meter capture,wire;std::unique_ptr<Decoder> captured_video,wire_video;Decoder audio(AV_CODEC_ID_ALAC,alac_config());
   auto key=random_bytes(32);uint64_t video_nonce=0,audio_nonce=0;uint16_t sequence=65500;
   const uint32_t rtp_origin=0xffff0000U;Bytes sync;int64_t last_sync=-1000000;double max_schedule_error=0;
-  const auto deadline=Clock::now()+std::chrono::seconds(12);
-  while(Clock::now()<deadline&&capture.flashes.size()<6) {
+  const auto deadline=Clock::now()+std::chrono::seconds(18);
+  while(Clock::now()<deadline&&(capture.flashes.size()<6||capture.beeps.size()<6)) {
     auto p=sink->next(stop);
     if(!p){require(!media.failed(),"Fixture source failed");continue;}
     if(p->audio) {
@@ -255,12 +262,13 @@ Json measure(const std::filesystem::path &path,int lead,double expected_ms) {
   }
   stop=true;media.close();sink->close();
   auto before=capture.report("capture"),after=wire.report("decoded_airplay_packets");
-  Json result={{"buffer_ms",lead},{"reference_audio_minus_video_ms",expected_ms},{"capture",before},{"wire",after},
+  Json result={{"buffer_ms",lead},{"encoder",config.at("encoder")},{"capture",before},{"wire",after},
     {"maximum_schedule_error_us",max_schedule_error}};
+  if(expected_ms)result["reference_audio_minus_video_ms"]=*expected_ms;
   std::cout<<result.dump()<<'\n';
-  for(const auto &report:{before,after}) {
+  if(expected_ms)for(const auto &report:{before,after}) {
     const auto &offset=report.at("audio_minus_video_ms");
-    require(std::abs(offset.at("min").get<double>()-expected_ms)<2&&std::abs(offset.at("max").get<double>()-expected_ms)<2,
+    require(std::abs(offset.at("min").get<double>()-*expected_ms)<2&&std::abs(offset.at("max").get<double>()-*expected_ms)<2,
       "Measured content offset must stay within 2 ms of the independent reference");
   }
   require(max_schedule_error<24,"Packetization must preserve PTS within one audio sample");
@@ -271,15 +279,29 @@ int main(int argc,char **argv) {
   const auto path=std::filesystem::temp_directory_path()/("airplayvideo-sync-"+uuid()+".mkv");
   try {
     require(sodium_init()>=0,"Crypto initialization");avdevice_register_all();av_log_set_level(AV_LOG_ERROR);
+    if(argc==3&&std::string(argv[1])=="--fixture") {make_fixture(argv[2]);return 0;}
+    if(argc==3&&std::string(argv[1])=="--reference") {reference(argv[2],std::nullopt);return 0;}
+    if(argc==3&&std::string(argv[1])=="--config") {
+      std::ifstream input(argv[2]);auto config=Json::parse(input);
+      measure(config,std::nullopt);return 0;
+    }
     const bool reference_only=argc==2&&std::string(argv[1])=="--reference-only";
-    require(argc==1||reference_only,"Only --reference-only is supported");
+    const bool selected_encoder=argc==3&&std::string(argv[1])=="--encoder";
+    require(argc==1||reference_only||selected_encoder,"Invalid diagnostic arguments");
+    const std::string encoder=selected_encoder?argv[2]:"libopenh264";
+    require(encoder=="libopenh264"||encoder=="h264_vaapi","Unsupported diagnostic encoder");
+    auto run=[&](int lead,double expected) {
+      Json config={{"source",{{"kind","fixture"},{"url",path.string()}}},{"width",width},{"height",height},
+        {"fps",fps},{"bitrate",8000000},{"encoder",encoder},{"audio",true},{"deinterlace",true},{"latency_ms",lead}};
+      measure(config,expected);
+    };
     make_fixture(path);
     reference(path,0);
-    if(!reference_only)for(int lead:{500,1500})measure(path,lead,0);
+    if(!reference_only)for(int lead:{500,1500})run(lead,0);
     // Measurement control: move the waveform without changing its timestamps.
     // Equal track endpoints must not hide 75 ms of incorrect source content.
     make_fixture(path,75);reference(path,75);
-    if(!reference_only)measure(path,500,75);
+    if(!reference_only)run(500,75);
     std::filesystem::remove(path);return 0;
   } catch(const std::exception &e) {
     std::filesystem::remove(path);std::cerr<<e.what()<<'\n';return 1;

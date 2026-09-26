@@ -60,6 +60,7 @@ COPY --from=build /usr/local/lib/ /usr/local/lib/
 COPY --from=build /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
 COPY --from=build /opt/app/build/airplayvideo-engine /usr/local/bin/
 COPY --from=build /opt/app/build/measure-sync /usr/local/bin/airplayvideo-measure-sync
+COPY --from=build /opt/app/build/sync-content-tests /usr/local/bin/airplayvideo-sync-probe
 COPY --from=build /opt/sources/ffmpeg.tar.xz /opt/sources/openh264.tar.gz /opt/sources/ffmpeg-buildconf.txt /opt/dependency-sources/
 COPY vendor/pair_ap/LICENSE /opt/licenses/pair_ap-MIT.txt
 COPY LICENSE /opt/licenses/AirplayVideo-MIT.txt
@@ -74,5 +75,5 @@ RUN ldconfig && dpkg-query -W > /opt/dependency-sources/debian-packages.txt
 WORKDIR /opt/airplayvideo
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 EXPOSE 8099 18200-18215/udp
-LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.7"
+LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.8"
 CMD ["python3", "-m", "service.main"]

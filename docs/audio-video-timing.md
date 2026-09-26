@@ -117,3 +117,34 @@ Modern RTP connections explicitly select the stream encryption key; the sender
 reads RTP and RTCP ports from the returned connection dictionaries, with legacy
 port fields supported for older receivers. Timing reports identify the selected
 connection layout. This changes negotiation without adding a buffer or offset.
+
+## Measure the installed container
+
+In Playback, expand **Troubleshoot audio and video sync**. Stop playback and close
+its browser, then choose **Measure sync without a TV**. The job uses the saved
+encoder at 1080p30, tests 500/1500 ms playback buffers and a deliberately 75 ms late
+control, and independently decodes both capture content and AirPlay packet formats.
+It also plays an independently decoded H.264/AAC reference through an isolated,
+sandboxed Chrome profile on the container's own X11/Pulse display. Browser results
+are measurements rather than an assertion that browser rendering is sample exact.
+
+**Measure sync and test selected TVs** adds a 15-second flash/beep trial after the
+local stages. It captures the same source while sending, retains bounded receiver
+telemetry, and stops automatically. The minimum send margin is the time remaining
+until the requested presentation deadline after a sender socket write completes.
+A positive margin does not prove network arrival or physical rendering. Audio and
+video use the existing shared clock; this feature introduces no timing correction.
+
+Only generated media is captured by this job. Temporary media/profile files are
+removed at completion/cancellation; the last numeric JSON report remains private
+through authenticated ingress. Existing recordings, pairings, browser sign-ins and
+settings are preserved. Start is exclusive with playback, capture and setup changes;
+Cancel measurement and Stop all terminate the job. An interrupted report remains
+identified as interrupted after restart. The API is `POST api/actions/measure_sync`
+with an optional `receivers` array of saved IDs; omit it for no TV. Download the last
+report with `GET api/sync-report`. Requests use the ordinary ingress/header boundary.
+
+The software tests do not observe photons or speaker output. To measure that final
+boundary, record the known pattern with a camera and microphone sharing a timeline,
+account for the recorder's own A/V offset and microphone distance, and state the
+frame/sample resolution. Do not derive a per-TV offset from protocol acknowledgments.

@@ -366,6 +366,15 @@ function renderUsage(){
 }
 
 function renderRecordings(){
+  const diagnostic=state.diagnostics||{}, report=diagnostic.report;
+  $('syncStatus').textContent=report?(diagnostic.active?report.stage+'…':report.status==='complete'?'Measurement complete. Positive values mean audio is late; negative values mean audio is early.':report.error||'Measurement '+report.status):'';
+  $('syncDownload').hidden=!report;
+  const stages=report?.stages||{}, results=[];
+  for(const [key,label] of [['browser_500','Browser · 500 ms buffer'],['browser_1500','Browser · 1500 ms buffer'],['during_delivery','Browser while sending to TVs']]){
+    const entry=stages[key]?.[0], offset=(entry?.capture||entry)?.audio_minus_video_ms;
+    if(offset)results.push(`<p>${label}: <strong>${offset.median.toFixed(2)} ms</strong> median (${offset.min.toFixed(2)} to ${offset.max.toFixed(2)} ms).</p>`);
+  }
+  stableMarkup($('syncResults'),results.join(''));
   const recordings=state.recordings||{items:[]};
   $('recordCapture').disabled=busy||!!recordings.active;
   $('recordingStatus').textContent=recordings.active?'Recording… Playback can continue.':'';
@@ -409,16 +418,21 @@ function browserKindChanged(){
 
 function updateButtons(){
   if(!state)return;
-  $('recordCapture').disabled=busy||!!state.recordings?.active;
-  $('play').disabled=busy||!chosenTVs.size||!state.setup.complete;
+  const measuring=!!state.diagnostics?.active;
+  const unavailable=busy||measuring||!!state.recordings?.active||state.runtime.browser_open||!!state.runtime.targets.length||['preparing','connecting'].includes(state.runtime.phase)||!state.setup.complete;
+  $('measureSync').disabled=unavailable;
+  $('measureSyncTV').disabled=unavailable||!chosenTVs.size;
+  $('cancelSync').hidden=!measuring;
+  $('recordCapture').disabled=busy||measuring||!!state.recordings?.active;
+  $('play').disabled=busy||measuring||!chosenTVs.size||!state.setup.complete;
   $('play').textContent=busy&&busyAction==='play'?'Starting…':'Play on selected TVs';
   const names = state.receivers.filter(receiver=>chosenTVs.has(receiver.id)).map(receiver=>receiver.name);
   $('selectionHint').textContent = names.length ? 'Play on: ' + names.join(', ') : 'Choose one or more TVs above.';
   automationExample();
-  $('openBrowser').disabled=busy;
+  $('openBrowser').disabled=busy||measuring;
   $('openBrowser').textContent=busy&&busyAction==='open_browser'?'Opening browser…':'Open browser';
   $('closeBrowser').textContent=busy&&busyAction==='close_browser'?'Closing browser…':'Close browser';
-  $('stopAll').disabled=!(busy&&busyAction==='play')&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
+  $('stopAll').disabled=!measuring&&!(busy&&busyAction==='play')&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
   if (draft && !$('wizard').hidden) settingsStatus();
 }
 
@@ -462,6 +476,9 @@ $('copyAutomation').onclick=async()=>{
 };
 $('stopAll').onclick=()=>act('stop',{},true);
 $('recordCapture').onclick=()=>act('record',{...requestSource(),seconds:15});
+$('measureSync').onclick=()=>act('measure_sync');
+$('measureSyncTV').onclick=()=>act('measure_sync',{receivers:[...chosenTVs]});
+$('cancelSync').onclick=()=>act('cancel_sync',{},true);
 $('openBrowser').onclick=()=>act('open_browser',requestSource());
 $('closeBrowser').onclick=()=>act('close_browser');
 $('browserKind').onchange=browserKindChanged;

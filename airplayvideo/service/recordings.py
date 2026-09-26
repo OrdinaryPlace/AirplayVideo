@@ -37,6 +37,7 @@ class Recordings:
     async def start(self, request):
         c = self.controller
         async with c.lock:
+            c.require_no_diagnostic()
             check(self.current is None, 'A recording is already running')
             check(c.pending is None, 'Wait for playback to finish starting')
             check(len(list(self.root.glob('*.json'))) < 8, 'Download and remove an older recording first (eight retained samples maximum)')

@@ -22,3 +22,5 @@ jobs:
           node --input-type=module --check < airplayvideo/web/app.js
           node --check airplayvideo/companion/background.js
           node --check airplayvideo/companion/youtube.js
+      - name: Measure installed-style browser capture and packet timing
+        run: docker run --rm --cap-add SYS_ADMIN --shm-size=256m -e PYTHONPATH=/opt/airplayvideo airplayvideo:test python3 tests/diagnostic-container.py
