@@ -369,3 +369,60 @@ async def test_finished_session_retains_full_final_drain_near_total_deadline(tmp
 def test_session_bounds_are_required(tmp_path, kwargs):
     with pytest.raises(StreamError):
         session(tmp_path, **kwargs)
+
+
+@pytest.mark.asyncio
+async def test_managed_failure_stops_producer_but_retains_origin_files_until_owner_close(tmp_path):
+    stream = session(tmp_path, managed_lifecycle=True, disk_limit=16 * 1024 * 1024)
+    stream.directory = tmp_path / 'native-stream-managed'
+    stream.directory.mkdir()
+    with (stream.directory / 'segment-00000000.m4s.tmp').open('wb') as output:
+        output.truncate(17 * 1024 * 1024)
+    stream._started = time.monotonic()
+    stream.process = await stream._spawn([sys.executable, '-c', 'import time;time.sleep(30)'])
+    stream._monitor_task = asyncio.create_task(stream._monitor())
+    await asyncio.wait_for(stream._monitor_task, 3)
+    assert stream.status['state'] == 'failed' and stream.process.returncode is not None
+    assert stream.directory.exists() and not stream.closed.is_set()
+    assert stream._close_task is None
+    await stream.close()
+    assert not stream.directory.exists() and stream.closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_managed_complete_source_leaves_final_buffer_for_session_owner(tmp_path, monkeypatch):
+    stream = session(tmp_path, managed_lifecycle=True)
+    stream.directory = tmp_path / 'native-stream-managed'
+    write_playlist(stream.directory, end=True)
+    stream.expected_duration = 4
+    stream._started = time.monotonic()
+    stream.process = await stream._spawn([sys.executable, '-c', 'pass'])
+    await stream.process.wait()
+    async def verify(name):
+        pass
+    monkeypatch.setattr(stream, '_verify_first_segment', verify)
+    stream._monitor_task = asyncio.create_task(stream._monitor())
+    await asyncio.wait_for(stream._monitor_task, 2)
+    assert stream.status['finished'] and stream.status['ready'] and stream.directory.exists()
+    assert not stream.closed.is_set() and stream._close_task is None
+    await stream.close()
+    assert not stream.directory.exists()
+
+
+@pytest.mark.asyncio
+async def test_managed_failure_close_cannot_interrupt_kill_and_reap(tmp_path):
+    stream = session(tmp_path, managed_lifecycle=True, disk_limit=16 * 1024 * 1024)
+    stream.directory = tmp_path / 'native-stream-managed'
+    stream.directory.mkdir()
+    with (stream.directory / 'segment-00000000.m4s.tmp').open('wb') as output:
+        output.truncate(17 * 1024 * 1024)
+    stream._started = time.monotonic()
+    stream.process = await stream._spawn([
+        sys.executable, '-c', "import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);print('ready',flush=True);time.sleep(30)"],
+        stdout=asyncio.subprocess.PIPE)
+    assert await stream.process.stdout.readline() == b'ready\n'
+    stream._monitor_task = asyncio.create_task(stream._monitor())
+    await asyncio.wait_for(stream._finished.wait(), 1)
+    await asyncio.wait_for(stream.close(), 5)
+    assert stream.process.returncode is not None and not stream._owned_groups
+    assert stream.closed.is_set() and not stream.directory.exists()

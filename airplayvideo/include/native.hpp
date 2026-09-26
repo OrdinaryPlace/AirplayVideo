@@ -2,14 +2,26 @@
 #include "lab.hpp"
 
 namespace lab {
+enum class NativePurpose { Diagnostic, Playback };
+struct NativeRunOptions {
+  int seconds;
+  NativePurpose purpose;
+};
+// Private engine configuration. Missing purpose retains the diagnostic limit;
+// only explicit "playback" accepts a session longer than 600 seconds.
+NativeRunOptions native_run_options(const Json &request);
+
 // Experimental receiver-owned URL playback. The caller owns the scoped HTTP
 // origin and authorizes this exact receiver. Credentials stay in memory. This
 // does not discover, pair, fetch YouTube, transcode, or confirm picture/audio.
-// Maximum trial duration is 1..600 seconds; connect and cleanup add bounded
-// overhead. The owning process must retain an outer termination/reaping bound.
+// Diagnostic duration is 1..600 seconds. Explicit Playback permits 1..14400
+// seconds. Completion means the configured lifetime ended, never receiver EOF.
+// Connect and cleanup add bounded overhead; the owner must retain an outer
+// termination/reaping bound and stop on its own source/drain completion.
 // PTP metadata is negotiated; this is not a general IEEE-1588 clock sender.
 void native_play(const Credentials &, const std::string &media_url,
-                 std::atomic<bool> &stop, const Note &, int max_seconds = 120);
+                 std::atomic<bool> &stop, const Note &, int max_seconds = 120,
+                 NativePurpose purpose = NativePurpose::Diagnostic);
 
 struct NativeIdentity {
   std::string local_ip, receiver_id, session_id, correlation_id, sender_mac,
@@ -57,5 +69,6 @@ public:
   virtual void close() noexcept = 0;
 };
 void native_session(NativeTransport &, const std::string &media_url,
-                    std::atomic<bool> &stop, const Note &, int max_seconds);
+                    std::atomic<bool> &stop, const Note &, int max_seconds,
+                    NativePurpose purpose = NativePurpose::Diagnostic);
 } // namespace lab

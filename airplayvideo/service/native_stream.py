@@ -225,19 +225,23 @@ def playlist_durations(directory):
 
 class NativeHLSStream:
     def __init__(self, *, output_dir, ffmpeg, ffprobe, startup_timeout=120, session_timeout=14400,
-                 disk_limit=512 * 1024 * 1024, video_encoder=None, vaapi_device=None, allow_gpl=False):
+                 disk_limit=512 * 1024 * 1024, video_encoder=None, vaapi_device=None, allow_gpl=False,
+                 managed_lifecycle=False):
         if not 10 <= startup_timeout <= 180 or not 30 <= session_timeout <= 14400:
             raise StreamError("Choose bounded startup and session timeouts")
         if isinstance(disk_limit, bool) or not isinstance(disk_limit, int) or not 16 * 1024 * 1024 <= disk_limit <= 2 * 1024**3:
             raise StreamError("Choose a session disk cap between 16 MiB and 2 GiB")
         if not isinstance(allow_gpl, bool):
             raise StreamError("The experimental GPL encoder choice must be an explicit boolean")
+        if not isinstance(managed_lifecycle, bool):
+            raise StreamError("The managed lifecycle choice must be an explicit boolean")
         self.root = Path(output_dir).resolve()
         if not self.root.is_dir():
             raise StreamError("Choose an existing media output directory")
         self.ffmpeg, self.ffprobe = _binary(ffmpeg), _binary(ffprobe)
         self.startup_timeout, self.session_timeout, self.disk_limit = startup_timeout, session_timeout, disk_limit
         self.requested_encoder, self.vaapi_device, self.allow_gpl = video_encoder, vaapi_device, allow_gpl
+        self.managed_lifecycle = managed_lifecycle
         self.directory = None
         self.plan = None
         self.encoder = None
@@ -245,6 +249,7 @@ class NativeHLSStream:
         self._jobs = set()
         self._spawning = set()
         self._owned_groups = set()
+        self._stopping = {}
         self._startup_task = self._monitor_task = self._verification_task = self._close_task = None
         self._ready = asyncio.Event()
         self._finished = asyncio.Event()
@@ -274,9 +279,18 @@ class NativeHLSStream:
                 "prepared_duration_seconds": float(self._prepared_duration)}
 
     async def _stop_process(self, process):
-        if process.pid not in self._owned_groups:
+        task = self._stopping.get(process.pid)
+        if task is None and process.pid not in self._owned_groups:
             # Never signal a process group that this session did not create.
             return
+        if task is None:
+            task = asyncio.create_task(self._terminate_process(process))
+            self._stopping[process.pid] = task
+        # Failure monitoring can be cancelled by owner cleanup halfway through
+        # SIGTERM grace. Both callers must await the same final kill/reap.
+        await asyncio.shield(task)
+
+    async def _terminate_process(self, process):
         try:
             with suppress(ProcessLookupError):
                 os.killpg(process.pid, signal.SIGTERM)
@@ -548,6 +562,10 @@ class NativeHLSStream:
                     if self._ready.is_set():
                         self._state = "finished"
                         self._finished.set()
+                        if self.managed_lifecycle:
+                            # The receiver/origin owner drains playback, then
+                            # closes us last so served files are not removed early.
+                            return
                     completed_at = completed_at or time.monotonic()
                     # Keep final segments available while the receiver drains
                     # its buffer, then release this generated session only.
@@ -563,7 +581,8 @@ class NativeHLSStream:
             self._ready.set()
             self._finished.set()
             await self._stop_process(self.process)
-            asyncio.create_task(self.close())
+            if not self.managed_lifecycle:
+                asyncio.create_task(self.close())
 
     async def wait_finished(self):
         await self._finished.wait()

@@ -1,7 +1,8 @@
 """Bounded native playback worker using the engine's existing saved pairing.
 
-The Python service never reads pairing keys. This adapter is experimental and
-is not selected by the production controller until receiver playback is proven.
+The Python service never reads pairing keys. Diagnostic sessions default to a
+ten-minute maximum; daily playback must explicitly select purpose="playback".
+Lifetime completion is not receiver EOF or proof of displayed pictures/audio.
 """
 from __future__ import annotations
 
@@ -12,12 +13,17 @@ import json
 import os
 from pathlib import Path
 import re
+import signal
 import tempfile
 from urllib.parse import urlsplit
 
 
 class NativeEngineError(RuntimeError):
     """Fixed, safe errors: never copy child output or input URLs into logs."""
+
+
+class _StoppedDuringStart(NativeEngineError):
+    """The owner closed a worker while its subprocess was being adopted."""
 
 
 def validate_media_url(value):
@@ -38,21 +44,28 @@ def validate_media_url(value):
 class NativeEnginePlayer:
     def __init__(self, root, receiver_id, media_url, *, seconds=120,
                  engine='airplayvideo-engine', on_event=None, close_timeout=5,
-                 receiver_address=None):
+                 receiver_address=None, purpose='diagnostic'):
         if not isinstance(receiver_id, str) or not re.fullmatch(r'[0-9a-f]{32}', receiver_id):
             raise NativeEngineError('Invalid saved receiver identifier')
-        if type(seconds) is not int or not 1 <= seconds <= 600:
-            raise NativeEngineError('Choose a native trial of 1 to 600 seconds')
-        if not 0 < close_timeout <= 20:
+        if not isinstance(purpose, str) or purpose not in ('diagnostic', 'playback'):
+            raise NativeEngineError('Choose a valid native session purpose')
+        limit = 14400 if purpose == 'playback' else 600
+        if type(seconds) is not int or not 1 <= seconds <= limit:
+            raise NativeEngineError('Choose a native session duration within its purpose limit')
+        if (isinstance(close_timeout, bool) or not isinstance(close_timeout, (int, float))
+                or not 0 < close_timeout <= 20):
             raise NativeEngineError('Invalid native worker close timeout')
         self.root, self.receiver_id = Path(root), receiver_id
         self.media_url = validate_media_url(media_url)
-        self.seconds, self.engine = seconds, engine
+        self.seconds, self.engine, self.purpose = seconds, engine, purpose
         self.on_event, self.close_timeout = on_event, close_timeout
         self.process = self._reader = self._watchdog = None
         self._launching = None
         self._close_task = self._config = None
         self._started = False
+        self._stop_requested = False
+        self._finished_status = None
+        self._sent_signals = set()
         self.closed = asyncio.Event()
         self.events = []
         self.failed = False
@@ -61,6 +74,13 @@ class NativeEnginePlayer:
                                      if receiver_address is not None else None)
         except (ValueError, TypeError):
             raise NativeEngineError('Invalid selected receiver address') from None
+
+    @property
+    def completion(self):
+        """Local reaped-worker outcome, never receiver playback/EOF evidence."""
+        if not self.closed.is_set():
+            return None
+        return 'failed' if self.failed else 'duration' if self._finished_status == 200 else 'cancelled'
 
     def _event(self, payload):
         # Receiver-supplied bodies and arbitrary exception strings never cross
@@ -82,12 +102,18 @@ class NativeEnginePlayer:
                 if type(details.get(key)) is int and 0 <= details[key] <= 86400000:
                     safe_details[key] = details[key]
             safe = {'event': event, 'details': safe_details}
+            if stage == 'finished' and safe_details.get('status') in (0, 200):
+                self._finished_status = safe_details['status']
         else:
             return
         self.events.append(safe)
         self.events[:] = self.events[-256:]
         if self.on_event:
-            self.on_event(safe)
+            try:
+                self.on_event(safe)
+            except BaseException:
+                # Diagnostics cannot abandon the worker or alter its outcome.
+                pass
 
     async def start(self):
         if self._started or self._close_task:
@@ -100,7 +126,7 @@ class NativeEnginePlayer:
         try:
             with os.fdopen(descriptor, 'w') as config:
                 request = {'receiver_id': self.receiver_id, 'media_url': self.media_url,
-                           'seconds': self.seconds}
+                           'seconds': self.seconds, 'purpose': self.purpose}
                 if self.receiver_address is not None:
                     request['receiver_address'] = str(ipaddress.IPv4Address(self.receiver_address))
                 json.dump(request, config)
@@ -120,7 +146,7 @@ class NativeEnginePlayer:
                 raise
             if self._close_task is not None:
                 await self.close()
-                raise NativeEngineError('Native worker stopped during startup')
+                raise _StoppedDuringStart('Native worker stopped during startup')
             self._reader = asyncio.create_task(self._read())
             # Bounds the whole worker, including setup and teardown. Native
             # transport also bounds requests; kill/reap is the final boundary.
@@ -128,7 +154,11 @@ class NativeEnginePlayer:
         except asyncio.CancelledError:
             await self.close()
             raise
+        except _StoppedDuringStart:
+            await self.close()
+            raise
         except BaseException:
+            self.failed = True
             await self.close()
             raise NativeEngineError('Native worker could not start') from None
         return self
@@ -140,13 +170,21 @@ class NativeEnginePlayer:
                     self._event(json.loads(line))
                 except (ValueError, TypeError):
                     continue
-            if await self.process.wait() != 0:
-                self.failed = True
+            returncode = await self.process.wait()
+            self._record_exit(returncode)
         except (ValueError, OSError):
-            self.failed = True
+            if not self._stop_requested:
+                self.failed = True
         finally:
             # Run cleanup separately so it can await/reap this worker task.
             asyncio.create_task(self.close())
+
+    def _record_exit(self, returncode):
+        expected_signal = (self._stop_requested and returncode < 0
+                           and -returncode in self._sent_signals)
+        if ((returncode != 0 and not expected_signal)
+                or (returncode == 0 and not self._stop_requested and self._finished_status is None)):
+            self.failed = True
 
     async def _deadline(self):
         await asyncio.sleep(self.seconds + 30)
@@ -159,6 +197,7 @@ class NativeEnginePlayer:
             raise NativeEngineError('Native playback failed; inspect safe stage events')
 
     async def close(self):
+        self._stop_requested = True
         if self._close_task is None:
             self._close_task = asyncio.create_task(self._cleanup())
         await asyncio.shield(self._close_task)
@@ -176,12 +215,17 @@ class NativeEnginePlayer:
                 if self.process.returncode is None:
                     with suppress(ProcessLookupError):
                         self.process.terminate()
+                        self._sent_signals.add(signal.SIGTERM)
                 try:
                     await asyncio.wait_for(self.process.wait(), self.close_timeout)
                 except asyncio.TimeoutError:
                     with suppress(ProcessLookupError):
                         self.process.kill()
+                        self._sent_signals.add(signal.SIGKILL)
                     await self.process.wait()
+                # Do not let reader cancellation hide an actual engine error
+                # that raced with our requested stop.
+                self._record_exit(self.process.returncode)
             if self._reader:
                 self._reader.cancel()
                 with suppress(asyncio.CancelledError):

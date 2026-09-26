@@ -337,7 +337,7 @@ $('pairDialog').addEventListener('cancel',event=>{event.preventDefault();cancelP
 function requestSource(){
   if(mode==='hdhomerun')return {mode,channel:$('channelSelect').value};
   if(mode==='generated')return {mode,generated:readGenerated('generated')};
-  return {mode:'browser',browser_source:$('browserKind').value,page:$('pageSelect').value,url:$('sourceUrl').value.trim()};
+  return {mode:'browser',browser_source:$('browserKind').value,page:$('pageSelect').value,url:$('sourceUrl').value.trim(),delivery:$('youtubeDelivery').value,native_resolution:$('nativeQuality').value};
 }
 
 function renderChannels(){
@@ -376,6 +376,15 @@ function renderUsage(){
   const label={idle:'Idle',preparing:'Preparing',connecting:'Connecting',playing:'Sending',error:'Needs attention'}[runtime.phase]||runtime.phase;
   $('runtimeBadge').textContent=label;
   $('nowPlaying').textContent=runtime.source?`${runtime.source.label} · ${runtime.targets.length} TV${runtime.targets.length===1?'':'s'}`:'Choose a source and one or more TVs.';
+  const native=runtime.native, quality=native?.quality;
+  $('nativePlaybackStatus').hidden=!native;
+  $('nativePlaybackReport').hidden=!native;
+  if(native){
+    const phase={preparing:'Preparing direct video',ready:'Direct video ready',connecting:'Connecting direct video',playing:'Sending direct video',completed:'Direct video finished',stopped:'Direct video stopped',failed:'Direct video needs attention'}[native.phase]||'Direct video';
+    const parts=String(quality?.fps||'').split('/').map(Number), fps=parts[0]&&parts[1]?parts[0]/parts[1]:parts[0];
+    const detail=quality?.height?`${quality.width} × ${quality.height} · ${Number.isFinite(fps)?Number(fps.toFixed(3)):'?'} fps · video ${quality.copy_video?'copied':'converted'} · audio ${quality.copy_audio?'copied':'converted'}`:'';
+    $('nativePlaybackStatus').textContent=[phase,detail,native.error].filter(Boolean).join(' · ');
+  }
   if(runtime.error&&!$('error').textContent)message(runtime.error);
   stableMarkup($('tvList'),state.receivers.length?state.receivers.map(receiver=>{
     const status=runtime.receivers[receiver.id]||{};
@@ -443,6 +452,10 @@ function browserKindChanged(){
   $('savedPageFields').hidden=kind!=='page';$('urlFields').hidden=!['youtube','url'].includes(kind);$('watchLaterHelp').hidden=kind!=='watch_later';
   $('urlLabel').textContent=kind==='youtube'?'YouTube video link':'Web address';
   $('sourceUrl').placeholder=kind==='youtube'?'https://www.youtube.com/watch?v=…':'https://…';
+  $('youtubePlayback').hidden=kind!=='youtube';
+  const direct=kind==='youtube'&&$('youtubeDelivery').value==='native';
+  $('nativeQualityFields').hidden=!direct;
+  $('openBrowser').hidden=direct;
   updateButtons();
 }
 
@@ -454,11 +467,13 @@ function updateButtons(){
   $('measureSyncTV').disabled=unavailable||!chosenTVs.size;
   $('testNativeVideo').disabled=unavailable||chosenTVs.size!==1;
   $('cancelSync').hidden=!measuring;
-  $('recordCapture').disabled=busy||measuring||!!state.recordings?.active;
-  $('play').disabled=busy||measuring||!chosenTVs.size||!state.setup.complete;
+  const direct=mode==='browser'&&$('browserKind').value==='youtube'&&$('youtubeDelivery').value==='native';
+  $('tvSelectionHelp').textContent=direct?'Choose one TV for direct video.':'The same source plays on every selected TV.';
+  $('recordCapture').disabled=busy||measuring||!!state.recordings?.active||state.runtime.source?.kind==='youtube';
+  $('play').disabled=busy||measuring||!chosenTVs.size||!state.setup.complete||(direct&&chosenTVs.size!==1);
   $('play').textContent=busy&&busyAction==='play'?'Starting…':'Play on selected TVs';
   const names = state.receivers.filter(receiver=>chosenTVs.has(receiver.id)).map(receiver=>receiver.name);
-  $('selectionHint').textContent = names.length ? 'Play on: ' + names.join(', ') : 'Choose one or more TVs above.';
+  $('selectionHint').textContent = direct&&names.length!==1?'Choose exactly one TV above.':names.length ? 'Play on: ' + names.join(', ') : 'Choose one or more TVs above.';
   automationExample();
   $('openBrowser').disabled=busy||measuring;
   $('openBrowser').textContent=busy&&busyAction==='open_browser'?'Opening browser…':'Open browser';
@@ -514,6 +529,7 @@ $('cancelSync').onclick=()=>act('cancel_sync',{},true);
 $('openBrowser').onclick=()=>act('open_browser',requestSource());
 $('closeBrowser').onclick=()=>act('close_browser');
 $('browserKind').onchange=browserKindChanged;
+$('youtubeDelivery').onchange=browserKindChanged;
 $('channelSearch').oninput=renderChannels;$('favoritesOnly').onchange=renderChannels;
 $('channelSelect').onchange=()=>{$('favorite').textContent=state.favorites.includes($('channelSelect').value)?'★':'☆';};
 $('favorite').onclick=()=>act('favorite',{channel:$('channelSelect').value});

@@ -7,9 +7,11 @@ import os
 from pathlib import Path
 import signal
 import uuid
+from urllib.parse import parse_qs, urlsplit
 import aiohttp
 from .browser import child_environment
 from .model import UserError, check, atomic_json, browser_url, youtube_url, identifier, validate_generated
+from .native_session import NativeSession
 
 
 class PairingEngine:
@@ -144,6 +146,8 @@ class Controller:
         self.store, self.pairing, self.browser, self.channels = store, pairing, browser, channels
         self.stream = None
         self.pending = None
+        self.pending_targets = set()
+        self.native_report = None
         self.generation = 0
         self.lock = asyncio.Lock()
         self.targets = set()
@@ -155,6 +159,7 @@ class Controller:
         self.changed = lambda: None
         self.capabilities = {"encoders": ["libopenh264"]}
         self.cleanup_tasks = set()
+        self.retiring = {}
         self.recordings = None
         self.diagnostics = None
 
@@ -162,10 +167,25 @@ class Controller:
         check(not self.diagnostics or not self.diagnostics.active, "Wait for the sync measurement to finish or cancel it")
 
     def status(self):
-        return {"phase": self.phase, "source": self.source, "targets": sorted(self.targets), "receivers": self.receivers, "error": self.error, "metrics": self.metrics, "browser_open": self.browser.running}
+        return {"phase": self.phase, "source": self.source, "targets": sorted(self.targets), "receivers": self.receivers, "error": self.error, "metrics": self.metrics, "native": self.native_report, "browser_open": self.browser.running}
 
     def notify(self):
         self.changed()
+
+    def retire(self, stream):
+        """Keep teardown owned even if its caller is cancelled."""
+        if stream not in self.retiring:
+            task = asyncio.create_task(stream.close())
+            self.retiring[stream] = task
+        return self.retiring[stream]
+
+    async def finish_teardown(self):
+        # A late TEARDOWN from Stop must not reach a newly connected session.
+        tasks = list(self.retiring.items())
+        for stream, task in tasks:
+            await asyncio.shield(task)
+            if self.retiring.get(stream) is task:
+                del self.retiring[stream]
 
     def require_mode(self, mode):
         setup = self.store.data["setup"]
@@ -244,6 +264,15 @@ class Controller:
         kind = request.get("browser_source", "page")
         if kind == "youtube":
             url, label = youtube_url(request.get("url")), "YouTube video"
+            delivery = request.get("delivery", "native")
+            check(delivery in {"native", "browser"}, "Choose direct video or browser playback")
+            if delivery == "native":
+                limit = request.get("native_resolution", "best")
+                check(limit in {"best", "1080p", "720p"}, "Choose a direct video quality")
+                check(int(parse_qs(urlsplit(url).query).get("t", ["0"])[0]) == 0,
+                      "Direct video starts from the beginning. Remove the start time or choose Browser playback")
+                return {"kind": "youtube", "key": url + ":" + limit, "label": label,
+                        "url": url, "browser_source": kind, "native_resolution": limit}, {}
         elif kind == "watch_later":
             url, label = "https://www.youtube.com/playlist?list=WL", "Watch Later"
         elif kind == "page":
@@ -259,7 +288,7 @@ class Controller:
         async with self.lock:
             self.require_no_diagnostic()
             self.require_mode("browser")
-            request = {**request, "mode": "browser"}
+            request = {**request, "mode": "browser", "delivery": "browser"}
             source, _ = self.requested_source(request)
             await self.browser.navigate(source["url"], self.store.data["setup"], source["browser_source"] == "youtube", source["browser_source"] == "watch_later")
             if self.source and self.source["kind"] == "browser":
@@ -277,9 +306,18 @@ class Controller:
             if add:
                 target |= self.targets
             source, input_config = self.requested_source(request)
+            if source["kind"] == "youtube":
+                check(len(target) == 1, "Direct YouTube video currently plays on one TV at a time")
+                check(self.store.data["setup"]["audio"]["enabled"],
+                      "Direct video currently includes sound. Enable sound in Settings or choose Browser playback")
+                check(not self.recordings or not self.recordings.current,
+                      "Wait for the recording to finish before starting direct video")
             self.generation += 1
             generation = self.generation
             self.error = ""
+            if source["kind"] == "youtube":
+                await self.play_native(source, target, generation)
+                return
             same_source = self.stream and self.source and (self.source["kind"], self.source["key"]) == (source["kind"], source["key"])
             pending = None
             try:
@@ -301,12 +339,20 @@ class Controller:
                     environment = dict(self.browser.environment) if source["kind"] == "browser" else child_environment()
                     pending = Stream(self.store.root, self.source_config(input_config), environment, self.event)
                     self.pending = pending
+                    self.pending_targets = target.copy()
                     await pending.start()
                     check(generation == self.generation and self.pending is pending, "Playback was cancelled")
                     if self.stream:
-                        await self.stream.close()
+                        old, self.stream = self.stream, None
+                        self.targets.clear()
+                        self.receivers.clear()
+                        self.source = None
+                        self.metrics.clear()
+                        self.retire(old)
+                    await self.finish_teardown()
                     check(generation == self.generation, "Playback was cancelled")
                     self.stream, self.pending = pending, None
+                    self.pending_targets.clear()
                     self.targets.clear()
                     self.receivers.clear()
                     self.metrics.clear()
@@ -324,10 +370,92 @@ class Controller:
                     await pending.close()
                     if self.pending is pending:
                         self.pending = None
+                        self.pending_targets.clear()
                 if generation == self.generation:
                     self.phase = "playing" if self.stream and self.targets else "idle"
                 self.notify()
                 raise
+
+    def native_event(self, session, status):
+        if session is not self.stream and session is not self.pending:
+            return
+        self.native_report = status
+        self.metrics = {"native": status}
+        self.notify()
+
+    async def play_native(self, source, target, generation):
+        """Prepare before replacing playback; receiver commands start after teardown."""
+        receiver_id = next(iter(target))
+        receiver = dict(self.store.receiver(receiver_id))
+        limit = source["native_resolution"]
+        config = {"max_resolution": None if limit == "best" else limit,
+                  "vaapi_device": "/dev/dri/renderD128"}
+        pending = NativeSession(self.store.root, receiver, config=config,
+                                on_event=lambda status: self.native_event(pending, status))
+        self.pending = pending
+        self.pending_targets = target.copy()
+        self.phase = "preparing"
+        self.notify()
+        replaced = False
+        try:
+            await pending.prepare(source["url"])
+            check(generation == self.generation and self.pending is pending, "Playback was cancelled")
+            old, self.stream = self.stream, None
+            replaced = True
+            if old:
+                self.retire(old)
+            await self.finish_teardown()
+            check(generation == self.generation and self.pending is pending, "Playback was cancelled")
+            await self.browser.close()
+            check(generation == self.generation and self.pending is pending, "Playback was cancelled")
+            self.source = source
+            self.targets = target.copy()
+            self.receivers = {receiver_id: {"state": "connecting"}}
+            self.phase = "connecting"
+            self.notify()
+            await pending.connect()
+            check(generation == self.generation and self.pending is pending, "Playback was cancelled")
+            self.stream, self.pending = pending, None
+            self.pending_targets.clear()
+            self.phase = "playing"
+            self.receivers = {receiver_id: {"state": "streaming"}}
+            self.native_report = pending.status
+            self.metrics = {"native": self.native_report}
+            task = asyncio.create_task(self.watch_native(pending))
+            self.cleanup_tasks.add(task)
+            task.add_done_callback(self.cleanup_tasks.discard)
+            self.notify()
+        except BaseException as exc:
+            await pending.close()
+            self.native_report = pending.status
+            if self.pending is pending:
+                self.pending = None
+                self.pending_targets.clear()
+            if generation == self.generation:
+                if isinstance(exc, Exception):
+                    self.error = str(exc) if isinstance(exc, UserError) else "Direct video could not start"
+                if replaced:
+                    self.stream = None
+                    self.source = None
+                    self.targets.clear()
+                    self.receivers.clear()
+                self.phase = "playing" if self.stream and self.targets else "idle"
+            self.notify()
+            raise
+
+    async def watch_native(self, session):
+        result = await session.wait()
+        if self.stream is not session:
+            return
+        self.stream = None
+        self.native_report = result
+        self.error = result.get("error") or ""
+        self.phase = "error" if self.error else "idle"
+        self.targets.clear()
+        self.receivers.clear()
+        self.source = None
+        self.metrics.clear()
+        self.notify()
 
     async def stop(self, receiver_id=None):
         # Deliberately does not acquire the start lock: Stop cancels decoder warmup.
@@ -336,28 +464,49 @@ class Controller:
                 await self.diagnostics.close()
         if receiver_id:
             self.store.receiver(receiver_id)
-            if receiver_id not in self.targets:
+            if receiver_id not in self.targets and receiver_id not in self.pending_targets:
                 return
         self.generation += 1
+        generation = self.generation
         pending, self.pending = self.pending, None
-        if pending:
-            await pending.close()
-        if receiver_id:
-            self.store.receiver(receiver_id)
-            if receiver_id in self.targets and len(self.targets) > 1 and self.stream:
-                await self.stream.command({"action": "remove", "id": receiver_id})
+        self.pending_targets.clear()
+        stopping_active = not receiver_id or receiver_id in self.targets
+        if stopping_active and receiver_id and len(self.targets) > 1 and self.stream:
+            active = self.stream
+            if pending:
+                self.retire(pending)
+            await active.command({"action": "remove", "id": receiver_id})
+            if generation == self.generation and self.stream is active:
                 self.targets.discard(receiver_id)
                 self.receivers.pop(receiver_id, None)
                 self.notify()
-                return
-        active, self.stream = self.stream, None
-        self.targets.clear()
+            await self.finish_teardown()
+            return
+        active = self.stream if stopping_active else None
         if active:
-            await active.close()
-        self.receivers.clear()
-        self.source = None
-        self.phase = "idle"
-        self.metrics.clear()
+            self.stream = None
+        if stopping_active:
+            self.targets.clear()
+            self.receivers.clear()
+            self.source = None
+            self.phase = "idle"
+            self.metrics.clear()
+        else:
+            self.phase = "playing" if self.stream and self.targets else "idle"
+        if pending:
+            self.retire(pending)
+        if active:
+            self.retire(active)
+        self.notify()
+        await self.finish_teardown()
+        if generation != self.generation:
+            return
+        if pending:
+            if isinstance(pending, NativeSession):
+                self.native_report = pending.status
+        if active:
+            if isinstance(active, NativeSession):
+                self.native_report = active.status
         self.notify()
 
     async def close_browser(self):

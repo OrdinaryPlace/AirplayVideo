@@ -50,6 +50,76 @@ async def test_hls_ranges_head_mime_and_safe_counters(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_beginning_guard_requests_zero_allows_prefetch_and_tracks_complete_zero(tmp_path):
+    path = directory(tmp_path)
+    (path / 'index.m3u8').write_bytes(b'#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:0\nsegment-00000000.m4s\n')
+    (path / 'segment-00000001.m4s').write_bytes(b'next')
+    origin = await NativeHLSOrigin(path, {'tv': '127.0.0.1'}, bind_address='127.0.0.1',
+                                   require_start_at_beginning=True).start()
+    try:
+        async with aiohttp.ClientSession() as client:
+            async with client.get(origin.url()) as response:
+                assert response.status == 200
+                content = await response.read()
+                assert b'#EXT-X-START:TIME-OFFSET=0.0,PRECISE=YES\n' in content
+                assert int(response.headers['Content-Length']) == len(content)
+            async with client.get(origin.url('segment-00000001.m4s')) as response:
+                assert response.status == 200 and await response.read() == b'next'
+            assert not origin.beginning_fetched
+            async with client.head(origin.url('segment-00000000.m4s')) as response:
+                assert response.status == 200
+            assert not origin.beginning_fetched
+            async with client.get(origin.url('segment-00000000.m4s'), headers={'Range': 'bytes=5-9'}) as response:
+                assert response.status == 206 and await response.read() == b'56789'
+            assert not origin.beginning_fetched
+            async with client.get(origin.url('segment-00000000.m4s'), headers={'Range': 'bytes=0-4'}) as response:
+                assert response.status == 206 and await response.read() == b'01234'
+            assert origin.beginning_fetched and not origin.start_failed
+            temporary = path / 'index.m3u8.tmp'
+            temporary.write_bytes(b'#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\nsegment-00000001.m4s\n')
+            temporary.replace(path / 'index.m3u8')
+            (path / 'segment-00000000.m4s').unlink()
+            async with client.get(origin.url()) as response:
+                assert response.status == 200 and b'SEQUENCE:1' in await response.read()
+            async with client.get(origin.url('segment-00000001.m4s')) as response:
+                assert response.status == 200 and await response.read() == b'next'
+    finally:
+        await origin.close()
+
+
+@pytest.mark.asyncio
+async def test_beginning_guard_fails_when_playlist_already_lost_start(tmp_path):
+    path = directory(tmp_path)
+    (path / 'index.m3u8').write_bytes(b'#EXTM3U\n#EXT-X-MEDIA-SEQUENCE:1\nsegment-00000001.m4s\n')
+    (path / 'segment-00000001.m4s').write_bytes(b'late start')
+    origin = await NativeHLSOrigin(path, {'tv': '127.0.0.1'}, bind_address='127.0.0.1',
+                                   require_start_at_beginning=True).start()
+    try:
+        async with aiohttp.ClientSession() as client:
+            async with client.get(origin.url()) as response:
+                assert response.status == 404
+        assert origin.start_failed and not origin.beginning_fetched
+        assert origin.counters()['receiver']['bytes'] == 0
+    finally:
+        await origin.close()
+
+
+@pytest.mark.asyncio
+async def test_preflight_cannot_unlock_the_receiver_beginning_guard(tmp_path):
+    path = directory(tmp_path)
+    origin = await NativeHLSOrigin(path, {'tv': '192.168.250.10'}, bind_address='127.0.0.1',
+                                   preflight_clients=['127.0.0.1'], require_start_at_beginning=True).start()
+    try:
+        async with aiohttp.ClientSession() as client:
+            async with client.get(origin.url('segment-00000000.m4s')) as response:
+                assert await response.read() == b'0123456789'
+        assert not origin.beginning_fetched and not origin.start_failed
+        assert origin.counters()['receiver']['bytes'] == 0
+    finally:
+        await origin.close()
+
+
+@pytest.mark.asyncio
 async def test_preflight_fetches_never_count_as_receiver_fetches(tmp_path):
     origin = await NativeHLSOrigin(directory(tmp_path), {'tv': '192.168.250.10'}, bind_address='127.0.0.1',
                                    preflight_clients=['127.0.0.1']).start()

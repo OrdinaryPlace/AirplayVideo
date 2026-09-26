@@ -176,7 +176,15 @@ class HomeAssistant:
                 page = value.get("page") if action == "page" else self.store.data["selected_pages"].get(receiver_id)
                 await self.controller.play({"mode": "browser", "browser_source": "page", "page": page, "receivers": [receiver_id]}, add=True)
             elif action in {"youtube", "watch_later"}:
-                await self.controller.play({"mode": "browser", "browser_source": action, "url": value.get("url"), "receivers": [receiver_id]}, add=True)
+                request = {"mode": "browser", "browser_source": action,
+                           "url": value.get("url"), "receivers": [receiver_id]}
+                if action == "youtube":
+                    # Keep the same explicit delivery/quality choices as the
+                    # ingress UI; the controller validates these values.
+                    for key in ("delivery", "native_resolution"):
+                        if key in value:
+                            request[key] = value[key]
+                await self.controller.play(request, add=True)
             else:
                 raise UserError("Unknown Home Assistant playback command")
         except UserError as exc:

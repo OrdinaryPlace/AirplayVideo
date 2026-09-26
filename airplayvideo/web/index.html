@@ -36,6 +36,10 @@
             <div id="savedPageFields"><div class="label-row"><label for="pageSelect">Page</label><button id="managePages" class="text-button">Manage pages</button></div><select id="pageSelect"></select></div>
             <div id="urlFields" hidden><label id="urlLabel" for="sourceUrl">Video link</label><input id="sourceUrl" type="url" autocomplete="off" placeholder="https://www.youtube.com/watch?v=…"></div>
             <p id="watchLaterHelp" class="muted" hidden>Uses the YouTube account signed in through the browser preview.</p>
+            <div id="youtubePlayback" hidden>
+              <label for="youtubeDelivery">Playback</label><select id="youtubeDelivery"><option value="native">Direct video</option><option value="browser">Browser playback</option></select>
+              <div id="nativeQualityFields"><label for="nativeQuality">Video quality</label><select id="nativeQuality"><option value="best">Best available for the TV</option><option value="1080p">Up to 1080p</option><option value="720p">Up to 720p</option></select><p class="muted">Public videos play directly on one TV, from the beginning, at the source frame rate. Use Play and Stop here; seeking and long pauses are not supported yet.</p></div>
+            </div>
             <button id="openBrowser" class="secondary">Open browser</button>
           </div>
           <div id="channelSource" hidden>
@@ -53,9 +57,9 @@
             <details id="generatedAutomation"><summary>Use in a Home Assistant automation</summary><p class="muted">Choose TVs below, then copy this action. Replace the text or settings in your automation. Keep Retain off.</p><label for="automationExample">Automation action YAML</label><textarea id="automationExample" rows="10" readonly spellcheck="false"></textarea><button id="copyAutomation" type="button">Copy action</button><p id="copyStatus" class="muted" role="status"></p></details>
           </div>
         </section>
-        <section class="card tv-card"><div class="card-header"><h2>Where to play</h2><button id="tvSetup" class="text-button">Manage TVs</button></div><p class="muted tight">The same source plays on every selected TV.</p><div id="tvList"></div></section>
+        <section class="card tv-card"><div class="card-header"><h2>Where to play</h2><button id="tvSetup" class="text-button">Manage TVs</button></div><p id="tvSelectionHelp" class="muted tight">The same source plays on every selected TV.</p><div id="tvList"></div></section>
       </div>
-      <div class="card playback-footer"><p id="selectionHint" class="muted" aria-live="polite">Choose one or more TVs above.</p><div class="play-actions"><button id="play" class="primary" aria-describedby="selectionHint">Play on selected TVs</button><button id="stopAll" class="danger-outline">Stop all</button></div><p id="nowPlaying" class="muted" aria-live="polite">Choose a source and one or more TVs.</p></div>
+      <div class="card playback-footer"><p id="selectionHint" class="muted" aria-live="polite">Choose one or more TVs above.</p><div class="play-actions"><button id="play" class="primary" aria-describedby="selectionHint">Play on selected TVs</button><button id="stopAll" class="danger-outline">Stop all</button></div><p id="nowPlaying" class="muted" aria-live="polite">Choose a source and one or more TVs.</p><p id="nativePlaybackStatus" class="muted" aria-live="polite" hidden></p><a id="nativePlaybackReport" href="api/native-report" download hidden>Download direct playback report</a></div>
       <details class="card" id="recordingPanel"><summary>Troubleshoot audio and video sync</summary>
         <p class="muted">Measure a generated 1080p flash-and-beep reference using this host's encoder and a temporary browser. Close the browser and stop playback first. Saved settings, sign-ins and recordings are preserved. The test takes about a minute.</p>
         <div class="play-actions"><button id="measureSync">Measure sync without a TV</button><button id="measureSyncTV">Measure sync and test selected TVs</button><button id="cancelSync" hidden>Cancel measurement</button></div>

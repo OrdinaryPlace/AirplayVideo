@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.13
+
+- Play public YouTube links directly on one paired TV using progressive HLS, without opening or recording the browser. Keep Browser playback available as an explicit choice.
+- Select the best resolution and frame rate supported by the TV. Copy compatible video and audio independently; convert incompatible tracks only after validating the encoder. Do not silently reduce quality.
+- Add the pinned public-video resolver and LGPL media dependencies, actual-quality reporting, cancellation, orderly source replacement, and bounded session cleanup.
+- Direct playback starts from the beginning. Watch Later, seeking, long pauses, HDR and multiple simultaneous TVs remain outside this direct path.
+
 ## 0.2.12
 
 - Add an explicitly started direct-video diagnostic for one selected TV, using

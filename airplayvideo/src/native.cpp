@@ -10,6 +10,16 @@ namespace lab {
 namespace {
 constexpr auto plist_type = "application/x-apple-binary-plist";
 constexpr auto rcs_type = "A6B27562-B43A-4F2D-B75F-82391E250194";
+int duration_limit(NativePurpose purpose) {
+  switch (purpose) {
+  case NativePurpose::Diagnostic: return 600;
+  case NativePurpose::Playback: return 14400;
+  }
+  throw std::runtime_error("Invalid native session purpose");
+}
+void validate_duration(int seconds, NativePurpose purpose) {
+  require(seconds >= 1 && seconds <= duration_limit(purpose), "Native session duration out of range");
+}
 bool private_ip(const std::string &text) {
   in_addr ip{};
   if (inet_pton(AF_INET, text.c_str(), &ip) != 1) return false;
@@ -169,6 +179,33 @@ public:
 };
 } // namespace
 
+NativeRunOptions native_run_options(const Json &request) {
+  require(request.is_object(), "Invalid native session configuration");
+  for (const auto &[key, value] : request.items()) {
+    require(key == "receiver_id" || key == "receiver_address" || key == "media_url" ||
+                key == "seconds" || key == "purpose", "Invalid native session configuration field");
+  }
+  NativePurpose purpose = NativePurpose::Diagnostic;
+  if (request.contains("purpose")) {
+    const auto &value = request.at("purpose");
+    require(value.is_string(), "Invalid native session purpose");
+    if (value == "playback") purpose = NativePurpose::Playback;
+    else require(value == "diagnostic", "Invalid native session purpose");
+  }
+  require(request.contains("seconds") && request.at("seconds").is_number_integer(),
+          "Native session duration must be an integer");
+  const auto &value = request.at("seconds");
+  auto limit = duration_limit(purpose);
+  if (value.is_number_unsigned()) {
+    auto seconds = value.get<uint64_t>();
+    require(seconds >= 1 && seconds <= uint64_t(limit), "Native session duration out of range");
+    return {int(seconds), purpose};
+  }
+  auto seconds = value.get<int64_t>();
+  require(seconds >= 1 && seconds <= limit, "Native session duration out of range");
+  return {int(seconds), purpose};
+}
+
 NativeReceiverIds native_receiver_ids(const Json &info) {
   require(info.is_object(), "Receiver information is invalid");
   std::map<std::string, std::string> top, txt;
@@ -289,7 +326,7 @@ Bytes native_command(const Json &body) {
 }
 
 void native_session(NativeTransport &transport, const std::string &url,
-                    std::atomic<bool> &stop, const Note &note, int seconds) {
+                    std::atomic<bool> &stop, const Note &note, int seconds, NativePurpose purpose) {
   const auto started = transport.now();
   auto elapsed = [&] { return std::chrono::duration_cast<std::chrono::milliseconds>(transport.now() - started).count(); };
   bool setup = false, inserted = false, cleaned = false, events_open = false;
@@ -331,7 +368,7 @@ void native_session(NativeTransport &transport, const std::string &url,
     return response;
   };
   try {
-    validate_native_url(url); require(seconds >= 1 && seconds <= 600, "Native duration must be 1..600 seconds");
+    validate_native_url(url); validate_duration(seconds, purpose);
     const auto &id = transport.identity(); validate_identity(id);
     check(); stage = "verify"; transport.verify(); emit(note, stage, 200, elapsed());
     auto info_message = send(request("probe", "GET", "/info"));
@@ -388,9 +425,9 @@ void native_session(NativeTransport &transport, const std::string &url,
 }
 
 void native_play(const Credentials &credentials, const std::string &url,
-                 std::atomic<bool> &stop, const Note &note, int seconds) {
+                 std::atomic<bool> &stop, const Note &note, int seconds, NativePurpose purpose) {
   validate_native_url(url);
-  require(seconds >= 1 && seconds <= 600, "Native duration must be 1..600 seconds");
+  validate_duration(seconds, purpose);
   require(private_ip(credentials.receiver.address) && credentials.receiver.port,
           "Choose a private native receiver");
   require(identifier(credentials.sender_id) && credentials.keys.size() == 192 &&
@@ -400,7 +437,7 @@ void native_play(const Credentials &credentials, const std::string &url,
   try {
     WireTransport transport(credentials, stop, seconds);
     emit(note, "connect", 200, 0);
-    native_session(transport, url, stop, note, seconds);
+    native_session(transport, url, stop, note, seconds, purpose);
   } catch (const std::exception &error) {
     // native_session failures already contain only fixed stage/status values.
     const std::string message = error.what();

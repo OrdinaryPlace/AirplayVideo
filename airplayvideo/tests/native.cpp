@@ -43,6 +43,7 @@ public:
   int closed = 0, verified = 0, opened = 0;
   std::atomic<bool> *stop = nullptr;
   Clock::time_point time{};
+  std::chrono::milliseconds wait_jump{0};
   void verify() override {
     ++verified;
     if (fail == "verify") throw std::runtime_error("private authentication material");
@@ -66,12 +67,77 @@ public:
   }
   bool healthy() const override { return event_health; }
   Clock::time_point now() const override { return time; }
-  void wait(std::chrono::milliseconds value) override { time += value; }
+  void wait(std::chrono::milliseconds value) override { time += wait_jump.count() ? wait_jump : value; }
   void close() noexcept override { ++closed; }
   size_t count(const std::string &stage) const {
     return std::count_if(calls.begin(), calls.end(), [&](const auto &call) { return call.stage == stage; });
   }
 };
+void run_options() {
+  for (int seconds : {1, 600}) {
+    auto options = native_run_options({{"seconds", seconds}});
+    check(options.seconds == seconds && options.purpose == NativePurpose::Diagnostic,
+          "Missing purpose retains the diagnostic limit");
+    check(native_run_options({{"seconds", seconds}, {"purpose", "diagnostic"}}).seconds == seconds,
+          "Explicit diagnostic purpose accepts its bounds");
+  }
+  for (int seconds : {1, 600, 601, 14400}) {
+    auto options = native_run_options({{"seconds", seconds}, {"purpose", "playback"}});
+    check(options.seconds == seconds && options.purpose == NativePurpose::Playback,
+          "Only explicit playback purpose supports a four-hour lifetime");
+  }
+  for (auto seconds : {Json(0), Json(-1), Json(601), Json(14400), Json(UINT64_MAX)})
+    rejects([&] { native_run_options({{"seconds", seconds}}); }, "Default diagnostics reject out-of-range duration");
+  for (auto seconds : {Json(0), Json(-1), Json(14401), Json(UINT64_MAX), Json(true), Json(1.0), Json("60"), Json()})
+    rejects([&] { native_run_options({{"seconds", seconds}, {"purpose", "playback"}}); }, "Playback duration has strict type and range bounds");
+  for (auto purpose : {Json(), Json(true), Json(1), Json("Playback"), Json("daily"), Json::array(), Json::object()})
+    rejects([&] { native_run_options({{"seconds", 601}, {"purpose", purpose}}); }, "Invalid purpose cannot unlock a longer session");
+  rejects([&] { native_run_options({{"purpose", "playback"}}); }, "Duration is required");
+  rejects([&] { native_run_options({{"seconds", 600}, {"mode", "playback"}}); }, "Unknown private configuration fields fail closed");
+  rejects([&] { native_run_options(Json::array()); }, "Native configuration must be an object");
+  check(native_run_options({{"seconds", uint64_t(14400)}, {"purpose", "playback"}}).seconds == 14400,
+        "Bounded unsigned duration is validated before narrowing");
+
+  std::atomic<bool> stop{false};
+  for (auto [seconds, purpose] : {
+           std::pair{601, NativePurpose::Diagnostic}, std::pair{14401, NativePurpose::Playback},
+           std::pair{1, static_cast<NativePurpose>(-1)}}) {
+    Fake rejected;
+    rejects([&] { native_session(rejected, media, stop, {}, seconds, purpose); },
+            "Direct native state-machine callers retain purpose bounds");
+    check(rejected.verified == 0 && rejected.calls.empty() && rejected.closed == 1,
+          "Invalid duration or purpose closes without receiver verification");
+    rejects([&] { native_play({}, media, stop, {}, seconds, purpose); },
+            "Public native entry point rejects an invalid purpose or bound before connection");
+  }
+  Fake daily; daily.wait_jump = std::chrono::minutes(10);
+  std::vector<Json> events;
+  native_session(daily, media, stop, [&](const std::string &, const Json &value) { events.push_back(value); },
+                 14400, NativePurpose::Playback);
+  check(daily.count("feedback") == 24 && daily.count("teardown") == 1 && daily.closed == 1,
+        "Daily session maintains feedback beyond ten minutes and closes once at four hours");
+  check(events.back()["stage"] == "finished" && events.back()["status"] == 200 &&
+            events.back()["elapsed_ms"] == 14400000,
+        "Finished event reports the configured lifetime, not receiver EOF");
+  check(queue_body(daily.calls[daily.calls.size() - 2])["rate"] == 0.0,
+        "Daily lifetime completion retains stop-rate before teardown");
+  Fake diagnostic_wire, playback_wire;
+  native_session(diagnostic_wire, media, stop, {}, 1);
+  native_session(playback_wire, media, stop, {}, 1, NativePurpose::Playback);
+  check(diagnostic_wire.calls.size() == playback_wire.calls.size(), "Purpose does not change request count at the same duration");
+  for (size_t i = 0; i < diagnostic_wire.calls.size(); ++i) {
+    const auto &a = diagnostic_wire.calls[i], &b = playback_wire.calls[i];
+    check(a.stage == b.stage && a.method == b.method && a.path == b.path && a.body == b.body &&
+              a.headers == b.headers && a.options.timeout_ms == b.options.timeout_ms &&
+              a.options.session_headers == b.options.session_headers && a.options.user_agent == b.options.user_agent &&
+              a.options.client_instance == b.options.client_instance,
+          "Daily purpose preserves the successful diagnostic wire sequence and timeout options");
+  }
+  Fake cancelled; cancelled.stop = &stop; cancelled.cancel_after = "feedback";
+  native_session(cancelled, media, stop, {}, 14400, NativePurpose::Playback);
+  check(cancelled.count("feedback") == 1 && cancelled.count("teardown") == 1 && cancelled.closed == 1,
+        "Daily playback remains cancellable without waiting for its configured lifetime");
+}
 void receiver_ids() {
   const std::string psi = "abcdef12-1234-4567-89ab-0123456789ab";
   const std::string pi = "22222222-2222-4222-8222-222222222222";
@@ -263,7 +329,7 @@ void rtsp_options() {
 int main() {
   try {
     require(sodium_init() >= 0, "Sodium initialization failed");
-    receiver_ids(); builders(); lifecycle(); rtsp_options();
+    run_options(); receiver_ids(); builders(); lifecycle(); rtsp_options();
     std::cout << assertions << " native assertions passed\n";
     return 0;
   } catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }

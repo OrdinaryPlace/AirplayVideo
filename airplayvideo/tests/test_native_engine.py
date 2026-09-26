@@ -37,21 +37,23 @@ async def test_engine_reads_pairing_in_place_and_keeps_url_out_of_arguments(tmp_
 path = sys.argv[sys.argv.index('--native') + 1]
 assert stat.S_IMODE(os.stat(path).st_mode) == 0o600
 request = json.load(open(path))
-assert set(request) == {'receiver_id', 'media_url', 'seconds'}
+assert set(request) == {'receiver_id', 'media_url', 'seconds', 'purpose'}
+assert request['purpose'] == 'diagnostic' and request['seconds'] == 120
 assert request['media_url'] not in sys.argv
 assert sys.argv[-1].endswith('/receivers')
 assert 'SUPERVISOR_TOKEN' not in os.environ
 print(json.dumps({'event':'native_stage','details':{'stage':'insert','status':200,'secret':'discard'}}), flush=True)
-print(json.dumps({'event':'native_stage','details':{'stage':'finished','elapsed_ms':1}}), flush=True)
+print(json.dumps({'event':'native_stage','details':{'stage':'finished','status':200,'elapsed_ms':1}}), flush=True)
 ''')
     player = await NativeEnginePlayer(tmp_path, RECEIVER, URL, engine=engine).start()
     await asyncio.wait_for(player.wait(), 5)
     assert player.events == [
         {'event': 'native_stage', 'details': {'stage': 'insert', 'status': 200}},
-        {'event': 'native_stage', 'details': {'stage': 'finished', 'elapsed_ms': 1}},
+        {'event': 'native_stage', 'details': {'stage': 'finished', 'status': 200, 'elapsed_ms': 1}},
     ]
     assert list((tmp_path / 'run').iterdir()) == []
     assert player.process.returncode == 0
+    assert player.completion == 'duration'
 
 
 @pytest.mark.asyncio
@@ -66,6 +68,7 @@ sys.exit(1)
         await asyncio.wait_for(player.wait(), 5)
     assert player.events == [{'event': 'native_failed', 'details': {}}]
     assert 'secret' not in json.dumps(player.events)
+    assert player.completion == 'failed'
     assert list((tmp_path / 'run').iterdir()) == []
 
 
@@ -84,6 +87,7 @@ while True: time.sleep(0.01)
     await asyncio.wait_for(ready(), 3)
     await asyncio.wait_for(asyncio.gather(player.close(), player.close()), 3)
     assert player.closed.is_set() and player.process.returncode is not None
+    assert not player.failed and player.completion == 'cancelled'
     assert list((tmp_path / 'run').iterdir()) == []
     await player.close()
 
@@ -94,6 +98,7 @@ async def test_start_failure_cleans_temporary_config(tmp_path):
     with pytest.raises(NativeEngineError, match='could not start'):
         await player.start()
     assert player.closed.is_set()
+    assert player.failed and player.completion == 'failed'
     assert list((tmp_path / 'run').iterdir()) == []
 
 
@@ -112,6 +117,7 @@ async def test_selected_address_is_included_for_engine_identity_match(tmp_path):
     engine = fake_engine(tmp_path, '''import json, sys
 request = json.load(open(sys.argv[2]))
 assert request['receiver_address'] == '192.168.10.2'
+print(json.dumps({'event':'native_stage','details':{'stage':'finished','status':200}}), flush=True)
 ''')
     player = await NativeEnginePlayer(tmp_path, RECEIVER, URL, engine=engine,
                                       receiver_address='192.168.10.2').start()
@@ -163,6 +169,7 @@ async def test_cancellation_during_spawn_adopts_and_reaps_child(tmp_path, monkey
     with pytest.raises(asyncio.CancelledError):
         await asyncio.wait_for(starting, 3)
     assert children[0].returncode is not None and player.closed.is_set()
+    assert not player.failed and player.completion == 'cancelled'
     assert list((tmp_path / 'run').iterdir()) == []
 
 
@@ -192,5 +199,152 @@ async def test_close_during_spawn_cannot_finish_before_child_is_reaped(tmp_path,
     with pytest.raises(NativeEngineError):
         await starting
     assert children[0].returncode is not None and player.closed.is_set()
+    assert not player.failed and player.completion == 'cancelled'
     assert player._reader is None and player._watchdog is None
     assert list((tmp_path / 'run').iterdir()) == []
+
+
+@pytest.mark.parametrize('purpose,seconds', [
+    ('diagnostic', 1), ('diagnostic', 600), ('playback', 1),
+    ('playback', 601), ('playback', 14400),
+])
+@pytest.mark.asyncio
+async def test_explicit_purpose_and_duration_reach_private_child_config(tmp_path, purpose, seconds):
+    engine = fake_engine(tmp_path, f'''import json, sys
+request = json.load(open(sys.argv[2]))
+assert request['purpose'] == {purpose!r} and request['seconds'] == {seconds}
+print(json.dumps({{'event':'native_stage','details':{{'stage':'finished','status':200}}}}), flush=True)
+''')
+    player = await NativeEnginePlayer(tmp_path, RECEIVER, URL, purpose=purpose,
+                                      seconds=seconds, engine=engine).start()
+    await asyncio.wait_for(player.wait(), 5)
+    assert player.completion == 'duration' and not player.failed
+    assert list((tmp_path / 'run').iterdir()) == []
+
+
+@pytest.mark.parametrize('options', [
+    {'seconds': 601}, {'purpose': 'diagnostic', 'seconds': 601},
+    {'purpose': 'playback', 'seconds': 14401},
+    *({'purpose': 'playback', 'seconds': value}
+      for value in (0, -1, True, 1.0, '60', None, 2**64)),
+    *({'purpose': value, 'seconds': 601}
+      for value in (None, True, 1, 'Playback', 'daily', [], {})),
+    *({'close_timeout': value} for value in (True, None, '5', float('inf'), float('nan'), 0, 21)),
+])
+def test_invalid_limits_fail_before_start(tmp_path, options):
+    with pytest.raises(NativeEngineError):
+        NativeEnginePlayer(tmp_path, RECEIVER, URL, **options)
+    assert not (tmp_path / 'run').exists()
+
+
+@pytest.mark.parametrize('status', [0, 7])
+@pytest.mark.asyncio
+async def test_ack_then_unexpected_process_exit_is_failure(tmp_path, status):
+    engine = fake_engine(tmp_path, f'''import json, sys
+print(json.dumps({{'event':'native_stage','details':{{'stage':'feedback','status':200}}}}), flush=True)
+sys.exit({status})
+''')
+    player = await NativeEnginePlayer(tmp_path, RECEIVER, URL, purpose='playback',
+                                      seconds=14400, engine=engine).start()
+    with pytest.raises(NativeEngineError):
+        await asyncio.wait_for(player.wait(), 5)
+    assert player.failed and player.completion == 'failed'
+    assert player.process.returncode == status
+    assert list((tmp_path / 'run').iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_daily_close_after_ack_is_cancelled_and_reaped(tmp_path):
+    engine = fake_engine(tmp_path, '''import json, signal, sys, time
+def stopped(*args):
+    print(json.dumps({'event':'native_stage','details':{'stage':'finished','status':0}}), flush=True)
+    sys.exit(0)
+signal.signal(signal.SIGTERM, stopped)
+print(json.dumps({'event':'native_stage','details':{'stage':'feedback','status':200}}), flush=True)
+while True: time.sleep(0.01)
+''')
+    player = await NativeEnginePlayer(tmp_path, RECEIVER, URL, purpose='playback',
+                                      seconds=14400, engine=engine).start()
+    async def ready():
+        while not player.events:
+            await asyncio.sleep(0.01)
+    await asyncio.wait_for(ready(), 3)
+    assert not player.closed.is_set() and player.completion is None
+    await asyncio.wait_for(player.close(), 3)
+    await player.wait()
+    assert player.process.returncode == 0 and player.completion == 'cancelled'
+    assert not player.failed and list((tmp_path / 'run').iterdir()) == []
+
+
+@pytest.mark.parametrize('purpose,seconds', [('diagnostic', 600), ('playback', 14400)])
+@pytest.mark.asyncio
+async def test_outer_watchdog_keeps_purpose_bound_and_reaps_worker(tmp_path, monkeypatch, purpose, seconds):
+    engine = fake_engine(tmp_path, '''import json, signal, time
+signal.signal(signal.SIGTERM, signal.SIG_IGN)
+print(json.dumps({'event':'native_stage','details':{'stage':'feedback','status':200}}), flush=True)
+while True: time.sleep(0.01)
+''')
+    delay_requested, expire = asyncio.Event(), asyncio.Event()
+    real_sleep = asyncio.sleep
+    async def controlled_sleep(delay):
+        if delay == seconds + 30:
+            delay_requested.set()
+            await expire.wait()
+        else:
+            await real_sleep(delay)
+    monkeypatch.setattr(asyncio, 'sleep', controlled_sleep)
+    player = await NativeEnginePlayer(tmp_path, RECEIVER, URL, purpose=purpose,
+                                      seconds=seconds, engine=engine, close_timeout=0.05).start()
+    async def ready():
+        await delay_requested.wait()
+        while not player.events:
+            await real_sleep(0.01)
+    await asyncio.wait_for(ready(), 3)
+    assert not player.closed.is_set()
+    expire.set()
+    with pytest.raises(NativeEngineError):
+        await asyncio.wait_for(player.wait(), 3)
+    assert player.completion == 'failed' and player.process.returncode is not None
+    assert list((tmp_path / 'run').iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_callback_failure_cannot_change_completion_or_cleanup(tmp_path):
+    engine = fake_engine(tmp_path, '''import json
+print(json.dumps({'event':'native_stage','details':{'stage':'finished','status':200}}), flush=True)
+''')
+    def broken_callback(event):
+        raise RuntimeError('private callback details')
+    player = await NativeEnginePlayer(tmp_path, RECEIVER, URL, engine=engine,
+                                      on_event=broken_callback).start()
+    await asyncio.wait_for(player.wait(), 5)
+    assert player.completion == 'duration' and not player.failed
+    assert list((tmp_path / 'run').iterdir()) == []
+
+
+@pytest.mark.asyncio
+async def test_real_worker_error_racing_requested_stop_remains_failure(tmp_path):
+    engine = fake_engine(tmp_path, '''import json, signal, sys, time
+signal.signal(signal.SIGTERM, lambda *args: sys.exit(7))
+print(json.dumps({'event':'native_stage','details':{'stage':'feedback','status':200}}), flush=True)
+while True: time.sleep(0.01)
+''')
+    player = await NativeEnginePlayer(tmp_path, RECEIVER, URL, engine=engine).start()
+    async def ready():
+        while not player.events:
+            await asyncio.sleep(0.01)
+    await asyncio.wait_for(ready(), 3)
+    await asyncio.wait_for(player.close(), 3)
+    with pytest.raises(NativeEngineError):
+        await player.wait()
+    assert player.process.returncode == 7 and player.completion == 'failed'
+    assert list((tmp_path / 'run').iterdir()) == []
+
+
+def test_unrequested_signal_is_not_hidden_by_close(tmp_path):
+    import signal
+    player = NativeEnginePlayer(tmp_path, RECEIVER, URL)
+    player._stop_requested = True
+    player._sent_signals.add(signal.SIGTERM)
+    player._record_exit(-signal.SIGSEGV)
+    assert player.failed

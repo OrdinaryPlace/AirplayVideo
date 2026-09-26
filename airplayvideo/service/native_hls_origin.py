@@ -12,6 +12,7 @@ from contextlib import suppress
 import copy
 import hmac
 import inspect
+import io
 import ipaddress
 import os
 from pathlib import Path
@@ -50,7 +51,7 @@ def _counts():
 
 class NativeHLSOrigin:
     def __init__(self, directory, receiver_clients, *, bind_address,
-                 preflight_clients=(), lifetime=14400):
+                 preflight_clients=(), lifetime=14400, require_start_at_beginning=False):
         """Receiver clients may be ``{safe_receiver_id: IPv4}`` or an IP iterable.
 
         Preflight IPs must be separate from receiver IPs, so fetching readiness
@@ -84,6 +85,12 @@ class NativeHLSOrigin:
         if self.preflight_clients.intersection(self.clients):
             raise ValueError('Preflight and receiver addresses must be distinct')
         self.lifetime = lifetime
+        if type(require_start_at_beginning) is not bool:
+            raise ValueError('Choose an explicit beginning requirement')
+        self.require_start_at_beginning = require_start_at_beginning
+        self._beginning = set()
+        self._beginning_ranges = {}
+        self.start_failed = False
         self.token = secrets.token_urlsafe(24)
         self.port = None
         self.runner = None
@@ -97,6 +104,10 @@ class NativeHLSOrigin:
 
     def counters(self):
         return copy.deepcopy(self._counts)
+
+    @property
+    def beginning_fetched(self):
+        return not self.require_start_at_beginning or self._beginning == set(self.clients.values())
 
     def url(self, name='index.m3u8'):
         if self.port is None or self._close_task is not None or _kind(name) is None:
@@ -129,6 +140,7 @@ class NativeHLSOrigin:
             count('errors')
             raise web.HTTPNotFound()
         count(kind + '_requests')
+        needs_beginning = self.require_start_at_beginning and identifier is not None and identifier not in self._beginning
         try:
             descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK,
                                  dir_fd=self._directory_fd)
@@ -147,6 +159,26 @@ class NativeHLSOrigin:
             raise web.HTTPNotFound() from None
         with media:
             size = info.st_size
+            if needs_beginning and kind == 'playlist':
+                # Validate this exact opened version, not a pathname that the
+                # producer can atomically replace between validation and serving.
+                content = media.read(min(size, 65537))
+                lines = content.splitlines()
+                media.seek(0)
+                names = [line for line in lines if line and not line.startswith(b'#')]
+                if (size > 65536 or lines.count(b'#EXT-X-MEDIA-SEQUENCE:0') != 1
+                        or not names or names[0] != b'segment-00000000.m4s'):
+                    self.start_failed = True
+                    count('errors')
+                    raise web.HTTPNotFound()
+                # RFC 8216 4.3.5.2: ask live-style clients to start at the
+                # beginning, while allowing normal parallel segment prefetch.
+                # Session monitoring separately verifies a complete zero fetch.
+                lines = [line for line in lines if not line.startswith(b'#EXT-X-START:')]
+                lines.insert(1, b'#EXT-X-START:TIME-OFFSET=0.0,PRECISE=YES')
+                content = b'\n'.join(lines) + b'\n'
+                media = io.BytesIO(content)
+                size = len(content)
             start, end, status = 0, size, 200
             headers = {'Cache-Control': 'private, no-store', 'Accept-Ranges': 'bytes'}
             # Without an advertised validator, If-Range conservatively requests
@@ -186,6 +218,22 @@ class NativeHLSOrigin:
                         remaining -= len(chunk)
                 await response.write_eof()
                 count('completed_requests')
+                if (needs_beginning and kind == 'segment' and request.method == 'GET'
+                        and name == 'segment-00000000.m4s' and end > start):
+                    ranges = sorted(self._beginning_ranges.get(identifier, []) + [(start, end)])
+                    merged = []
+                    for low, high in ranges:
+                        if merged and low <= merged[-1][1]:
+                            merged[-1] = (merged[-1][0], max(high, merged[-1][1]))
+                        else:
+                            merged.append((low, high))
+                    if merged == [(0, size)]:
+                        self._beginning.add(identifier)
+                        self._beginning_ranges.pop(identifier, None)
+                    elif len(merged) <= 64:
+                        self._beginning_ranges[identifier] = merged
+                    else:
+                        self.start_failed = True
             except BaseException:
                 count('errors')
                 raise

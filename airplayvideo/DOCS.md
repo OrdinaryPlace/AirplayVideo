@@ -1,10 +1,11 @@
 # AirplayVideo
 
-Send browser pages, HDHomeRun channels, or generated videos to your Apple TVs from Home Assistant.
-One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
-Each TV has its own AirPlay pairing and connection.
+Send public YouTube videos, browser pages, HDHomeRun channels, or generated videos
+to your Apple TVs from Home Assistant. Browser, tuner and generated sources share
+one encoder across selected TVs. Direct YouTube video uses one TV's native media
+player. Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.12.** This is an independent implementation in a new
+**Experimental, version 0.2.13.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -35,7 +36,8 @@ The separate five-step **Setup** wizard handles:
 4. Choose resolution, frame rate, encoder, bitrate, stereo audio, and buffer.
    Defaults are **1080p, 30 fps, H.264, 8 Mbps** with a 1500 ms playback buffer.
    Hardware encoding is offered when VAAPI is available; OpenH264 provides
-   software encoding. H.264 is the supported video codec in this release.
+   software encoding. These are the shared capture settings; Direct YouTube
+   video selects compatible H.264 or HEVC at the source resolution and frame rate.
 5. Enable native Home Assistant controls. An available Home Assistant MQTT
    service and the MQTT integration are required for these entities. The
    authenticated app controls also work without MQTT.
@@ -69,8 +71,34 @@ applied to the next playback session.
 
 Choose a saved page, YouTube video, Watch Later, web address, channel, or generated video.
 Select the TVs and press **Play on selected TVs**. Use **Stop** for one TV or
-**Stop all**. A TV joining the same source shares the existing encoder. Stopping
-the last TV closes the source and releases its tuner.
+**Stop all**. Browser, tuner and generated sources can share their encoder with
+additional TVs. Direct YouTube video currently requires exactly one TV.
+Stopping the last TV releases the source and any tuner.
+
+For **YouTube video**, **Direct video** is the default. Paste one public video
+link and choose **Best available for the TV**, **Up to 1080p**, or **Up to 720p**.
+Best available chooses the highest available resolution and then frame rate
+within the known TV model's limits, including 4K60 when supported. Compatible
+H.264/HEVC video and AAC audio are copied; only an incompatible track is
+transcoded. Browser capture FPS, resolution and bitrate settings do not limit
+this path. The selected quality and copy/conversion decisions appear in the
+playback status and downloadable report.
+
+Direct video starts from the beginning and includes sound. Use Play and Stop;
+seeking, start-time links and pause controls are not supported. Media arrives
+progressively through a bounded rolling HLS buffer, so long pauses can exhaust
+that buffer. Sessions have a four-hour total limit including startup and final
+buffering. The host's encoder is checked before required HEVC conversion; an
+unavailable encoder causes an error, without silently reducing resolution/FPS
+or switching to screen recording.
+
+Choose **Browser playback** explicitly for the existing browser path, including
+multiple TVs or playback requiring browser sign-in. **Watch Later** still uses
+the signed-in browser and YouTube's own queue. Direct video does not use browser
+cookies or account data; it supports completed public SDR videos and rejects
+live, DRM, HDR or unverified media. Native MP4 delivery and the Basement beep
+have passed a live trial; installed YouTube/HLS and 4K60 playback still need
+physical acceptance.
 
 The browser preview lets you navigate, sign in, paste text, and operate the
 container browser. In **Settings → Source defaults** (or **Setup → Configure**
@@ -176,16 +204,18 @@ container capture before AirPlay with TV output. Recording alone never starts a
 TV. See [audio/video timing](https://github.com/OrdinaryPlace/AirplayVideo/blob/main/docs/audio-video-timing.md)
 for buffer details and interpreting captures.
 
-- Up to eight saved TVs; one active browser page, channel, or generated video at a time. Receiver
+- Up to eight saved TVs; one active source at a time. Direct YouTube video uses
+  exactly one TV; browser pages, channels and generated videos can use several. Receiver
   connections are independent, but this is not a claim of sample-accurate
   synchronization between TVs.
 - Unprotected HDHomeRun MPEG-2/H.264 video with AC-3/AAC/MP2/MP3 audio. DRM,
   HEVC and AC-4 channels are marked unsupported. No ATSC 3.0 decryption.
-- AirPlay H.264 video and encrypted lossless ALAC stereo audio. The earlier video-only
+- The capture path sends AirPlay H.264 video and encrypted lossless ALAC stereo audio. The earlier video-only
   experiment was physically confirmed on one Apple TV. This app's combined
   audio/video and additional receiver compatibility need physical acceptance.
-- 720p/1080p at 30/60 fps. A 1080p output canvas does not improve a lower-quality
-  source. YouTube may limit the actual quality it supplies.
+- Capture supports 720p/1080p at 30/60 fps. Direct video preserves the selected
+  source dimensions and frame rate within receiver limits. Neither path adds
+  detail missing from the source; YouTube may limit the formats it supplies.
 - Watch Later is a native YouTube launch convenience; there is no independent
   playlist database, bulk playlist synchronization, or account migration.
 - A failed source or receiver needs an explicit Play command to reconnect.

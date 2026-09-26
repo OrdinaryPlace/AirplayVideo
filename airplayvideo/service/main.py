@@ -163,6 +163,11 @@ class Application:
         return web.json_response(self.diagnostics.report, headers={
             'Content-Disposition': 'attachment; filename="airplayvideo-sync-report.json"'})
 
+    async def native_report(self, _request):
+        check(self.controller.native_report is not None, "Play a direct YouTube video first")
+        return web.json_response({"version": VERSION, **self.controller.native_report}, headers={
+            'Content-Disposition': 'attachment; filename="airplayvideo-native-playback-report.json"'})
+
     async def save_page(self, request):
         self.controller.require_mode("browser")
         page = self.store.save_page(await request.json())
@@ -343,6 +348,7 @@ def make_app(application, standalone=False, web_root=WEB):
     app["standalone"] = standalone
     app.router.add_get("/api/state", application.get_state)
     app.router.add_get("/api/sync-report", application.sync_report)
+    app.router.add_get("/api/native-report", application.native_report)
     app.router.add_get("/api/recordings/{id}/{extension}", application.recording_file)
     app.router.add_post("/api/actions/{action}", application.action)
     app.router.add_post("/api/setup/{action}", application.setup)

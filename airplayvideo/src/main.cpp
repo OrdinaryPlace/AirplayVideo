@@ -108,16 +108,16 @@ int main(int argc,char **argv) {
     if(mode=="stream") return run_stream(Json::parse(private_read(argument)),data,exiting,event);
     if(mode=="native") {
       // The owning engine reads its existing pairing in place. The private
-      // request file contains only a receiver ID and this session's media URL.
+      // request file contains only the selected receiver, scoped media URL,
+      // bounded duration and explicit purpose; it never contains pairing keys.
       auto request=Json::parse(private_read(argument));
+      const auto options=native_run_options(request);
       std::string id=request.at("receiver_id");validate_id(id);
-      const int seconds=request.at("seconds");
-      require(seconds>=1&&seconds<=600,"Native trial duration out of range");
       auto credentials=Credentials::from_json(Json::parse(private_read(data/(id+".json"))));
       if(request.contains("receiver_address"))
         require(request.at("receiver_address")==credentials.receiver.address,
                 "Selected receiver address changed; saved pairing retained");
-      native_play(credentials,request.at("media_url"),exiting,event,seconds);
+      native_play(credentials,request.at("media_url"),exiting,event,options.seconds,options.purpose);
       return 0;
     }
     if(mode=="capabilities") {std::cout<<media_capabilities().dump()<<std::endl;return 0;}

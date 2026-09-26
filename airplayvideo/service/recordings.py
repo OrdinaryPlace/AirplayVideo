@@ -40,6 +40,8 @@ class Recordings:
             c.require_no_diagnostic()
             check(self.current is None, 'A recording is already running')
             check(c.pending is None, 'Wait for playback to finish starting')
+            check(not c.source or c.source.get('kind') != 'youtube',
+                  'Direct video cannot be recorded here; choose browser playback for a capture')
             check(len(list(self.root.glob('*.json'))) < 8, 'Download and remove an older recording first (eight retained samples maximum)')
             check(shutil.disk_usage(self.root).free > 256 * 1024 * 1024, 'Not enough free space for a recording')
             seconds = request.get('seconds', 15)

@@ -13,12 +13,17 @@ examined earlier to understand the problem; this is not a formal clean-room clai
 | pair_ap | [ejurgensen/pair_ap](https://github.com/ejurgensen/pair_ap/tree/7f53a9c1369162d40c903e3d3df95083ef398d99) | MIT; vendored pairing/identity and encrypted control primitives, with its original notices |
 | FFmpeg | [8.0.1 source](https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz) | LGPL build; shared libraries, GPL and nonfree disabled |
 | OpenH264 | [Cisco 2.6.0](https://github.com/cisco/openh264/tree/v2.6.0) | BSD 2-Clause; built from source and dynamically linked |
+| yt-dlp | [2026.8.19 on PyPI](https://pypi.org/project/yt-dlp/2026.8.19/) | Unlicense; pinned pure-Python wheel, no bundled executable or optional default extras |
+| yt-dlp-ejs | [0.8.0 on PyPI](https://pypi.org/project/yt-dlp-ejs/0.8.0/) | Unlicense, MIT and ISC; the challenge-solver version required by this yt-dlp release |
+| Node.js | [22.23.3 LTS](https://nodejs.org/dist/v22.23.3/) | MIT and bundled third-party notices; only the Node executable is installed, without npm/npx |
 
 The Dockerfile verifies source archive SHA-256 values:
 
 ```
 FFmpeg 8.0.1: 05ee0b03119b45c0bdb4df654b96802e909e0a752f72e4fe3794f487229e5a41
 OpenH264 2.6.0: 558544ad358283a7ab2930d69a9ceddf913f4a51ee9bf1bfb9e377322af81a69
+Node 22.23.3 Linux x64 archive: df450af89261115ef9f9e3830c3eeb2cc9213b63c720b1af623cb5dcbe2e02de
+Node 22.23.3 source archive: bd97093e1a1e9243338950c174a693a64d4e0926a9c6ce259962bc58d5e96909
 ```
 
 The runtime image retains the exact archives and FFmpeg configuration under
@@ -28,6 +33,30 @@ If distributing image binaries, preserve corresponding sources and applicable
 notices; see [FFmpeg's license guidance](https://ffmpeg.org/legal.html). Source
 availability alone does not grant codec patent licenses. OpenH264 is compiled
 here; this is not Cisco's separately distributed binary package.
+
+The native YouTube dependency layer keeps FFmpeg's GPL and nonfree switches
+disabled. It adds GnuTLS-backed HTTPS, HLS/fragmented-MP4 packaging, native
+VP9/HEVC/Opus decoding, dav1d AV1 decoding and HEVC VAAPI encoding. GnuTLS and
+dav1d are Debian shared libraries; their exact versions remain in
+`debian-packages.txt` and their notices under `/usr/share/doc/`. The custom
+FFmpeg build does not link or enable x264 or x265. A compiled VAAPI encoder is not a claim that
+the installed host can encode a particular profile or sustain 4K60.
+
+`airplayvideo/requirements-youtube.txt` pins both Python wheels by version and
+SHA-256. Their source distributions, verified wheels, Node source and binary
+archives, source checksums and version inventory are retained under
+`/opt/dependency-sources/`. Node and Python package notices are copied under
+`/opt/licenses/`; the EJS notices include its bundled JavaScript components.
+The service runs from `/opt/airplayvideo/venv`, which preserves access to the
+Debian app packages and makes the same pinned resolver packages available to
+its `sys.executable` workers. No pyatv production dependency is introduced.
+
+The image build runs `tests/native-dependencies.py` offline. It checks actual
+runtime imports, Node version, FFmpeg/ffprobe protocols and codec inventories,
+the LGPL configuration, and a real OpenH264/AAC fragmented-MP4 HLS encode/probe.
+Its report is stored as `/opt/dependency-sources/native-capabilities.json`.
+Receiver playback and the actual host's hardware encoder still require their
+separate runtime checks.
 
 Other dependencies are installed from Debian bookworm or Google's official
 Chrome distribution. Their versions are recorded by `dpkg-query` in the image.
