@@ -57,8 +57,11 @@ def check():
     if importlib.util.find_spec("pyatv") is not None:
         raise RuntimeError("The optional pyatv experiment is not a production dependency")
     # Debian app dependencies remain available through --system-site-packages.
-    for module in ("aiohttp", "paho.mqtt.client", "Crypto.Cipher.AES"):
-        importlib.import_module(module)
+    for module in ("aiohttp", "paho.mqtt.client", "Cryptodome.Cipher.AES"):
+        try:
+            importlib.import_module(module)
+        except ImportError:
+            raise RuntimeError("Missing service dependency: " + module) from None
     node_version = command("node", "--version").strip()
     if node_version != "v22.23.3":
         raise RuntimeError("Unexpected pinned Node runtime version")
@@ -131,7 +134,7 @@ def main():
             args.write_report.write_text(json.dumps(result, indent=2) + "\n")
         print(json.dumps(result))
     except Exception as error:
-        message = str(error) if isinstance(error, RuntimeError) else "Native dependency verification failed"
+        message = str(error) if isinstance(error, RuntimeError) else "Native dependency verification failed: " + type(error).__name__
         print(json.dumps({"verified": False, "error": message}))
         return 1
     return 0
