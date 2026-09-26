@@ -2,6 +2,8 @@
 
 [Diagnose audio/video timing and capture a sample](docs/audio-video-timing.md).
 
+[Native YouTube media experiment and current verification limits](docs/native-youtube-experiment.md).
+
 Send browser pages, HDHomeRun channels, or generated videos to your Apple TVs from Home Assistant.
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
