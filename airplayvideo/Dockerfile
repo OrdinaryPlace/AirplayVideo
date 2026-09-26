@@ -16,7 +16,7 @@ RUN curl -fL https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz -o ffmpeg.tar.xz \
  && ./configure --prefix=/usr/local --enable-shared --disable-static \
     --disable-gpl --disable-nonfree --disable-autodetect --disable-everything \
     --disable-doc --disable-debug --enable-ffmpeg --enable-ffprobe \
-    --enable-libopenh264 --enable-libpulse --enable-libxcb --enable-vaapi \
+    --enable-libopenh264 --enable-libpulse --enable-libxcb --enable-libxcb-shm --enable-vaapi \
     --enable-protocol=file,pipe,http,tcp --enable-indev=xcbgrab,pulse,lavfi \
     --enable-demuxer=mpegts,mov,matroska,h264,wav \
     --enable-decoder=wrapped_avframe,rawvideo,h264,mpeg2video,aac,ac3,mp2,mp3,alac,pcm_s16le,pcm_s16be,pcm_f32le \
@@ -75,5 +75,5 @@ RUN ldconfig && dpkg-query -W > /opt/dependency-sources/debian-packages.txt
 WORKDIR /opt/airplayvideo
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 EXPOSE 8099 18200-18215/udp
-LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.8"
+LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.9"
 CMD ["python3", "-m", "service.main"]

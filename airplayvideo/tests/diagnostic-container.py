@@ -31,8 +31,14 @@ async def main():
             print(json.dumps(result), flush=True)
             assert result['status'] == 'complete', result
             for key in ('browser_500', 'browser_1500'):
-                assert result['stages'][key][0]['capture']['matched_events'] >= 5
-                assert result['stages'][key][0]['maximum_schedule_error_us'] < 24
+                measured = result['stages'][key][0]
+                assert measured['capture']['matched_events'] >= 5
+                assert measured['maximum_schedule_error_us'] < 24
+                video = measured['capture']['video']
+                assert video['frames'] > 0 and video['fps'] > 0 and video['max_gap_ms'] > 0
+                assert video['frames'] == measured['wire']['video']['frames']
+                # CI host load is variable. Clock-boundary frame loss is tested
+                # deterministically in frame-rate.cpp; report actual throughput.
             assert not app.controller.targets and app.controller.stream is None
             assert not app.browser.running and not result['physical_output_measured']
             assert sentinel.read_text() == 'untouched profile'

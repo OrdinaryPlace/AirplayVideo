@@ -1,5 +1,26 @@
 # Verification
 
+## 0.2.9 — browser capture cadence
+
+- Repeated ten-second 1080p30 captures of the same full-screen 1080p60 motion
+  clip exposed startup-phase-dependent losses: the original gate measured
+  30.01, 22.89 and 24.20 fps. With the source-paced browser gate it measured
+  30.01, 30.00 and 29.99 fps. Original timestamps are preserved; no repeated
+  frames are inserted to manufacture the output rate.
+- Frame IDs burned into the source video were independently decoded from the
+  recorded H.264: the revised runs contained 299, 298 and 299 distinct pictures
+  over ten seconds, versus 300, 228 and 242 with the old gate. The middle run
+  of each series enabled X11 shared memory. Shared memory alone did not fix
+  the clock-grid frame losses; no isolated speedup is claimed for that change.
+- These measurements used ordinary sandboxed Chrome and OpenH264 in Linux
+  amd64 containers under macOS emulation. Occasional longer capture gaps remain
+  under host load. This establishes the regression and its fix, not native HA
+  GPU throughput, sustained YouTube playback quality, or physical TV smoothness.
+- A deterministic regression covers jitter at eight clock phases for both
+  30 and 60 fps, duplicate/regressing timestamps, and retained 60-to-30 fps
+  tuner downsampling. The existing installed diagnostic now reports decoded
+  video frame counts/rate/gaps alongside its timing results.
+
 ## 0.2.3 — idle event channel
 
 - The updated Linux image passes all six native suites, 80 Python tests and

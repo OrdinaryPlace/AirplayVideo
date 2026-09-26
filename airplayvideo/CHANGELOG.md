@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.9
+
+- Preserve browser frames already paced by screen capture. A redundant frame-rate gate could discard valid frames when capture timestamps jittered across its rounding boundaries. Tuner frame-rate conversion is retained.
+- Enable FFmpeg X11 shared-memory capture to avoid transferring every uncompressed full-screen frame through the X server socket.
+- Add frame-rate regression coverage and frame counts, measured fps, and longest frame gap to the existing numeric diagnostic report. Audio timestamps, playback buffering, and saved settings are unchanged.
+
 ## 0.2.8
 
 - Add an opt-in installed-container sync measurement using the configured encoder, a generated 1080p reference, isolated Chrome capture, and independently decoded AirPlay packet formats. Compare 500 and 1500 ms buffers without changing settings.

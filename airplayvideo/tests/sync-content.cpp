@@ -93,8 +93,13 @@ struct Meter {
   std::vector<double> flashes,beeps;
   bool white=false,seen_dark=false;
   double last_tone=-10,audio_start=-1;
+  size_t video_frames=0;
+  double first_video=0,last_video=0,max_video_gap=0;
   void video(AVFrame *f,double time) {
     require(f->format==AV_PIX_FMT_YUV420P&&f->width==width&&f->height==height,"Decoded 1080p picture");
+    if(video_frames)max_video_gap=std::max(max_video_gap,time-last_video);
+    else first_video=time;
+    last_video=time;++video_frames;
     int total=0,count=0;
     for(int y=0;y<height;y+=32)for(int x=0;x<width;x+=32){total+=f->data[0][y*f->linesize[0]+x];++count;}
     bool bright=total/count>180;
@@ -122,7 +127,9 @@ struct Meter {
       if(std::abs(*closest-flash)<0.4)offsets.push_back((*closest-flash)*1000);
     }
     require(offsets.size()>=5,"Five matched content events");auto sorted=offsets;std::sort(sorted.begin(),sorted.end());
-    return {{"stage",stage},{"matched_events",offsets.size()},{"audio_minus_video_ms",{
+    return {{"stage",stage},{"video",{{"frames",video_frames},
+      {"fps",video_frames>1&&last_video>first_video?(video_frames-1)/(last_video-first_video):0},
+      {"max_gap_ms",max_video_gap*1000}}},{"matched_events",offsets.size()},{"audio_minus_video_ms",{
       {"min",sorted.front()},{"median",sorted[sorted.size()/2]},{"max",sorted.back()}}},{"offsets_ms",offsets}};
   }
 };

@@ -1,6 +1,7 @@
 // AirplayVideo's shared, timestamped capture and encoding pipeline.
 #include "stream.hpp"
 #include "generated.hpp"
+#include "frame_rate.hpp"
 #include <cstring>
 #include <bit>
 extern "C" {
@@ -41,7 +42,7 @@ class VideoEncoder {
   AVFilterContext *filter_in_ = nullptr, *filter_out_ = nullptr;
   Bytes sps_, pps_, avcc_;
   int fps_, width_, height_;
-  int64_t last_tick_ = -1;
+  FrameRateGate frame_rate_;
   bool deinterlace_;
   std::function<void(std::shared_ptr<MediaPacket>)> output_;
 
@@ -78,10 +79,7 @@ class VideoEncoder {
     out.avcc=avcc_;
   }
   void encode(AVFrame *input, int64_t us) {
-    if(us<0) return;
-    int64_t tick=av_rescale_q(us,micros,{1,fps_});
-    if(tick<=last_tick_) return;
-    last_tick_=tick;
+    if(!frame_rate_.accept(us)) return;
     auto converted=frame();
     auto *v=codec_.get();
     converted->format=device_ ? AV_PIX_FMT_NV12 : AV_PIX_FMT_YUV420P;
@@ -132,7 +130,9 @@ class VideoEncoder {
   }
 public:
   VideoEncoder(const Json &o,std::function<void(std::shared_ptr<MediaPacket>)> output)
-      : fps_(o.at("fps")),width_(o.at("width")),height_(o.at("height")),deinterlace_(o.value("deinterlace",true)),output_(std::move(output)) {
+      : fps_(o.at("fps")),width_(o.at("width")),height_(o.at("height")),
+        frame_rate_(fps_,o.at("source").at("kind")=="browser"),
+        deinterlace_(o.value("deinterlace",true)),output_(std::move(output)) {
     std::string encoder=o.value("encoder","libopenh264");
     require(encoder=="libopenh264" || encoder=="h264_vaapi","Unsupported encoder");
     const auto *c=avcodec_find_encoder_by_name(encoder.c_str()); require(c,"Encoder unavailable");

@@ -13,6 +13,9 @@ identity verification with generated keys, authenticated framing and tamper
 rejection, media timestamps beyond two hours, shared subscriber delivery, stereo
 PCM, independent FFmpeg decoding of encrypted ALAC wire packets, and a
 generated MPEG-TS input through the actual source pipeline.
+The frame-rate regression checks jitter and clock phase at 30 and 60 fps:
+browser capture is already paced by X11, while tuner input still needs its
+independent output-rate limit.
 Python tests cover configuration persistence, guarded API access, mode/format
 validation, source replacement, Stop during warmup, independent receivers,
 MQTT discovery and stale command rejection. Host-network tests verify that
@@ -29,6 +32,30 @@ docker run --rm --cap-add SYS_ADMIN --shm-size=256m \
   -e PYTHONPATH=/opt/airplayvideo airplayvideo:dev \
   python3 tests/browser-network.py
 ```
+
+To measure full-screen motion capture without an account, tuner, or TV, run the
+bounded benchmark below. It creates a 1080p60 H.264 motion fixture, plays it in
+ordinary sandboxed Chrome, and records three ten-second 1080p30 trials through
+the production engine. Each trial reports actual capture timestamps, frame gaps,
+capture age, and the browser's decoded/dropped frame counters. Keep host load
+comparable between versions; emulation results do not establish HA hardware
+performance. Encoded frame counts alone do not prove that every frame is fresh.
+
+```sh
+mkdir -m 700 browser-benchmark
+docker run --rm --cap-add SYS_ADMIN --shm-size=256m --network none \
+  -e PYTHONPATH=/opt/airplayvideo \
+  -v "$PWD/browser-benchmark:/results" airplayvideo:dev \
+  python3 tests/browser-framerate.py --output /results/run
+```
+
+The output directory must be new. Captures contain only the generated fixture;
+the temporary Chrome profile is discarded. To test a Linux host's supported
+VAAPI encoder, additionally pass `--device /dev/dri` to Docker and
+`--encoder h264_vaapi` to the script. Do not mount production profiles or app
+data. The installed app's existing diagnostic report also includes decoded
+frame counts, measured fps and longest frame gap under `capture.video` and
+`wire.video`; its flash reference measures throughput, not motion fidelity.
 
 For an isolated local UI test, create an empty Docker volume. Never
 mount production app data, an existing browser profile, or receiver pairings.
