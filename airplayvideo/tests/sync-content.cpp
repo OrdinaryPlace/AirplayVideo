@@ -58,6 +58,7 @@ void make_fixture(const std::filesystem::path &path,int audio_shift_ms=0) {
       check(av_interleaved_write_frame(out.get(),packet.get()),"Fixture video write");
     }
   };
+  int audio_position=0;
   for(int tick=0;tick<seconds*fps;++tick) {
     check(av_frame_make_writable(frame.get()),"Fixture writable frame");
     const bool bright=tick>=fps&&tick%fps<3;
@@ -65,18 +66,22 @@ void make_fixture(const std::filesystem::path &path,int audio_shift_ms=0) {
     for(int plane=1;plane<3;++plane)for(int y=0;y<height/2;++y)
       std::memset(frame->data[plane]+y*frame->linesize[plane],128,width/2);
     frame->pts=tick;check(avcodec_send_frame(codec.get(),frame.get()),"Fixture encode");drain();
-    check(av_new_packet(packet.get(),1600*4),"Fixture audio storage");
-    for(int sample=0;sample<1600;++sample) {
-      const int position=tick*1600+sample-audio_shift_ms*48;
-      int16_t value=position>=48000&&position%48000<4800?
-        int16_t(12000*std::sin(2*3.14159265358979323846*1000*position/48000.0)):0;
-      for(int channel=0;channel<2;++channel) {
-        auto *p=packet->data+(sample*2+channel)*2;p[0]=uint16_t(value)&255;p[1]=uint16_t(value)>>8;
+    // Matroska stores millisecond timestamps. Ten-millisecond audio packets
+    // avoid rounding a 33.333 ms packet start under a mid-packet control pulse.
+    while(audio_position<(tick+1)*1600) {
+      check(av_new_packet(packet.get(),480*4),"Fixture audio storage");
+      for(int sample=0;sample<480;++sample) {
+        const int position=audio_position+sample-audio_shift_ms*48;
+        int16_t value=position>=48000&&position%48000<4800?
+          int16_t(12000*std::sin(2*3.14159265358979323846*1000*position/48000.0)):0;
+        for(int channel=0;channel<2;++channel) {
+          auto *p=packet->data+(sample*2+channel)*2;p[0]=uint16_t(value)&255;p[1]=uint16_t(value)>>8;
+        }
       }
+      packet->pts=packet->dts=av_rescale_q(audio_position,{1,48000},audio->time_base);
+      packet->duration=av_rescale_q(480,{1,48000},audio->time_base);packet->stream_index=audio->index;
+      check(av_interleaved_write_frame(out.get(),packet.get()),"Fixture audio write");audio_position+=480;
     }
-    packet->pts=packet->dts=av_rescale_q(int64_t(tick)*1600,{1,48000},audio->time_base);
-    packet->duration=av_rescale_q(1600,{1,48000},audio->time_base);packet->stream_index=audio->index;
-    check(av_interleaved_write_frame(out.get(),packet.get()),"Fixture audio write");
   }
   check(avcodec_send_frame(codec.get(),nullptr),"Fixture flush");drain();
   check(av_write_trailer(out.get()),"Fixture trailer");
@@ -262,16 +267,19 @@ Json measure(const std::filesystem::path &path,int lead,double expected_ms) {
   return result;
 }
 }
-int main() {
+int main(int argc,char **argv) {
   const auto path=std::filesystem::temp_directory_path()/("airplayvideo-sync-"+uuid()+".mkv");
   try {
     require(sodium_init()>=0,"Crypto initialization");avdevice_register_all();av_log_set_level(AV_LOG_ERROR);
+    const bool reference_only=argc==2&&std::string(argv[1])=="--reference-only";
+    require(argc==1||reference_only,"Only --reference-only is supported");
     make_fixture(path);
     reference(path,0);
-    for(int lead:{500,1500})measure(path,lead,0);
+    if(!reference_only)for(int lead:{500,1500})measure(path,lead,0);
     // Measurement control: move the waveform without changing its timestamps.
     // Equal track endpoints must not hide 75 ms of incorrect source content.
-    make_fixture(path,75);reference(path,75);measure(path,500,75);
+    make_fixture(path,75);reference(path,75);
+    if(!reference_only)measure(path,500,75);
     std::filesystem::remove(path);return 0;
   } catch(const std::exception &e) {
     std::filesystem::remove(path);std::cerr<<e.what()<<'\n';return 1;
