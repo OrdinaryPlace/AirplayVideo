@@ -179,7 +179,7 @@ Both media origins are checked against Debian's older aiohttp and the current
 optional version. Current candidate validation is recorded with its commit.
 
 The 0.2.12 candidate passes 222 optional-native Python tests, the complete Linux
-Python suite, all 10 C++ suites, sandboxed browser/profile/coexistence checks,
+Python suite, the C++ suites, sandboxed browser/profile/coexistence checks,
 and the installed-style local sync diagnostic. The authenticated diagnostic UI
 was inspected at desktop and 390-pixel widths. These are local checks; the
 candidate has not established native playback on a physical receiver.
