@@ -18,7 +18,9 @@ browser capture is already paced by X11, while tuner input still needs its
 independent output-rate limit.
 The video-rate regression rejects invalid target/maximum pairs and software VBR,
 checks explicit FFmpeg mode selection, and preserves legacy automatic requests.
-Host capabilities query VAAPI's H.264 Main / EncSlice VBR support. A successful
+Host capabilities query H.264 Main at FFmpeg 8's preferred available VAAPI
+entrypoint: EncSlice, EncPicture, then EncSliceLP. The low-power-only case has
+a native regression test; do not assume EncSlice exists on every GPU. A successful
 installed-container measurement with VBR selected verifies the actual encoder
 opens without a fallback; software-only CI cannot establish hardware support.
 Python tests cover configuration persistence, guarded API access, mode/format

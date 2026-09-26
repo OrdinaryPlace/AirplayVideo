@@ -95,6 +95,7 @@ class Diagnostics:
                            'encoder': config['encoder'], 'buffer_ms': config['latency_ms'],
                            'rate_control': config['rate_control'], 'bitrate': config['bitrate'],
                            'max_bitrate': config['max_bitrate'],
+                           'encoder_capabilities': copy.deepcopy(c.capabilities),
                            'targets': [r['name'] for r in receivers], 'stages': {},
                            'physical_output_measured': False}
             self.targets = set(wanted)

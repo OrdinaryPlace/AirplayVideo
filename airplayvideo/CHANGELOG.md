@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.11
+
+- Detect VBR on the H.264 entrypoint FFmpeg actually selects, including hardware that exposes only low-power encoding. Preserve explicit VBR and reject unsupported modes.
+- Include numeric encoder capabilities in the private diagnostic report.
+
 ## 0.2.10
 
 - Add explicit hardware variable bitrate with separate target and maximum controls in Picture & sound. The driver must advertise VBR support; unsupported selections fail without silently changing encoder or rate control.
