@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.11
+## 0.2.12
 
 - Add an explicitly started direct-video diagnostic for one selected TV, using
   its saved pairing and a temporary generated reference. Protocol stages and
@@ -10,6 +10,11 @@
 - Add optional public YouTube quality planning and progressive HLS preparation
   experiments that preserve compatible tracks and source resolution/frame rate.
   These are not yet the daily playback path or production dependencies.
+## 0.2.11
+
+- Detect VBR on the H.264 entrypoint FFmpeg actually selects, including hardware that exposes only low-power encoding. Preserve explicit VBR and reject unsupported modes.
+- Include numeric encoder capabilities in the private diagnostic report.
+
 ## 0.2.10
 
 - Add explicit hardware variable bitrate with separate target and maximum controls in Picture & sound. The driver must advertise VBR support; unsupported selections fail without silently changing encoder or rate control.

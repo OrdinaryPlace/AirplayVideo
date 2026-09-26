@@ -3,6 +3,7 @@
 #include "generated.hpp"
 #include "frame_rate.hpp"
 #include "video_rate.hpp"
+#include "vaapi_rate.hpp"
 #include <cstring>
 #include <bit>
 extern "C" {
@@ -517,14 +518,31 @@ Json media_capabilities() {
   AVBufferRef *device=nullptr;
   bool hardware=avcodec_find_encoder_by_name("h264_vaapi")&&av_hwdevice_ctx_create(&device,AV_HWDEVICE_TYPE_VAAPI,"/dev/dri/renderD128",nullptr,0)>=0;
   bool vbr=false;
+  Json vaapi_details={{"profile","H264Main"},{"entrypoints",Json::array()},{"selected_entrypoint",nullptr}};
   if(hardware) {
     const auto *context=reinterpret_cast<AVHWDeviceContext*>(device->data);
     const auto *vaapi=static_cast<AVVAAPIDeviceContext*>(context->hwctx);
-    VAConfigAttrib attribute{VAConfigAttribRateControl,0};
-    vbr=vaGetConfigAttributes(vaapi->display,VAProfileH264Main,VAEntrypointEncSlice,&attribute,1)==VA_STATUS_SUCCESS &&
-      attribute.value!=VA_ATTRIB_NOT_SUPPORTED && (attribute.value&VA_RC_VBR);
+    int count=vaMaxNumEntrypoints(vaapi->display);
+    if(count>0) {
+      std::vector<VAEntrypoint> entrypoints(count);
+      if(vaQueryConfigEntrypoints(vaapi->display,VAProfileH264Main,entrypoints.data(),&count)==VA_STATUS_SUCCESS) {
+        entrypoints.resize(count);
+        const auto selected=default_h264_entrypoint(entrypoints);
+        auto name=[](VAEntrypoint e) {return e==VAEntrypointEncSlice?"EncSlice":e==VAEntrypointEncPicture?"EncPicture":"EncSliceLP";};
+        for(auto entry : {VAEntrypointEncSlice,VAEntrypointEncPicture,VAEntrypointEncSliceLP}) {
+          if(std::find(entrypoints.begin(),entrypoints.end(),entry)==entrypoints.end()) continue;
+          VAConfigAttrib attribute{VAConfigAttribRateControl,0};
+          const bool known=vaGetConfigAttributes(vaapi->display,VAProfileH264Main,entry,&attribute,1)==VA_STATUS_SUCCESS && attribute.value!=VA_ATTRIB_NOT_SUPPORTED;
+          vaapi_details["entrypoints"].push_back({{"name",name(entry)},{"rate_control_mask",known?Json(attribute.value):Json(nullptr)}});
+          if(entry==selected) {
+            vaapi_details["selected_entrypoint"]=name(entry);
+            vbr=known&&(attribute.value&VA_RC_VBR);
+          }
+        }
+      }
+    }
   }
   av_buffer_unref(&device);
-  return {{"codecs",Json::array({"h264"})},{"encoders",hardware?Json::array({"libopenh264","h264_vaapi"}):Json::array({"libopenh264"})},{"vbr_encoders",vbr?Json::array({"h264_vaapi"}):Json::array()},{"resolutions",Json::array({"1080p","720p"})},{"frame_rates",Json::array({30,60})},{"audio","PCM stereo 44.1 kHz"}};
+  return {{"codecs",Json::array({"h264"})},{"encoders",hardware?Json::array({"libopenh264","h264_vaapi"}):Json::array({"libopenh264"})},{"vbr_encoders",vbr?Json::array({"h264_vaapi"}):Json::array()},{"vaapi",vaapi_details},{"resolutions",Json::array({"1080p","720p"})},{"frame_rates",Json::array({30,60})},{"audio","PCM stereo 44.1 kHz"}};
 }
 }

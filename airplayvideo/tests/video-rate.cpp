@@ -1,10 +1,20 @@
 #include "stream.hpp"
 #include "video_rate.hpp"
+#include "vaapi_rate.hpp"
 #include <iostream>
 using namespace lab;
 
 int main() {
   try {
+    const VAEntrypoint low_power_only[]={VAEntrypointVLD,VAEntrypointEncSliceLP};
+    const VAEntrypoint both[]={VAEntrypointEncSliceLP,VAEntrypointEncSlice};
+    const VAEntrypoint decode_only[]={VAEntrypointVLD};
+    require(default_h264_entrypoint(low_power_only)==VAEntrypointEncSliceLP,
+            "Low-power-only hardware must be queried at the path FFmpeg selects");
+    require(default_h264_entrypoint(both)==VAEntrypointEncSlice,
+            "Capabilities must follow FFmpeg preference, not driver enumeration order");
+    require(default_h264_entrypoint(decode_only)==VAEntrypoint(0),
+            "Decode support does not establish an encoder entrypoint");
     Json config={{"source",{{"kind","synthetic"}}},{"width",1920},{"height",1080},
                  {"fps",30},{"encoder","h264_vaapi"},{"bitrate",16000000},
                  {"rate_control","vbr"},{"max_bitrate",30000000}};

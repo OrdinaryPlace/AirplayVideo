@@ -131,7 +131,8 @@ class Diagnostics:
             if kind == 'sync':
                 self.report.update(encoder=config['encoder'], buffer_ms=config['latency_ms'],
                                    rate_control=config['rate_control'], bitrate=config['bitrate'],
-                                   max_bitrate=config['max_bitrate'])
+                                   max_bitrate=config['max_bitrate'],
+                                   encoder_capabilities=copy.deepcopy(c.capabilities))
             else:
                 self.report.update(trial_seconds=NATIVE_SECONDS, physical_observation='pending')
             self.targets = set(wanted)
