@@ -21,7 +21,7 @@ from .native_engine import NativeEnginePlayer
 from .native_hls_origin import NativeHLSOrigin
 from .native_plan import receiver_capabilities
 from .native_prepare import youtube_url
-from .native_stream import NativeHLSStream, playlist_segments
+from .native_stream import NativeHLSStream, PREPARATION_STAGES, playlist_segments
 
 
 class SessionError(UserError):
@@ -60,6 +60,21 @@ _KNOWN_FAILURES = {
     'Native HLS output did not cover the complete resolved video duration',
     'The complete source and final playback buffer no longer fit within the session limit',
     'The best-quality video is HDR or has unknown color range; HDR preservation is not yet verified',
+    'A media command failed; no source quality fallback was attempted',
+    'A media command failed or timed out',
+    'A media probe returned invalid data',
+    'The media probe differs from the selected codec, dimensions or frame rate',
+    'The media probe is incomplete or invalid',
+    'The media probe has an invalid frame rate',
+    'The initial presentation timestamp could not be verified',
+    'The source audio and video start at different presentation times; offset preservation is not implemented',
+    'The prepared sample changed the relative audio and video presentation timestamps',
+    'Output frame rate did not preserve the probed source frame rate',
+    'A selected source track does not cover the resolved video duration',
+    'The selected audio and video durations do not agree',
+    'The prepared media did not retain the requested audio and video duration',
+    'Native HLS conversion stopped before completion',
+    'Native HLS startup failed or timed out',
 }
 _POLL_SECONDS = 0.25
 
@@ -126,6 +141,7 @@ class NativeSession:
         self._deadline = self._connected_at = self._source_finished_at = None
         self._source_finished = False
         self._state, self._stage, self._error, self._failure = 'new', 'Not started', None, None
+        self._failure_stage = None
         self._quality = None
         self._copy_video = self._copy_audio = None
         self._expected_duration = None
@@ -148,6 +164,7 @@ class NativeSession:
             'prepared_duration_seconds': self._prepared_duration,
             'source_finished': self._source_finished, 'completed': self._state == 'completed',
             'error': self._error, 'failure': self._failure, 'events': self._events,
+            'preparation_stage': self._preparation_stage(), 'failure_stage': self._failure_stage,
             'delivery': self._delivery, 'physical_playback_verified': False,
             'seek_supported': False, 'pause_supported': False,
         })
@@ -166,7 +183,16 @@ class NativeSession:
         self._failure = code
         message = str(error) if error is not None else None
         self._error = message if message in _KNOWN_FAILURES or message in _MESSAGES.values() else _MESSAGES[code]
-        self._set_state('failed', 'Direct playback stopped')
+        if code == 'prepare_failed':
+            self._failure_stage = self._preparation_stage()
+        stage = PREPARATION_STAGES.get(self._failure_stage)
+        self._set_state('failed', 'Direct video failed: ' + stage if stage else 'Direct playback stopped')
+
+    def _preparation_stage(self):
+        if self.producer is None:
+            return None
+        stage = self.producer.status.get('preparation_stage')
+        return stage if isinstance(stage, str) and stage in PREPARATION_STAGES else None
 
     def _read_counters(self):
         if self.origin is None:

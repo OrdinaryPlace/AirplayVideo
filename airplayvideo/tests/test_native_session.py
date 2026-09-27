@@ -45,6 +45,7 @@ def rig(tmp_path, monkeypatch):
             if gates.get('prepare'):
                 await gates['prepare'].wait()
             if gates.get('prepare_error'):
+                self.status['preparation_stage'] = gates.get('preparation_stage')
                 raise gates['prepare_error']
             self.status.update(state='streaming', ready=True)
         async def close(self):
@@ -349,6 +350,35 @@ async def test_prepare_failure_never_falls_back_or_contacts_tv(rig):
         await session.start(URL)
     assert len(producers) == 1 and not origins and not players
     assert session.status['phase'] == 'failed' and session.closed.is_set()
+
+
+@pytest.mark.asyncio
+async def test_prepare_failure_retains_fixed_source_validation_reason_and_stage(rig):
+    root, _, producers, origins, players, gates, _ = rig
+    message = 'The media probe differs from the selected codec, dimensions or frame rate'
+    gates.update(prepare_error=StreamError(message), preparation_stage='source_validation')
+    session = NativeSession(root, TV)
+    with pytest.raises(SessionError, match='selected codec'):
+        await session.start(URL)
+    result = session.status
+    assert result['error'] == message
+    assert result['failure_stage'] == result['preparation_stage'] == 'source_validation'
+    assert result['stage'] == 'Direct video failed: Checking source quality and timing'
+    assert producers[0].closed.is_set() and not origins and not players
+    assert 'private-source' not in json.dumps(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stage', ['https://private-source/secret', ['source_validation']])
+async def test_prepare_diagnostics_never_admit_unrecognized_stage_or_raw_error(rig, stage):
+    root, _, _, origins, players, gates, _ = rig
+    gates.update(prepare_error=StreamError('private raw stderr https://secret'), preparation_stage=stage)
+    session = NativeSession(root, TV)
+    with pytest.raises(SessionError, match='Direct YouTube preparation failed'):
+        await session.start(URL)
+    result = session.status
+    assert result['failure_stage'] is None and result['preparation_stage'] is None
+    assert 'secret' not in json.dumps(result) and not origins and not players
 
 
 @pytest.mark.asyncio

@@ -5,7 +5,7 @@ to your Apple TVs from Home Assistant. Browser, tuner and generated sources shar
 one encoder across selected TVs. Direct YouTube video uses one TV's native media
 player. Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.15.** This is an independent implementation in a new
+**Experimental, version 0.2.16.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 

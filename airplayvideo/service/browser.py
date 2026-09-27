@@ -230,8 +230,11 @@ class Browser:
         self.cancel_youtube()
         async with self.control_lock:
             check(self.running and self.companion, "Open the browser first")
+            # Chrome can accept navigation before its acknowledgement is lost.
+            # An uncertain destination must never qualify for URL reuse.
+            self.url = ""
             await self.companion.call("navigate", url=url)
-        self.url = url
+            self.url = url
         if youtube or watch_later:
             self.youtube_task = asyncio.create_task(self.prepare_youtube(setup["browser"]["youtube_quality"], watch_later))
 
@@ -251,6 +254,10 @@ class Browser:
         if action in {"back", "forward", "reload"}:
             self.cancel_youtube()
             async with self.control_lock:
+                if action in {"back", "forward"}:
+                    # History changes the page without granting permission to
+                    # inspect arbitrary page URLs through the companion.
+                    self.url = ""
                 await self.companion.call(action)
         elif action in {"zoom_in", "zoom_out", "zoom_reset"}:
             async with self.control_lock:

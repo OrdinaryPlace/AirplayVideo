@@ -295,9 +295,18 @@ class Controller:
             self.require_mode("browser")
             request = {**request, "mode": "browser", "delivery": "browser"}
             source, _ = self.requested_source(request)
+            prior_error, generation = self.error, self.generation
+            inactive = not (self.stream or self.pending or self.targets or self.tearing_down)
             await self.browser.navigate(source["url"], self.store.data["setup"], source["browser_source"] == "youtube", source["browser_source"] == "watch_later")
             if self.source and self.source["kind"] == "browser":
                 self.source = source
+            # A recovered preview retires an earlier failed attempt, but cannot
+            # dismiss an active stream failure or an error arriving during navigation.
+            if (inactive and not (self.stream or self.pending or self.targets or self.tearing_down)
+                    and generation == self.generation and self.error == prior_error):
+                self.error = ""
+                if self.phase == "error":
+                    self.phase = "idle"
             self.notify()
 
     async def play(self, request, add=False):
@@ -332,7 +341,11 @@ class Controller:
                         self.receivers.pop(receiver, None)
                     self.targets &= target
                 if source["kind"] == "browser":
-                    if not self.browser.running or not self.source or source.get("url") != self.source.get("url"):
+                    # Joining the current browser shares its current navigation.
+                    # An explicit Play must open the requested source, including
+                    # after a separate preview navigation or an uncertain ACK.
+                    joining_current = add and same_source and source.get("url") == self.source.get("url")
+                    if not self.browser.running or (not joining_current and source.get("url") != getattr(self.browser, "url", "")):
                         await self.browser.navigate(source["url"], self.store.data["setup"], source["browser_source"] == "youtube", source["browser_source"] == "watch_later")
                     else:
                         await self.browser.start(self.store.data["setup"])

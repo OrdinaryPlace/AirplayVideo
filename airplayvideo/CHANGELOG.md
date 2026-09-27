@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.16
+
+- Accept YouTube's rounded 24/30/60 fps metadata for matching 23.976/29.97/59.94 fps media. Preserve the probed fractional frame rate through copying, conversion and quality reporting.
+- Identify the failed preparation step and show safe media-validation errors instead of hiding them behind a generic failure.
+- Restore temporary page styles before fitting a rearranged YouTube player, preventing a previously hidden parent from leaving the preview white. Update the browser companion in the existing profile.
+- Navigate to the requested page when browser playback resumes after another delivery path or navigation. Clear obsolete direct-playback alerts after successful browser navigation while retaining the diagnostic report.
+
 ## 0.2.15
 
 - Play public YouTube links directly on one paired TV using progressive HLS, without opening or recording the browser. Keep Browser playback available as an explicit choice.

@@ -40,6 +40,10 @@ function youtubeControl(command) {
     };
     const remember = element => {if (!saved.has(element)) saved.set(element, element.getAttribute('style'));};
     const refresh = () => {
+      // YouTube can move or replace the player during initial page setup. Its
+      // new parent may be a sibling hidden by the previous fit. Rebuild from
+      // the original styles so the current player's ancestors remain visible.
+      restore();
       const current = document.querySelector('#movie_player');
       const prompt = [...document.querySelectorAll('[role="dialog"][aria-modal="true"], tp-yt-paper-dialog, ytd-consent-bump-v2-lightbox')].some(element => {
         const rect = element.getBoundingClientRect();

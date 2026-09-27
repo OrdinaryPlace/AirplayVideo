@@ -319,6 +319,22 @@ def _rate(row):
         raise PrepareError("The media probe has an invalid frame rate") from None
 
 
+def _matches_metadata_rate(actual, declared):
+    if abs(actual - declared) <= Fraction(1, 100):
+        return True
+    # YouTube commonly labels NTSC-family media with its nominal integer FPS.
+    # Accept only those standard pairs; the probe remains the source of truth.
+    return (declared in (24, 30, 60)
+            and abs(actual - declared * Fraction(1000, 1001)) <= Fraction(1, 10000))
+
+
+def retain_probed_rate(plan, rate):
+    """Carry the verified source cadence into encoding and user-visible quality."""
+    value = f"{rate.numerator}/{rate.denominator}"
+    plan["video"]["fps"] = value
+    plan["target"]["fps"] = value
+
+
 def validate_tracks(plan, video_probe, audio_probe, *, output=False, seconds=None, source_rate=None):
     """Confirm actual streams; metadata alone never authorizes a copied track."""
     try:
@@ -326,9 +342,12 @@ def validate_tracks(plan, video_probe, audio_probe, *, output=False, seconds=Non
         expected = plan["target"] if output else plan["video"]
         expected_codec = expected["video_codec"] if output else expected["codec"]
         rate = _rate(video)
+        declared_rate = Fraction(expected["fps"])
+        matches_rate = (abs(rate - declared_rate) <= Fraction(1, 100) if output
+                        else _matches_metadata_rate(rate, declared_rate))
         if (video.get("codec_name") != expected_codec or video.get("width") != expected["width"]
                 or video.get("height") != expected["height"]
-                or abs(rate - Fraction(expected["fps"])) > Fraction(1, 100)):
+                or not matches_rate):
             raise PrepareError("The media probe differs from the selected codec, dimensions or frame rate")
         if source_rate is not None and abs(rate - source_rate) > Fraction(1, 100000):
             raise PrepareError("Output frame rate did not preserve the probed source frame rate")
@@ -426,6 +445,7 @@ def prepare_media(url, receiver_model, seconds, output_dir, ffmpeg, ffprobe, *, 
                     byte_limit=prefix_byte_limit(audio_row, seconds, duration, audio=True))
     video_probe, audio_probe = probe_media(ffprobe, video_path), probe_media(ffprobe, audio_path)
     rate = validate_tracks(plan, video_probe, audio_probe)
+    retain_probed_rate(plan, rate)
     source_offset = validate_initial_timing(probe_initial_pts(ffprobe, video_path, "video"),
                                             probe_initial_pts(ffprobe, audio_path, "audio"))
     _run(ffmpeg_arguments(ffmpeg, video_path, audio_path, staged, plan, seconds), timeout=300)

@@ -371,6 +371,52 @@ async def test_start_cancellation_cleans_processes_and_preserves_existing_record
 
 
 @pytest.mark.asyncio
+async def test_public_nominal_fps_is_refined_before_encoder_probe_and_report(tmp_path, monkeypatch):
+    stream = session(tmp_path)
+    metadata = {'duration': 1378, 'formats': [
+        {'format_id': '313', 'vcodec': 'vp9', 'acodec': 'none', 'width': 3840, 'height': 2160,
+         'fps': 30, 'dynamic_range': 'SDR', 'protocol': 'https',
+         'url': 'https://r1.googlevideo.com/videoplayback?private=video'},
+        {'format_id': '140', 'vcodec': 'none', 'acodec': 'mp4a.40.2', 'audio_channels': 2,
+         'asr': 44100, 'abr': 128, 'protocol': 'https',
+         'url': 'https://r1.googlevideo.com/videoplayback?private=audio'}]}
+
+    async def resolve(*args, **kwargs):
+        return metadata
+
+    async def capabilities():
+        return {}
+
+    async def probe(source):
+        video = {'codec_type': 'video', 'codec_name': 'vp9', 'width': 3840, 'height': 2160,
+                 'avg_frame_rate': '30000/1001', 'duration': '1377.809767'}
+        audio = {'codec_type': 'audio', 'codec_name': 'aac', 'profile': 'LC',
+                 'sample_rate': '44100', 'channels': 2, 'duration': '1377.872109'}
+        return {'streams': [video if source.endswith('video') else audio]}
+
+    async def initial(*args):
+        return Fraction(0)
+
+    async def encoder(capabilities):
+        assert stream.plan['target']['fps'] == stream.plan['video']['fps'] == '30000/1001'
+        assert stream.status['quality']['fps'] == '30000/1001'
+        assert stream._source_rate == Fraction(30000, 1001)
+        # Stop before creating media or receiver resources in this focused test.
+        raise StreamError('A compatible video encoder is unavailable; source quality was not reduced')
+
+    monkeypatch.setattr(stream, '_json_command', resolve)
+    monkeypatch.setattr(stream, '_capabilities', capabilities)
+    monkeypatch.setattr(stream, '_probe', probe)
+    monkeypatch.setattr(stream, '_initial_pts', initial)
+    monkeypatch.setattr(stream, '_verify_encoder', encoder)
+    with pytest.raises(StreamError, match='encoder is unavailable'):
+        await stream.start('https://youtu.be/abcdefghijk', 'AppleTV11,1')
+    assert stream.status['preparation_stage'] == 'encoder_probe'
+    assert stream.closed.is_set() and stream.directory is None and not stream._jobs
+    assert 'private=' not in json.dumps(stream.status)
+
+
+@pytest.mark.asyncio
 async def test_monitor_publishes_ready_only_after_segment_verification_and_detects_bad_exit(tmp_path, monkeypatch):
     stream = session(tmp_path)
     stream.directory = tmp_path / "native-stream-owned"
@@ -398,16 +444,33 @@ async def test_monitor_publishes_ready_only_after_segment_verification_and_detec
 
 
 @pytest.mark.asyncio
-async def test_disk_limit_stops_stream_and_removes_only_its_generated_directory(tmp_path):
+@pytest.mark.parametrize('delayed_reap', [False, True])
+async def test_disk_limit_stops_stream_and_removes_only_its_generated_directory(tmp_path, monkeypatch, delayed_reap):
     stream = session(tmp_path, disk_limit=16 * 1024 * 1024)
     stream.directory = tmp_path / "native-stream-owned"
     stream.directory.mkdir()
     with (stream.directory / "segment-00000000.m4s.tmp").open("wb") as output:
         output.truncate(17 * 1024 * 1024)
     stream._started = time.monotonic()
-    stream.process = await stream._spawn([sys.executable, "-c", "import time;time.sleep(30)"])
+    code = ("import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);"
+            "print('ready',flush=True);time.sleep(30)") if delayed_reap else "import time;time.sleep(30)"
+    stream.process = await stream._spawn([sys.executable, "-c", code], stdout=asyncio.subprocess.PIPE)
+    if delayed_reap:
+        assert await asyncio.wait_for(stream.process.stdout.readline(), 2) == b'ready\n'
+        wait = stream.process.wait
+
+        async def reap():
+            result = await wait()
+            # Model delayed child-watcher delivery inside the supported
+            # two-second post-kill wait, after the two-second TERM grace.
+            await asyncio.sleep(1.1)
+            return result
+
+        monkeypatch.setattr(stream.process, 'wait', reap)
     stream._monitor_task = asyncio.create_task(stream._monitor())
-    await asyncio.wait_for(stream.closed.wait(), 3)
+    # Cleanup permits 2s TERM grace + 2s reaping; allow the monitor and event
+    # loop to deliver completion too. Three seconds rejected valid cleanup.
+    await asyncio.wait_for(stream.closed.wait(), 6)
     assert stream.process.returncode is not None
     assert stream.status["error"] == "The native HLS session reached its disk limit"
     assert not stream.directory.exists()
@@ -431,6 +494,7 @@ async def test_clean_early_exit_with_endlist_cannot_claim_full_video_completion(
     await asyncio.wait_for(stream.closed.wait(), 3)
     assert stream.status["prepared_duration_seconds"] == 4
     assert stream.status["error"] == "Native HLS output did not cover the complete resolved video duration"
+    assert stream.status["preparation_stage"] != "ready"
     assert not stream.status["ready"]
 
 

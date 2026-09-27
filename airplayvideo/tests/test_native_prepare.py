@@ -159,6 +159,35 @@ def test_rounded_extractor_fps_can_match_probe_but_output_must_preserve_actual_r
         prepare.validate_tracks(plan, changed, changed, output=True, seconds=20, source_rate=rate)
 
 
+@pytest.mark.parametrize("nominal", [24, 30, 60])
+def test_nominal_youtube_fps_accepts_ntsc_source_and_retains_exact_probed_cadence(nominal):
+    data = metadata()
+    data["formats"][0]["fps"] = nominal
+    plan = plan_media(data, "AppleTV6,2")
+    source = probe()
+    source["streams"][0]["avg_frame_rate"] = f"{nominal * 1000}/1001"
+    rate = prepare.validate_tracks(plan, source, source)
+    assert rate == Fraction(nominal * 1000, 1001)
+    prepare.retain_probed_rate(plan, rate)
+    assert plan["target"]["fps"] == plan["video"]["fps"] == f"{nominal * 1000}/1001"
+    assert prepare.validate_tracks(plan, source, source, output=True, seconds=20, source_rate=rate) == rate
+    retimed = copy.deepcopy(source)
+    retimed["streams"][0]["avg_frame_rate"] = str(nominal)
+    with pytest.raises(prepare.PrepareError):
+        prepare.validate_tracks(plan, retimed, retimed, output=True, seconds=20, source_rate=rate)
+
+
+@pytest.mark.parametrize("actual", ["29/1", "149/5", "31/1", "24/1", "60/1"])
+def test_nominal_metadata_does_not_accept_unrelated_frame_rates(actual):
+    data = metadata()
+    data["formats"][0]["fps"] = 30
+    plan = plan_media(data, "AppleTV6,2")
+    source = probe()
+    source["streams"][0]["avg_frame_rate"] = actual
+    with pytest.raises(prepare.PrepareError, match="frame rate"):
+        prepare.validate_tracks(plan, source, source)
+
+
 def test_process_failure_never_exposes_command_urls_or_stderr(monkeypatch):
     def fail(args, **kwargs):
         assert kwargs["shell"] is False and kwargs["stderr"] == subprocess.DEVNULL

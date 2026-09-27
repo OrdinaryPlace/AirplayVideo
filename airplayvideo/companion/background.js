@@ -9,7 +9,7 @@ async function activeTab() {
 }
 
 async function command(message) {
-  if (message.action === 'ready') return {ok: true};
+  if (message.action === 'ready') return {ok: true, version: chrome.runtime.getManifest().version};
   const tab = await activeTab();
   if (message.action === 'navigate') {
     const url = new URL(message.url);

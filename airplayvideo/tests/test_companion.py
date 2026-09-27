@@ -9,6 +9,7 @@ import aiohttp
 from aiohttp.test_utils import TestClient, TestServer
 import pytest
 from service.companion import Companion, read_message, install
+from service import companion as companion_module
 from service.main import Application, make_app
 from service.model import Store, UserError
 
@@ -16,6 +17,54 @@ from service.model import Store, UserError
 def frame(value):
     payload = json.dumps(value).encode()
     return struct.pack('=I', len(payload)) + payload
+
+
+@pytest.mark.asyncio
+async def test_ready_waits_for_current_extension_version(tmp_path):
+    companion = Companion(tmp_path, 'a' * 32)
+    companion.ready.set()
+    expected = json.loads((companion_module.SOURCE / 'manifest.json').read_text())['version']
+    companion.call = AsyncMock(side_effect=[{'ok': True}, {'ok': True, 'version': '1.0.1'}, {'ok': True, 'version': expected}])
+    await companion.wait_ready()
+    assert companion.call.await_count == 3
+    assert all(call.args == ('ready',) for call in companion.call.await_args_list)
+
+
+@pytest.mark.asyncio
+async def test_ready_tolerates_extension_replacement_disconnect(tmp_path):
+    companion = Companion(tmp_path, 'a' * 32)
+    companion.ready.set()
+    expected = json.loads((companion_module.SOURCE / 'manifest.json').read_text())['version']
+    companion.call = AsyncMock(side_effect=[UserError('Browser controls disconnected'), {'ok': True, 'version': expected}])
+    await companion.wait_ready()
+    assert companion.call.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_ready_rejects_an_extension_that_never_updates(tmp_path, monkeypatch):
+    companion = Companion(tmp_path, 'a' * 32)
+    companion.ready.set()
+    companion.call = AsyncMock(return_value={'ok': True, 'version': '1.0.1'})
+    wait_for = asyncio.wait_for
+    async def bounded(awaitable, timeout):
+        assert timeout == 30
+        return await wait_for(awaitable, 0.02)
+    monkeypatch.setattr(companion_module.asyncio, 'wait_for', bounded)
+    with pytest.raises(UserError, match='Current browser controls did not connect'):
+        await companion.wait_ready()
+    companion.call.assert_awaited_once_with('ready')
+
+
+@pytest.mark.asyncio
+async def test_waiting_for_current_extension_remains_cancellable(tmp_path):
+    companion = Companion(tmp_path, 'a' * 32)
+    companion.call = AsyncMock()
+    waiting = asyncio.create_task(companion.wait_ready())
+    await asyncio.sleep(0)
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+    companion.call.assert_not_awaited()
 
 
 @pytest.mark.asyncio

@@ -23,7 +23,7 @@ import time
 
 from .native_prepare import (PrepareError, _binary, _cdn_url, _extract_metadata,
                              _stream, plan_direct_media, validate_initial_timing,
-                             validate_tracks, youtube_url)
+                             validate_tracks, retain_probed_rate, youtube_url)
 from .native_plan import PlanError
 
 
@@ -35,6 +35,16 @@ _MAX_COMMAND_OUTPUT = 2 * 1024 * 1024
 _SEGMENT = re.compile(r"segment-\d{8}\.m4s\Z")
 _PROBE_FIELDS = ("stream=codec_type,codec_name,profile,level,pix_fmt,width,height,avg_frame_rate,"
                  "r_frame_rate,color_transfer,sample_rate,channels,duration,nb_frames:format=duration,size")
+PREPARATION_STAGES = {
+    "resolve_and_capabilities": "Resolving public video and checking media tools",
+    "plan": "Selecting direct video tracks",
+    "source_probe": "Reading the selected source tracks",
+    "source_validation": "Checking source quality and timing",
+    "encoder_probe": "Verifying the required encoder",
+    "hls_start": "Preparing the first media segment",
+    "segment_validation": "Checking the first media segment",
+    "ready": "Direct video is ready",
+}
 
 
 async def _gather(*coroutines):
@@ -264,6 +274,7 @@ class NativeHLSStream:
         self.closed = asyncio.Event()
         self._error = None
         self._state = "new"
+        self._preparation_stage = None
         self._bytes = 0
         self._started = None
         self._source_rate = self._source_offset = None
@@ -278,6 +289,7 @@ class NativeHLSStream:
     @property
     def status(self):
         return {"state": self._state, "ready": self._state in {"streaming", "finished"} and self._error is None,
+                "preparation_stage": self._preparation_stage,
                 "finished": self._finished.is_set(), "error": self._error,
                 "disk_bytes": self._bytes, "experimental": True,
                 "receiver_playback_verified": False,
@@ -486,9 +498,11 @@ class NativeHLSStream:
             raise StreamError(self._error) from None
 
     async def _start(self, url, receiver_model, max_resolution):
+        self._preparation_stage = "resolve_and_capabilities"
         metadata, capabilities = await _gather(
             self._json_command([sys.executable, "-m", "service.native_stream", "--resolve-worker"],
                                timeout=45, payload=url.encode()), self._capabilities())
+        self._preparation_stage = "plan"
         self.plan = plan_direct_media(metadata, receiver_model, max_resolution=max_resolution)
         try:
             duration = float(metadata.get("duration", 0))
@@ -502,12 +516,17 @@ class NativeHLSStream:
         rows = {row["format_id"]: row for row in metadata["formats"] if isinstance(row, dict) and isinstance(row.get("format_id"), str)}
         video = _cdn_url(rows[self.plan["video"]["format_id"]]["url"])
         audio = _cdn_url(rows[self.plan["audio"]["format_id"]]["url"])
+        self._preparation_stage = "source_probe"
         video_probe, audio_probe, video_pts, audio_pts = await _gather(
             self._probe(video), self._probe(audio), self._initial_pts(video, "video"), self._initial_pts(audio, "audio"))
+        self._preparation_stage = "source_validation"
         self._source_rate = validate_tracks(self.plan, video_probe, audio_probe)
+        retain_probed_rate(self.plan, self._source_rate)
         validate_source_durations(duration, video_probe, audio_probe)
         self._source_offset = validate_initial_timing(video_pts, audio_pts)
+        self._preparation_stage = "encoder_probe"
         await self._verify_encoder(capabilities)
+        self._preparation_stage = "hls_start"
         self.directory = Path(tempfile.mkdtemp(prefix="native-stream-", dir=self.root))
         self.process = await self._spawn(
             hls_arguments(self.ffmpeg, video, audio, self.directory, self.plan, encoder=self.encoder,
@@ -566,6 +585,7 @@ class NativeHLSStream:
                             self._last_segment = number
                 if names and not self._ready.is_set():
                     if self._verification_task is None:
+                        self._preparation_stage = "segment_validation"
                         self._verification_task = asyncio.create_task(self._verify_first_segment(names[0]))
                     if self._verification_task.done():
                         self._verification_task.result()
@@ -579,6 +599,7 @@ class NativeHLSStream:
                     if self.expected_duration is not None and abs(float(self._prepared_duration) - self.expected_duration) > 1:
                         raise StreamError("Native HLS output did not cover the complete resolved video duration")
                     if self._ready.is_set():
+                        self._preparation_stage = "ready"
                         self._state = "finished"
                         self._finished.set()
                         if self.managed_lifecycle:
@@ -591,6 +612,8 @@ class NativeHLSStream:
                     if time.monotonic() - completed_at > 120:
                         asyncio.create_task(self.close())
                         return
+                if self._ready.is_set():
+                    self._preparation_stage = "ready"
                 await asyncio.sleep(0.5)
         except asyncio.CancelledError:
             raise

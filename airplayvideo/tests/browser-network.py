@@ -1,13 +1,17 @@
 """Real sandboxed Chrome and native controls in an isolated Linux container."""
 import asyncio
 from contextlib import ExitStack
+import json
 import os
 from pathlib import Path
+import shutil
 import socket
 import tempfile
+from unittest.mock import patch
 import aiohttp
 from aiohttp import web
 from service.browser import Browser
+from service.companion import install as install_companion
 from service.model import default_setup, UserError
 
 
@@ -46,9 +50,22 @@ async def main():
             assert(document.documentElement.clientWidth===innerWidth,'Scrollbar occupies picture width');
             const rect=document.querySelector('#movie_player').getBoundingClientRect();
             assert(rect.width===innerWidth && rect.height===innerHeight,'Video does not fill viewport');
+            const first=document.querySelector('#movie_player'), parent=first.parentElement;
+            const destination=document.createElement('section');destination.setAttribute('style','color: rgb(1, 2, 3)');document.body.append(destination);
+            window.__airplayVideoFit.refresh();
+            assert(getComputedStyle(destination).visibility==='hidden','Reparent fixture was not initially hidden');
+            destination.append(first);window.__airplayVideoFit.refresh();
+            assert(getComputedStyle(first).visibility==='visible','Moved player inherits a hidden ancestor');
+            first.remove();
+            const replacement=document.createElement('div');replacement.id='movie_player';replacement.setAttribute('style','background: rgb(4, 5, 6)');parent.append(replacement);
+            window.__airplayVideoFit.refresh();
+            assert(getComputedStyle(replacement).visibility==='visible','Replacement player inherits a hidden ancestor');
+            const resized=replacement.getBoundingClientRect();
+            assert(resized.width===innerWidth && resized.height===innerHeight,'Replacement player does not fill viewport');
             const dialog=document.createElement('div');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.textContent='Consent fixture';document.body.append(dialog);
             window.__airplayVideoFit.refresh();
             assert(document.documentElement.getAttribute('style')===original[0] && document.body.getAttribute('style')===original[1],'Dialog did not restore scrolling');
+            assert(destination.getAttribute('style')==='color: rgb(1, 2, 3)' && replacement.getAttribute('style')==='background: rgb(4, 5, 6)','Reparenting did not restore original inline styles');
             dialog.remove();window.__airplayVideoFit.refresh();
             history.pushState(null,'','/home');window.__airplayVideoFit.refresh();
             assert(document.documentElement.getAttribute('style')===original[0] && document.body.getAttribute('style')===original[1],'Navigation did not restore scrolling');
@@ -78,6 +95,11 @@ async def main():
     try:
         with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
             Path(directory).chmod(0o755)
+            old_companion = Path(directory) / 'old-companion'
+            shutil.copytree(Path(__file__).parents[1] / 'companion', old_companion)
+            old_manifest = json.loads((old_companion / 'manifest.json').read_text())
+            old_manifest['version'] = '1.0.1'
+            (old_companion / 'manifest.json').write_text(json.dumps(old_manifest))
             for port in (5900, 9222):
                 listener = resources.enter_context(socket.socket())
                 listener.bind(('127.0.0.1', port))
@@ -86,7 +108,13 @@ async def main():
                 browsers = [Browser(Path(directory) / name, session) for name in ('one', 'two')]
                 try:
                     for number, browser in enumerate(browsers):
-                        await browser.navigate(base + f'/{number}/first', default_setup())
+                        with ExitStack() as initial_version:
+                            if number == 0:
+                                initial_version.enter_context(patch('service.browser.install_companion', lambda root: install_companion(root, source=old_companion)))
+                                initial_version.enter_context(patch('service.companion.SOURCE', old_companion))
+                            await browser.navigate(base + f'/{number}/first', default_setup())
+                        expected_version = '1.0.1' if number == 0 else '1.0.2'
+                        assert (await browser.companion.call('ready'))['version'] == expected_version
                         await expect(f'/{number}/first')
                         argv = Path(f'/proc/{browser.chrome_process.pid}/cmdline').read_bytes().split(b'\0')
                         assert not any(arg.startswith((b'--remote-debugging', b'--enable-automation', b'--no-sandbox', b'--headless')) for arg in argv)
@@ -126,9 +154,10 @@ async def main():
                     await browsers[0].navigate(base + '/0/restored', default_setup())
                     assert (await expect('/0/restored'))['retained'] == 'yes'
                     assert browsers[0].companion.identity == identity
+                    assert (await browsers[0].companion.call('ready'))['version'] == '1.0.2', 'Retained profile did not run the updated companion'
                     await browsers[0].navigate(base + '/watch', default_setup())
                     assert not (await expect('/watch', 'fit'))['error'], 'Video fit/scroll restoration failed'
-                    print('PASS: fullscreen video has no scrollbar; consent and navigation restore scrolling', flush=True)
+                    print('PASS: updated companion in retained profile; moved/replaced video stays visible; consent and navigation restore styles', flush=True)
                     print('PASS: two sandboxed browsers; no automation/debugging flags; native Unicode paste, navigation, zoom, private previews and saved profile after restart', flush=True)
                 finally:
                     for browser in browsers:

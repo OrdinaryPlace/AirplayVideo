@@ -37,6 +37,9 @@ starts two private displays while conventional VNC/debugging ports are occupied.
 It verifies ordinary `navigator.webdriver === false` from a synthetic page,
 absence of debugging/automation flags, native Unicode paste without submitting,
 Back/Forward/Reload, zoom, and retained profile/extension identity after restart.
+It also upgrades a signed companion in that retained profile and verifies the
+running version. YouTube fitting fixtures move and replace the player inside
+previously hidden page branches, then verify visibility and restored styles.
 The signed extension is installed with the production `umask 077`:
 
 ```sh

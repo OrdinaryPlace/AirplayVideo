@@ -22,6 +22,11 @@ preserved, including 60 fps when available. Browser capture resolution, FPS,
 bitrate/VBR and browser YouTube quality preferences do not govern Direct video.
 Direct video currently requires sound to be enabled.
 
+The media probe supplies the exact frame rate. YouTube metadata can round
+23.976, 29.97 or 59.94 fps to 24, 30 or 60 fps; version 0.2.16 accepts those
+standard pairs and retains the probed fraction through preparation and reporting.
+Other unexpected codec, dimension or frame-rate differences still stop playback.
+
 Choose **Browser playback** explicitly for the existing Chrome playback path,
 including browser sign-in and multiple TVs. **Watch Later** continues to use
 YouTube's own queue in the signed-in browser. Direct video never imports browser
@@ -85,6 +90,8 @@ preflight client. Temporary files and unrelated app data are not served.
 The playback report separates protocol progress from receiver fetches and
 shows selected quality and track-copy decisions. Fetch counters prove delivery,
 not physical picture, sound or lip-sync.
+If preparation fails, the report identifies the fixed preparation stage and
+safe validation reason without including media URLs, cookies or process logs.
 
 ## Verification and remaining acceptance
 

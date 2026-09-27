@@ -252,6 +252,100 @@ async def test_native_policy_errors_do_not_start_or_silently_use_the_browser(nat
 
 
 @pytest.mark.asyncio
+async def test_open_browser_retires_failed_native_error_but_preserves_report(native):
+    _, c, Session, _ = native
+    Session.prepare_error = 'Direct media did not become ready'
+    with pytest.raises(UserError, match='did not become ready'):
+        await c.play(native_request())
+    report = copy.deepcopy(c.native_report)
+    assert c.error and c.stream is None
+    await c.open_browser(native_request())
+    assert c.error == '' and c.phase == 'idle'
+    assert c.native_report == report and report['phase'] == 'failed'
+    await c.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('failure', ['navigation', 'active', 'new_error', 'generation', 'retiring'])
+async def test_open_browser_does_not_dismiss_unresolved_errors(native, failure):
+    _, c, _, _ = native
+    if failure == 'active':
+        await c.play(request())
+    c.error, c.phase = 'Earlier playback failure', 'error'
+    expected = c.error
+    release = asyncio.Event()
+    if failure == 'navigation':
+        c.browser.navigate.side_effect = UserError('Browser navigation failed')
+    elif failure == 'new_error':
+        expected = 'A new failure during navigation'
+        async def new_error(*_):
+            c.error = expected
+        c.browser.navigate.side_effect = new_error
+    elif failure == 'generation':
+        async def generation_changed(*_):
+            c.generation += 1
+        c.browser.navigate.side_effect = generation_changed
+    elif failure == 'retiring':
+        c.retiring[object()] = asyncio.create_task(release.wait())
+    try:
+        if failure == 'navigation':
+            with pytest.raises(UserError, match='navigation failed'):
+                await c.open_browser(native_request())
+        else:
+            await c.open_browser(native_request())
+        assert c.error == expected and c.phase == 'error'
+    finally:
+        release.set()
+        await c.close()
+
+
+@pytest.mark.asyncio
+async def test_browser_play_opens_requested_url_after_independent_preview(native):
+    _, c, _, _ = native
+    await c.play(native_request())
+    native_player = c.stream
+    async def navigate(url, *_):
+        c.browser.running, c.browser.url = True, url
+    c.browser.navigate.side_effect = navigate
+    await c.open_browser(dict(browser_source='url', url='https://example.com'))
+    assert c.source['kind'] == 'youtube' and c.browser.url == 'https://example.com'
+    c.browser.navigate.reset_mock()
+    await c.play(native_request(delivery='browser'))
+    c.browser.navigate.assert_awaited_once()
+    assert c.browser.navigate.call_args.args[0] == c.source['url']
+    assert native_player.closed and c.source['kind'] == 'browser'
+    await c.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('actual_url', ['', 'https://example.com'])
+async def test_browser_play_restores_source_but_adding_tv_keeps_navigation(native, actual_url):
+    _, c, _, _ = native
+    source_request = native_request(delivery='browser')
+    await c.play(source_request)
+    shared = c.stream
+    c.browser.url = actual_url
+    c.browser.navigate.reset_mock()
+    await c.play(native_request(B, delivery='browser'), add=True)
+    c.browser.navigate.assert_not_awaited()
+    assert c.stream is shared and c.targets == {A, B}
+    await c.play(source_request)
+    c.browser.navigate.assert_awaited_once()
+    assert c.browser.navigate.call_args.args[0] == c.source['url']
+    await c.close()
+
+
+@pytest.mark.asyncio
+async def test_browser_play_reuses_acknowledged_requested_page(native):
+    _, c, _, _ = native
+    c.browser.url = c.requested_source(native_request(delivery='browser'))[0]['url']
+    await c.play(native_request(delivery='browser'))
+    c.browser.navigate.assert_not_awaited()
+    c.browser.start.assert_awaited_once()
+    await c.close()
+
+
+@pytest.mark.asyncio
 async def test_recording_rejects_native_without_touching_saved_captures(native):
     _, c, _, _ = native
     c.recordings = Recordings(c)

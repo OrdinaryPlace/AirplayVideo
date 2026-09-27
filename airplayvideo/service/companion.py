@@ -143,11 +143,26 @@ class Companion:
             self.tasks.discard(task)
 
     async def wait_ready(self):
+        expected = json.loads((SOURCE / 'manifest.json').read_text())['version']
+        async def current_version():
+            while True:
+                await self.ready.wait()
+                try:
+                    result = await self.call('ready')
+                except UserError:
+                    # Extension replacement can disconnect the old worker.
+                    # Only this read-only readiness query may be retried.
+                    await asyncio.sleep(0.1)
+                    continue
+                if result.get('version') == expected:
+                    return
+                # A retained profile can briefly start its previous extension
+                # while Chrome installs the newly signed external package.
+                await asyncio.sleep(0.1)
         try:
-            await asyncio.wait_for(self.ready.wait(), 30)
-            await self.call('ready')
+            await asyncio.wait_for(current_version(), 30)
         except asyncio.TimeoutError as exc:
-            raise UserError('Browser controls did not connect; close and reopen the browser') from exc
+            raise UserError('Current browser controls did not connect; close and reopen the browser') from exc
 
     async def call(self, action, **arguments):
         async with self.lock:

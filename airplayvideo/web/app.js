@@ -6,6 +6,7 @@ let state, draft, setupBase, step = 0, mode = 'browser', busy = false, busyActio
 let chosenTVs = new Set(), selectionDirty = false, discoveredTVs = [], discoveredTuners = [];
 let rfb = null, previewConnecting = false, previewWanted = false, previewExpanded = false;
 let generatedDirty = false, generatedDefaultsSignature = '';
+let errorSource = '';
 const modeNames = {browser:'Web browser', hdhomerun:'Live TV', generated:'Generated video'};
 const stepNames = ['Sources', 'Configure', 'Pair TVs', 'Picture & sound', 'Finish'];
 const settingsNames = ['Sources', 'Source defaults', 'TVs', 'Picture & sound', 'Home Assistant'];
@@ -29,10 +30,17 @@ async function api(path, body) {
   return result;
 }
 
-function message(error = '', notice = '') {
+function message(error = '', notice = '', source = 'action') {
+  errorSource = error ? source : '';
   $('error').textContent = error; $('error').hidden = !error;
   $('previewError').textContent = error; $('previewError').hidden = !error;
   $('notice').textContent = notice; $('notice').hidden = !notice;
+}
+
+function renderRuntimeError(error) {
+  const current = $('error').textContent;
+  if(error && (!current || errorSource === 'runtime' || current === error)) message(error, '', 'runtime');
+  else if(!error && errorSource === 'runtime') message();
 }
 
 async function refresh() {
@@ -383,9 +391,10 @@ function renderUsage(){
     const phase={preparing:'Preparing direct video',ready:'Direct video ready',connecting:'Connecting direct video',playing:'Sending direct video',completed:'Direct video finished',stopped:'Direct video stopped',failed:'Direct video needs attention'}[native.phase]||'Direct video';
     const parts=String(quality?.fps||'').split('/').map(Number), fps=parts[0]&&parts[1]?parts[0]/parts[1]:parts[0];
     const detail=quality?.height?`${quality.width} × ${quality.height} · ${Number.isFinite(fps)?Number(fps.toFixed(3)):'?'} fps · video ${quality.copy_video?'copied':'converted'} · audio ${quality.copy_audio?'copied':'converted'}`:'';
-    $('nativePlaybackStatus').textContent=[phase,detail,native.error].filter(Boolean).join(' · ');
+    const previous=['completed','stopped','failed'].includes(native.phase)&&runtime.source?.kind!=='youtube';
+    $('nativePlaybackStatus').textContent=[previous?'Previous direct playback':null,phase,detail,native.error].filter(Boolean).join(' · ');
   }
-  if(runtime.error&&!$('error').textContent)message(runtime.error);
+  renderRuntimeError(runtime.error);
   stableMarkup($('tvList'),state.receivers.length?state.receivers.map(receiver=>{
     const status=runtime.receivers[receiver.id]||{};
     const description=status.message || ({streaming:'Sending',connecting:'Connecting…',stopped:'Stopped',error:'Needs attention'}[status.state]||'Ready');
