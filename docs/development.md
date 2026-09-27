@@ -42,8 +42,11 @@ running version. The YouTube fullscreen fixture uses YouTube's trusted native `f
 keyboard shortcut and verifies a real `fullscreenElement`
 covering the container display. It checks hidden-control independence, consent and
 text-entry guards, Escape and navigation exit, and visible replacement players.
-It records cold-page focus separately and exercises the production focus action
-before the shortcut, without a prerequisite mouse click or changed tabindex.
+It verifies native page focus on the first navigation of a cold browser,
+without prerequisite mouse input. The fullscreen helper does not change DOM
+focus. The first navigation creates one foreground tab; later navigation preserves the active tab and its
+history. Existing startup tabs remain untouched. A lost first acknowledgement
+requires closing and reopening the browser instead of replaying tab creation.
 The companion does not change page styles or continuously reposition video.
 The companion's native port can keep an old worker alive during an update.
 Startup permits one graceful browser restart only after detecting that stale

@@ -19,14 +19,6 @@ async def main():
     os.umask(0o077)
     reports = asyncio.Queue()
     latest_video = {}
-    focus_requested = asyncio.Event()
-    async def fixture_focus(request):
-        try:
-            await asyncio.wait_for(focus_requested.wait(), 10)
-        except asyncio.TimeoutError:
-            return web.json_response({'action': None})
-        focus_requested.clear()
-        return web.json_response({'action': 'fullscreen_focus'})
     async def report(request):
         value = await request.json()
         if value.get('path') == '/watch' and value.get('sequence', 0) >= latest_video.get('sequence', 0):
@@ -72,15 +64,6 @@ async def main():
           const focus={initially_focused:initiallyFocused,focused:document.hasFocus(),active:['BODY','INPUT','TEXTAREA','SELECT','BUTTON','IFRAME'].includes(active)?active:'OTHER',video_ready:player.querySelector('video').readyState,fullscreen_enabled:document.fullscreenEnabled};
           return fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'/watch',event,sequence:++sequence,webdriver:navigator.webdriver,error,focus,control,trusted:keyTrusted,fullscreen_element:!!document.fullscreenElement,covers_display:Math.round(rect.width*devicePixelRatio)===screen.width&&Math.round(rect.height*devicePixelRatio)===screen.height,visible:getComputedStyle(player).visibility==='visible',styles_unchanged:roots.every((element,index)=>element.getAttribute('style')===original[index])})});
         };
-        // This account-free fixture mirrors the companion's narrow focus
-        // command without granting the production extension another origin.
-        (async()=>{
-          for(let attempt=0;attempt<2;attempt++){
-            const command=await (await fetch('/fixture-focus')).json();
-            if(command.action!=='fullscreen_focus')return;
-            await report('focused','',youtubeControl(command));
-          }
-        })();
         function wirePlayer(){
           const player=document.querySelector('#movie_player');
           Object.defineProperty(player.querySelector('video'),'readyState',{value:2});
@@ -110,11 +93,11 @@ async def main():
             guard='text_entry';
             search.focus();assert(inspect().interaction===true,'Text entry did not block fullscreen intent');search.blur();
             guard='unfocused_refusal';
-            if(!document.hasFocus())assert(inspect().focus===true&&!inspect().shortcut,'Unfocused page allowed a shortcut');
-            else {
-              guard='shortcut_intent';
-              assert(inspect().shortcut==='f','Hidden native controls blocked the keyboard shortcut');
-            }
+            if(!document.hasFocus())assert(inspect().interaction===true&&!inspect().shortcut,'Unfocused page allowed a shortcut');
+            guard='cold_page_focus';
+            assert(document.hasFocus(),'Cold foreground tab did not receive native page focus');
+            guard='shortcut_intent';
+            assert(inspect().shortcut==='f','Hidden native controls blocked the keyboard shortcut');
           }catch(caught){error=guard}
           report('intent',error);
         });
@@ -122,7 +105,6 @@ async def main():
     app = web.Application()
     app.router.add_post('/report', report)
     app.router.add_get('/watch', video_fixture)
-    app.router.add_get('/fixture-focus', fixture_focus)
     app.router.add_get('/{browser}/{page}', fixture)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -210,6 +192,9 @@ async def main():
                     assert (await browsers[0].companion.call('ready'))['version'] == '1.0.4', 'Retained profile did not run the updated companion'
                     assert browsers[0].chrome_process.pid != previous_chrome.pid
                     assert (await browsers[1].companion.call('ready'))['version'] == '1.0.4', 'Updating one profile interrupted the other browser'
+                    # Exercise fullscreen as the first navigation of a cold
+                    # process, without any prerequisite mouse input.
+                    await browsers[0].close()
                     await browsers[0].navigate(base + '/watch', default_setup())
                     intent = await expect('/watch', 'intent')
                     # Only account-free fixture state and fixed guard labels;
@@ -221,13 +206,6 @@ async def main():
                     assert not intent['error'], 'Fullscreen intent guard failed'
                     real_call = browsers[0].companion.call
                     async def fixture_call(action, **fields):
-                        if action == 'fullscreen_focus':
-                            focus_requested.set()
-                            result = await expect('/watch', 'focused')
-                            print('Fullscreen fixture focus evidence: ' + json.dumps({
-                                'focus': result['focus'], 'control': result['control'],
-                            }, sort_keys=True), flush=True)
-                            return result['control']
                         if action in {'fullscreen', 'fullscreen_status'}:
                             return dict(latest_video['control'])
                         return await real_call(action, **fields)
@@ -250,7 +228,6 @@ async def main():
                     for browser in browsers:
                         await browser.close()
     finally:
-        focus_requested.set()
         await runner.cleanup()
 
 

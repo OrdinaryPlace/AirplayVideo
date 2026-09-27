@@ -38,6 +38,7 @@ class Browser:
         self.children = []
         self.running = False
         self.url = ""
+        self.initial_navigation = "new"
         self.dimensions = (1920, 1080)
         self.lock = asyncio.Lock()
         self.control_lock = asyncio.Lock()
@@ -182,6 +183,7 @@ class Browser:
             await self.companion.wait_ready()
             self.running = True
             self.url = ""
+            self.initial_navigation = "new"
         except CompanionVersionMismatch:
             await self._close_after_start_failure(graceful=True)
             raise
@@ -268,10 +270,17 @@ class Browser:
         self.youtube_status = ""
         async with self.control_lock:
             check(self.running and self.companion, "Open the browser first")
+            check(self.initial_navigation != "uncertain", "Browser navigation did not finish; close and reopen the browser")
             # Chrome can accept navigation before its acknowledgement is lost.
             # An uncertain destination must never qualify for URL reuse.
             self.url = ""
-            await self.companion.call("navigate", url=url)
+            first = self.initial_navigation == "new"
+            if first:
+                # Consume the sole cold-create request before sending it. A
+                # lost acknowledgement must not create another tab on retry.
+                self.initial_navigation = "uncertain"
+            await self.companion.call("navigate", url=url, new_tab=first)
+            self.initial_navigation = "ready"
             self.url = url
         if youtube or watch_later:
             self.youtube_task = asyncio.create_task(self.prepare_youtube(setup["browser"]["youtube_quality"], watch_later))
@@ -308,10 +317,6 @@ class Browser:
             owner = await self.native_command("xdotool", "getwindowpid", window)
             check(owner == str(self.chrome_process.pid), message)
             result = await self.companion.call("fullscreen")
-            if result.get("focus") is True and not result.get("interaction"):
-                check(await self.native_command("xdotool", "getactivewindow") == window, message)
-                await self.native_command("xdotool", "windowfocus", "--sync", window)
-                result = await self.companion.call("fullscreen_focus")
             if result.get("fullscreen") is not True:
                 check(result.get("ready") is True and not result.get("interaction") and result.get("shortcut") == "f", message)
                 check(await self.native_command("xdotool", "getactivewindow") == window, message)
@@ -426,6 +431,7 @@ class Browser:
         if self.companion:
             await self.companion.close()
         self.url = ""
+        self.initial_navigation = "new"
         self.vnc_password = None
         self.vnc_port = None
         self.companion = None

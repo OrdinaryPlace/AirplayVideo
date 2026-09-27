@@ -14,7 +14,15 @@ async function command(message) {
   if (message.action === 'navigate') {
     const url = new URL(message.url);
     if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Invalid URL');
-    await chrome.tabs.update(tab.id, {url: url.href});
+    if (message.new_tab === true) {
+      // Updating the initial blank tab deliberately retains Chrome's omnibox
+      // focus. A new foreground tab receives native web-contents focus.
+      // Preserve every pre-existing tab; only Browser's cold request creates.
+      const created = await chrome.tabs.create({windowId: tab.windowId, url: url.href, active: true});
+      if (!Number.isInteger(created.id)) throw new Error('Browser tab did not open');
+    } else {
+      await chrome.tabs.update(tab.id, {url: url.href});
+    }
   } else if (message.action === 'back') {
     await chrome.tabs.goBack(tab.id);
   } else if (message.action === 'forward') {
@@ -24,7 +32,7 @@ async function command(message) {
   } else if (message.action === 'close') {
     // Acknowledge before closing the window and its native-messaging connection.
     setTimeout(() => chrome.windows.remove(tab.windowId).catch(() => {}), 50);
-  } else if (['youtube_prepare', 'play_pause', 'fullscreen', 'fullscreen_focus', 'fullscreen_status'].includes(message.action)) {
+  } else if (['youtube_prepare', 'play_pause', 'fullscreen', 'fullscreen_status'].includes(message.action)) {
     // Only the YouTube permission makes this URL visible. There is no account,
     // cookie, debugger, arbitrary-page script, or broad tabs permission.
     if (message.action === 'youtube_prepare' && tab.status === 'loading') return {ready: false};

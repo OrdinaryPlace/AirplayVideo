@@ -52,17 +52,8 @@ function youtubeControl(command) {
     Math.abs(rect.left) <= 2 && Math.abs(rect.top) <= 2 &&
     Math.abs(rect.width - innerWidth) <= 2 && Math.abs(rect.height - innerHeight) <= 2;
   if (command.action === 'fullscreen_status') return {ready: true, fullscreen};
-  if (!['fullscreen', 'fullscreen_focus'].includes(command.action)) return {ready: false};
+  if (command.action !== 'fullscreen') return {ready: false};
   if (fullscreen) return {ready: true, fullscreen: true};
-  if (!document.fullscreenEnabled) return {ready: false, interaction: true};
-  if (!document.hasFocus()) {
-    // A newly opened Chrome window can leave its page unfocused. Authorize
-    // focus separately from typing; never replace a focused field or frame.
-    if (command.action === 'fullscreen') return {ready: false, focus: true};
-    if (!player.hasAttribute('tabindex')) return {ready: false, interaction: true};
-    player.focus({preventScroll: true});
-    if (document.activeElement !== player) return {ready: false, interaction: true};
-  }
-  if (!document.hasFocus()) return {ready: false, interaction: true};
+  if (!document.fullscreenEnabled || !document.hasFocus()) return {ready: false, interaction: true};
   return {ready: true, fullscreen: false, shortcut: 'f'};
 }

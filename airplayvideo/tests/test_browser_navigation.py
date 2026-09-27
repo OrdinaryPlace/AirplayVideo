@@ -1,5 +1,8 @@
 """Uncertain or history navigation cannot reuse a stale requested URL."""
 import asyncio
+from pathlib import Path
+import shutil
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -16,6 +19,7 @@ def browser(tmp_path):
     instance = Browser(tmp_path, None)
     instance.running = True
     instance.url = "https://example.com/prior"
+    instance.initial_navigation = "ready"
     instance.start = AsyncMock()
     instance.companion = SimpleNamespace(call=AsyncMock(return_value={"ok": True}))
     return instance
@@ -27,7 +31,7 @@ async def test_navigation_tracks_url_only_after_acknowledgement(browser):
 
     async def call(action, **fields):
         assert action == "navigate"
-        assert fields == {"url": "https://example.com/next"}
+        assert fields == {"url": "https://example.com/next", "new_tab": False}
         entered.set()
         await release.wait()
         return {"ok": True}
@@ -80,6 +84,67 @@ async def test_rejected_url_does_not_invalidate_current_page(browser):
 
 
 @pytest.mark.asyncio
+async def test_cold_navigation_creates_once_then_preserves_active_tab_history(browser):
+    browser.initial_navigation = "new"
+    await browser.navigate('https://example.com/first', default_setup())
+    await browser.navigate('https://example.com/second', default_setup())
+    assert [call.kwargs for call in browser.companion.call.await_args_list] == [
+        dict(url='https://example.com/first', new_tab=True),
+        dict(url='https://example.com/second', new_tab=False),
+    ]
+    assert browser.initial_navigation == 'ready'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('error', [UserError('Acknowledgement lost'), asyncio.CancelledError()])
+async def test_uncertain_cold_create_cannot_replay_after_companion_reconnect(browser, error):
+    browser.initial_navigation = 'new'
+    browser.companion.call.side_effect = error
+    with pytest.raises(type(error)):
+        await browser.navigate('https://example.com/first', default_setup())
+    browser.companion.call.assert_awaited_once_with('navigate', url='https://example.com/first', new_tab=True)
+    assert browser.initial_navigation == 'uncertain' and browser.url == ''
+    browser.companion = SimpleNamespace(call=AsyncMock(return_value={'ok': True}))
+    with pytest.raises(UserError, match='close and reopen'):
+        await browser.navigate('https://example.com/retry', default_setup())
+    browser.companion.call.assert_not_awaited()
+
+
+def test_companion_creates_cold_foreground_tab_without_closing_startup_tabs():
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node is required for companion navigation checks')
+    source = (Path(__file__).parents[1] / 'companion/background.js').read_text()
+    source = source[source.index('async function activeTab()'):source.index('function connect()')]
+    harness = r'''
+const assert=require('node:assert/strict');
+let active=7;
+const created=[], updated=[];
+global.chrome={tabs:{
+  query:async()=>[{id:active,windowId:11}],
+  create:async options=>{created.push(options);active=9;return {id:9}},
+  update:async(id,options)=>updated.push({id,options}),
+}};
+(async()=>{
+  await command({action:'navigate',url:'https://example.com/first',new_tab:true});
+  assert.deepEqual(created,[{windowId:11,url:'https://example.com/first',active:true}]);
+  assert.equal(updated.length,0,'Cold navigation overwrote the startup tab');
+  await command({action:'navigate',url:'https://example.com/second',new_tab:false});
+  assert.deepEqual(updated,[{id:9,options:{url:'https://example.com/second'}}]);
+  active=12; // A user's later tab selection retains ordinary navigation semantics.
+  await command({action:'navigate',url:'https://example.com/third',new_tab:false});
+  assert.equal(updated[1].id,12);
+  assert.equal(created.length,1);
+  await assert.rejects(command({action:'navigate',url:'javascript:alert(1)',new_tab:true}));
+  assert.equal(created.length,1);
+})().catch(error=>{console.error(error);process.exitCode=1});
+'''
+    result = subprocess.run([node], input=source + '\n' + harness,
+                            text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
+@pytest.mark.asyncio
 async def test_start_retries_stale_companion_exactly_once_before_navigation(tmp_path):
     browser = Browser(tmp_path, None)
     browser._start_once = AsyncMock(side_effect=[CompanionVersionMismatch("Outdated companion"), None])
@@ -119,6 +184,7 @@ async def test_upgrade_close_is_graceful_before_browser_is_ready(browser):
     chrome.wait.assert_awaited_once()
     companion.close.assert_awaited_once()
     assert browser.companion is None and browser.chrome_process is None
+    assert browser.initial_navigation == 'new'
 
 
 @pytest.mark.asyncio
