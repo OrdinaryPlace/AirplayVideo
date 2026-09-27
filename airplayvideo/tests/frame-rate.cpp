@@ -54,6 +54,18 @@ int main() {
               "Fractional-rate source was not preserved or downsampled correctly");
     }
 
+    // Coarse fractional timestamps can still cross the existing rate policy's
+    // boundaries over a long run. Startup translation must not change which
+    // frames that policy chooses; this does not require keeping every frame.
+    for(int source_rate:{30000,60000}) for(int64_t phase:{16400,16700,987654321}) {
+      lab::FrameRateGate baseline(30,false),shifted(30,false);
+      for(int i=0;i<6000;++i) {
+        int64_t pts=av_rescale_q(i,{1001,source_rate},{1,1000})*1000;
+        require(shifted.accept(pts+phase)==baseline.accept(pts),
+                "Coarse fractional-rate selection changed with startup phase");
+      }
+    }
+
     lab::FrameRateGate gaps(30,false);
     require(!gaps.accept(-1)&&gaps.accept(16400),"Invalid PTS changed the initial frame origin");
     require(!gaps.accept(16400)&&!gaps.accept(16000),"Duplicate or regressing source PTS accepted");

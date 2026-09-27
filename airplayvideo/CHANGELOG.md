@@ -5,8 +5,8 @@
 - Anchor source frame-rate conversion to the first source timestamp. A variable
   startup offset could otherwise discard one third of millisecond-timestamped
   30 fps video and delay a visible transition by one frame.
-- Preserve original presentation timestamps, fractional source rates, forward
-  gaps, and 60-to-30 fps downsampling. Keep the independent content-timing
+- Preserve original presentation timestamps, the existing fractional-rate
+  selection policy, forward gaps, and 60-to-30 fps downsampling. Keep the content-timing
   tolerance unchanged and add deterministic startup-phase regressions.
 
 ## 0.2.13
