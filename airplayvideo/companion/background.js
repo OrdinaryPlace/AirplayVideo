@@ -58,4 +58,7 @@ function connect() {
 }
 chrome.runtime.onStartup.addListener(connect);
 chrome.runtime.onInstalled.addListener(connect);
+// The native port intentionally keeps this worker alive. Do not let that
+// connection postpone a verified Chrome-managed extension update indefinitely.
+chrome.runtime.onUpdateAvailable.addListener(() => chrome.runtime.reload());
 connect();

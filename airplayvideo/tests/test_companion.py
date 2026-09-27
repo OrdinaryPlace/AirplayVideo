@@ -8,7 +8,7 @@ from unittest.mock import AsyncMock
 import aiohttp
 from aiohttp.test_utils import TestClient, TestServer
 import pytest
-from service.companion import Companion, read_message, install
+from service.companion import Companion, CompanionVersionMismatch, read_message, install
 from service import companion as companion_module
 from service.main import Application, make_app
 from service.model import Store, UserError
@@ -50,9 +50,23 @@ async def test_ready_rejects_an_extension_that_never_updates(tmp_path, monkeypat
         assert timeout == 30
         return await wait_for(awaitable, 0.02)
     monkeypatch.setattr(companion_module.asyncio, 'wait_for', bounded)
-    with pytest.raises(UserError, match='Current browser controls did not connect'):
+    with pytest.raises(CompanionVersionMismatch, match='restart to finish updating'):
         await companion.wait_ready()
     companion.call.assert_awaited_once_with('ready')
+
+
+@pytest.mark.asyncio
+async def test_missing_companion_is_not_an_update_retry(tmp_path, monkeypatch):
+    companion = Companion(tmp_path, 'a' * 32)
+    companion.call = AsyncMock()
+    wait_for = asyncio.wait_for
+    async def bounded(awaitable, timeout):
+        return await wait_for(awaitable, 0.02)
+    monkeypatch.setattr(companion_module.asyncio, 'wait_for', bounded)
+    with pytest.raises(UserError, match='Current browser controls did not connect') as failed:
+        await companion.wait_ready()
+    assert not isinstance(failed.value, CompanionVersionMismatch)
+    companion.call.assert_not_awaited()
 
 
 @pytest.mark.asyncio

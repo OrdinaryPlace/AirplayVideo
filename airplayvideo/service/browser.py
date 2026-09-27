@@ -11,7 +11,7 @@ import time
 from Cryptodome.Cipher import DES
 from .model import UserError, check, browser_url
 from .network import unused_loopback_port
-from .companion import Companion, install as install_companion
+from .companion import Companion, CompanionVersionMismatch, install as install_companion
 from .browser_gpu import chrome_gpu_arguments
 
 
@@ -120,53 +120,83 @@ class Browser:
 
     async def start(self, setup):
         async with self.lock:
-            if self.running:
-                return
+            for attempt in range(2):
+                try:
+                    await self._start_once(setup)
+                    return
+                except CompanionVersionMismatch:
+                    # The old extension can keep its own pending update alive.
+                    # Retry only this verified condition, before navigation.
+                    if attempt:
+                        raise
+
+    async def _start_once(self, setup):
+        if self.running:
+            return
+        try:
+            self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+            # The browser can traverse its own app data mount but cannot list
+            # it or read root-owned settings and pairing files.
+            os.chown(self.root.parent, 0, 1000)
+            os.chmod(self.root.parent, 0o710)
+            os.chown(self.root, 1000, 1000)
+            runtime = self.root / "runtime"
+            runtime.mkdir(exist_ok=True, mode=0o700)
+            os.chown(runtime, 1000, 1000)
+            if not (self.root / "pulse-cookie").exists():
+                self._private_file("pulse-cookie", secrets.token_bytes(256))
+            self.vnc_password = secrets.token_hex(4).encode()
+            self._private_file("vnc-password", DES.new(vnc_key(bytes([23, 82, 107, 6, 35, 78, 88, 7])), DES.MODE_ECB).encrypt(self.vnc_password))
+            self._private_file("Xauthority", b"")
+            cookie = secrets.token_hex(16)
+            await self.launch("xauth", "-f", self.environment["XAUTHORITY"], "source", "-", stdin=f"add :99 MIT-MAGIC-COOKIE-1 {cookie}\n".encode())
+            self.dimensions = (1920, 1080) if setup["video"]["resolution"] == "1080p" else (1280, 720)
+            width, height = self.dimensions
+            await self.start_display(width, height, cookie)
+            for _ in range(80):
+                probe = await asyncio.create_subprocess_exec("xdpyinfo", env=self.environment, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+                if await probe.wait() == 0:
+                    break
+                await asyncio.sleep(0.1)
+            else:
+                raise UserError("Virtual display did not start")
+            await self.launch("openbox", "--sm-disable")
+            await self.launch("pulseaudio", "-n", "--daemonize=no", "--exit-idle-time=-1", "--log-level=error", "-L", f"module-native-protocol-unix socket={self.root / 'pulse.sock'} auth-cookie={self.root / 'pulse-cookie'}", "-L", "module-null-sink sink_name=airplayvideo rate=48000 channels=2")
+            self.vnc_port = unused_loopback_port()
+            await self.launch("x11vnc", "-display", self.environment["DISPLAY"], "-auth", self.environment["XAUTHORITY"], "-localhost", "-rfbport", str(self.vnc_port), "-rfbauth", str(self.root / "vnc-password"), "-forever", "-shared", "-xkb", "-nosel", "-quiet")
+            await self.wait_port(self.vnc_port)
+            with contextlib.suppress(FileNotFoundError):
+                (self.root / "profile" / "DevToolsActivePort").unlink()
+            identity = await asyncio.to_thread(install_companion, self.root)
+            self.companion = Companion(self.root, identity)
+            await self.companion.start()
+            self.environment.update(AIRPLAYVIDEO_COMPANION_ID=identity, AIRPLAYVIDEO_COMPANION_SOCKET=str(self.companion.path))
+            self.chrome_process = await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--start-fullscreen", *chrome_gpu_arguments(), "about:blank")
+            await self.companion.wait_ready()
+            self.running = True
+            self.url = ""
+        except CompanionVersionMismatch:
+            await self._close_after_start_failure(graceful=True)
+            raise
+        except BaseException:
+            await self._close_after_start_failure()
+            raise
+
+    async def _close_after_start_failure(self, *, graceful=False):
+        # Keep ownership until cleanup finishes, including cancellation while
+        # waiting for Chrome to flush its profile during an upgrade restart.
+        closing = asyncio.create_task(self._close(graceful=graceful))
+        cancelled = False
+        while not closing.done():
             try:
-                self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
-                # The browser can traverse its own app data mount but cannot list
-                # it or read root-owned settings and pairing files.
-                os.chown(self.root.parent, 0, 1000)
-                os.chmod(self.root.parent, 0o710)
-                os.chown(self.root, 1000, 1000)
-                runtime = self.root / "runtime"
-                runtime.mkdir(exist_ok=True, mode=0o700)
-                os.chown(runtime, 1000, 1000)
-                if not (self.root / "pulse-cookie").exists():
-                    self._private_file("pulse-cookie", secrets.token_bytes(256))
-                self.vnc_password = secrets.token_hex(4).encode()
-                self._private_file("vnc-password", DES.new(vnc_key(bytes([23, 82, 107, 6, 35, 78, 88, 7])), DES.MODE_ECB).encrypt(self.vnc_password))
-                self._private_file("Xauthority", b"")
-                cookie = secrets.token_hex(16)
-                await self.launch("xauth", "-f", self.environment["XAUTHORITY"], "source", "-", stdin=f"add :99 MIT-MAGIC-COOKIE-1 {cookie}\n".encode())
-                self.dimensions = (1920, 1080) if setup["video"]["resolution"] == "1080p" else (1280, 720)
-                width, height = self.dimensions
-                await self.start_display(width, height, cookie)
-                for _ in range(80):
-                    probe = await asyncio.create_subprocess_exec("xdpyinfo", env=self.environment, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
-                    if await probe.wait() == 0:
-                        break
-                    await asyncio.sleep(0.1)
-                else:
-                    raise UserError("Virtual display did not start")
-                await self.launch("openbox", "--sm-disable")
-                await self.launch("pulseaudio", "-n", "--daemonize=no", "--exit-idle-time=-1", "--log-level=error", "-L", f"module-native-protocol-unix socket={self.root / 'pulse.sock'} auth-cookie={self.root / 'pulse-cookie'}", "-L", "module-null-sink sink_name=airplayvideo rate=48000 channels=2")
-                self.vnc_port = unused_loopback_port()
-                await self.launch("x11vnc", "-display", self.environment["DISPLAY"], "-auth", self.environment["XAUTHORITY"], "-localhost", "-rfbport", str(self.vnc_port), "-rfbauth", str(self.root / "vnc-password"), "-forever", "-shared", "-xkb", "-nosel", "-quiet")
-                await self.wait_port(self.vnc_port)
-                with contextlib.suppress(FileNotFoundError):
-                    (self.root / "profile" / "DevToolsActivePort").unlink()
-                identity = await asyncio.to_thread(install_companion, self.root)
-                self.companion = Companion(self.root, identity)
-                await self.companion.start()
-                self.environment.update(AIRPLAYVIDEO_COMPANION_ID=identity, AIRPLAYVIDEO_COMPANION_SOCKET=str(self.companion.path))
-                self.chrome_process = await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--start-fullscreen", *chrome_gpu_arguments(), "about:blank")
-                await self.companion.wait_ready()
-                self.running = True
-                self.url = ""
-            except BaseException:
-                await self._close()
-                raise
+                await asyncio.shield(closing)
+            except asyncio.CancelledError:
+                cancelled = True
+        if cancelled:
+            with contextlib.suppress(BaseException):
+                closing.result()
+            raise asyncio.CancelledError
+        closing.result()
 
     async def native_command(self, *args, text=None, timeout=10):
         process = await asyncio.create_subprocess_exec(*args, env=self.environment, user=1000, group=1000, stdin=asyncio.subprocess.PIPE if text is not None else asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
@@ -298,9 +328,9 @@ class Browser:
             await writer.wait_closed()
             raise
 
-    async def _close(self):
+    async def _close(self, *, graceful=False):
         self.cancel_youtube()
-        if self.running and self.companion:
+        if (self.running or graceful) and self.companion:
             with contextlib.suppress(UserError, OSError):
                 await self.companion.call("close")
             if self.chrome_process and self.chrome_process.returncode is None:

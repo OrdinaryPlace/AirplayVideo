@@ -100,6 +100,11 @@ async def main():
             old_manifest = json.loads((old_companion / 'manifest.json').read_text())
             old_manifest['version'] = '1.0.1'
             (old_companion / 'manifest.json').write_text(json.dumps(old_manifest))
+            # Version 1.0.1 kept its native port alive without handling updates;
+            # the upgrade must exercise that real installed lifecycle.
+            old_background = (old_companion / 'background.js').read_text()
+            old_background = old_background.replace("chrome.runtime.onUpdateAvailable.addListener(() => chrome.runtime.reload());\n", '')
+            (old_companion / 'background.js').write_text(old_background)
             for port in (5900, 9222):
                 listener = resources.enter_context(socket.socket())
                 listener.bind(('127.0.0.1', port))
@@ -149,12 +154,16 @@ async def main():
                     assert browsers[0].environment['DISPLAY'] != browsers[1].environment['DISPLAY']
                     assert len({5900, 9222, *(b.vnc_port for b in browsers)}) == 4
                     identity = browsers[0].companion.identity
+                    previous_chrome = browsers[0].chrome_process
                     await browsers[0].close()
                     assert not browsers[0].children and not browsers[0].running
+                    assert previous_chrome.returncode is not None, 'Previous Chrome did not finish closing'
                     await browsers[0].navigate(base + '/0/restored', default_setup())
                     assert (await expect('/0/restored'))['retained'] == 'yes'
                     assert browsers[0].companion.identity == identity
                     assert (await browsers[0].companion.call('ready'))['version'] == '1.0.2', 'Retained profile did not run the updated companion'
+                    assert browsers[0].chrome_process.pid != previous_chrome.pid
+                    assert (await browsers[1].companion.call('ready'))['version'] == '1.0.2', 'Updating one profile interrupted the other browser'
                     await browsers[0].navigate(base + '/watch', default_setup())
                     assert not (await expect('/watch', 'fit'))['error'], 'Video fit/scroll restoration failed'
                     print('PASS: updated companion in retained profile; moved/replaced video stays visible; consent and navigation restore styles', flush=True)

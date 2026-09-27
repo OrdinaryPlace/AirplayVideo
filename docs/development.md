@@ -40,6 +40,12 @@ Back/Forward/Reload, zoom, and retained profile/extension identity after restart
 It also upgrades a signed companion in that retained profile and verifies the
 running version. YouTube fitting fixtures move and replace the player inside
 previously hidden page branches, then verify visibility and restored styles.
+The companion's native port can keep an old worker alive during an update.
+Startup permits one graceful browser restart only after detecting that stale
+version, before navigation, and waits for owned cleanup even when cancelled.
+Future updates use Chrome's normal
+[`onUpdateAvailable`](https://developer.chrome.com/docs/extensions/reference/api/runtime#event-onUpdateAvailable)
+reload path. No profile reset or browser permission change is involved.
 The signed extension is installed with the production `umask 077`:
 
 ```sh

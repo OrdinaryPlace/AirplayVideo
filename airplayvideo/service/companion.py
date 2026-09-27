@@ -17,6 +17,10 @@ SOURCE = Path(__file__).resolve().parent.parent / 'companion'
 HOST_NAME = 'com.ordinaryplace.airplayvideo'
 
 
+class CompanionVersionMismatch(UserError):
+    """The signed companion connected, but Chrome is still running old code."""
+
+
 def varint(number):
     data = bytearray()
     while number > 127:
@@ -144,7 +148,9 @@ class Companion:
 
     async def wait_ready(self):
         expected = json.loads((SOURCE / 'manifest.json').read_text())['version']
+        saw_stale = False
         async def current_version():
+            nonlocal saw_stale
             while True:
                 await self.ready.wait()
                 try:
@@ -156,12 +162,16 @@ class Companion:
                     continue
                 if result.get('version') == expected:
                     return
+                if result.get('ok') is True:
+                    saw_stale = True
                 # A retained profile can briefly start its previous extension
                 # while Chrome installs the newly signed external package.
                 await asyncio.sleep(0.1)
         try:
             await asyncio.wait_for(current_version(), 30)
         except asyncio.TimeoutError as exc:
+            if saw_stale:
+                raise CompanionVersionMismatch('Browser controls need a restart to finish updating') from exc
             raise UserError('Current browser controls did not connect; close and reopen the browser') from exc
 
     async def call(self, action, **arguments):
