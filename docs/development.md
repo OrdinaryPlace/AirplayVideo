@@ -16,6 +16,11 @@ generated MPEG-TS input through the actual source pipeline.
 The frame-rate regression checks jitter and clock phase at 30 and 60 fps:
 browser capture is already paced by X11, while tuner input still needs its
 independent output-rate limit.
+The tuner/fixture rate grid starts at the first source PTS, not the unrelated
+startup delay. Millisecond-rounded 30 fps, fractional 29.97/59.94 fps, duplicate
+timestamps and forward gaps have deterministic phase-shift regressions. This
+gate only selects frames; it never rewrites their PTS. A newly created source
+gets a new grid; a gap or rejected timestamp does not reset an active source.
 The video-rate regression rejects invalid target/maximum pairs and software VBR,
 checks explicit FFmpeg mode selection, and preserves legacy automatic requests.
 Host capabilities query H.264 Main at FFmpeg 8's preferred available VAAPI
