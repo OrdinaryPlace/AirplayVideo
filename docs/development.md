@@ -96,6 +96,19 @@ Apple Silicon Mac can run the amd64 software tests, but that is not a benchmark
 of the HA host. Physical picture, audio, lip sync and multi-TV timing require
 receiver observations; packet counters do not establish those results.
 
+Browser HEVC decoding additionally requires Chrome's hardware decoder. With a
+mapped render device accessible to its non-root user, the browser uses
+ANGLE/Vulkan and selects that render node explicitly; no device permissions or
+sandbox settings are changed. The image includes the Mesa Vulkan runtime and
+Intel VA-API driver. Use `vainfo --display drm --device /dev/dri/renderD128` on a
+verified mapped node to check decode profiles, then verify advancing video in
+the real preview. Driver profiles alone do not establish playback. The regular
+browser/profile tests exercise the no-GPU fallback in CI; the device-selection
+unit tests cover root-only access, nondevices, disappearing nodes and a second
+usable GPU. Hardware HEVC acceptance still requires the actual Linux GPU.
+See Chromium's [VA-API verification guidance](https://chromium.googlesource.com/chromium/src/+/main/docs/gpu/vaapi.md)
+and Intel's [driver capability matrix](https://github.com/intel/media-driver#media-features).
+
 Do not enable `DEBUG_PAIR`, capture login pages, commit `.dev-data`, or copy
 another application's source, pairing secrets or runtime history into this repo.
 New fixes should add a test for the behavior that failed, rather than duplicating

@@ -45,7 +45,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libssl3 libsodium23 libplist3 libcpp-httplib0.11 libpulse0 \
     libxcb1 libxcb-shm0 libxcb-xfixes0 libva2 libva-drm2 libva-x11-2 \
     libdrm2 pulseaudio xvfb x11vnc xauth x11-utils xdotool openbox \
-    novnc fonts-liberation fonts-noto-color-emoji libgl1-mesa-dri intel-media-va-driver \
+    novnc fonts-liberation fonts-noto-color-emoji libgl1-mesa-dri libegl-mesa0 \
+    mesa-vulkan-drivers intel-media-va-driver vainfo \
  && rm -rf /var/lib/apt/lists/*
 RUN curl -fL https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb -o /tmp/chrome.deb \
  && apt-get update && apt-get install -y /tmp/chrome.deb \
@@ -75,5 +76,5 @@ RUN ldconfig && dpkg-query -W > /opt/dependency-sources/debian-packages.txt
 WORKDIR /opt/airplayvideo
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 EXPOSE 8099 18200-18215/udp
-LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.12"
+LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.13"
 CMD ["python3", "-m", "service.main"]
