@@ -1,5 +1,8 @@
-"""Fullscreen uses one verified native click and never guesses through a prompt."""
+"""Fullscreen uses one guarded native shortcut and never types through a prompt."""
 import asyncio
+from pathlib import Path
+import shutil
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -28,20 +31,20 @@ def browser(tmp_path):
     return instance
 
 
-def intent(field='click'):
-    return dict(ready=True, fullscreen=False, viewport=dict(width=1920, height=1080), **{field: dict(x=850, y=430)})
+def intent():
+    return dict(ready=True, fullscreen=False, shortcut='f')
 
 
-def clicks(browser):
-    return [call.args for call in browser.native_command.await_args_list if 'click' in call.args]
+def shortcuts(browser):
+    return [call.args for call in browser.native_command.await_args_list if 'key' in call.args]
 
 
 @pytest.mark.asyncio
-async def test_fullscreen_reveals_controls_then_clicks_once_and_verifies(browser):
-    browser.companion.call.side_effect = [intent('reveal'), intent(), dict(ready=True, fullscreen=True)]
+async def test_fullscreen_sends_one_native_shortcut_and_verifies(browser):
+    browser.companion.call.side_effect = [intent(), dict(ready=True, fullscreen=True)]
     await browser.control('fullscreen')
-    assert clicks(browser) == [('xdotool', 'mousemove', '--sync', '850', '430', 'click', '1')]
-    assert [call.args for call in browser.companion.call.await_args_list] == [('fullscreen',), ('fullscreen',), ('fullscreen_status',)]
+    assert shortcuts(browser) == [('xdotool', 'key', '--clearmodifiers', 'f')]
+    assert [call.args for call in browser.companion.call.await_args_list] == [('fullscreen',), ('fullscreen_status',)]
     assert browser.youtube_status == 'Opened YouTube fullscreen'
     assert 'noviewonly' in browser.native_command.await_args_list[-1].args
 
@@ -50,28 +53,28 @@ async def test_fullscreen_reveals_controls_then_clicks_once_and_verifies(browser
 async def test_existing_fullscreen_is_not_toggled_off(browser):
     browser.companion.call.return_value = dict(ready=True, fullscreen=True)
     await browser.control('fullscreen')
-    assert not clicks(browser)
+    assert not shortcuts(browser)
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('result', [
     dict(ready=False, interaction=True),
     dict(ready=False),
-    dict(ready=True, viewport=dict(width=960, height=540), click=dict(x=5, y=5)),
-    dict(ready=True, viewport=dict(width=1920, height=1080), click=dict(x=-1, y=5)),
-    dict(ready=True, viewport=dict(width=1920, height=1080), click=dict(x=1920, y=5)),
-    dict(ready=True, viewport=dict(width=1920, height=1080), click=dict(x=True, y=5)),
+    dict(ready=True, shortcut='F'),
+    dict(ready=True, shortcut='x'),
+    dict(ready=True, shortcut=None),
+    dict(ready=True, shortcut='f', interaction=True),
 ])
-async def test_unsafe_or_unavailable_control_never_clicks(browser, result):
+async def test_unsafe_or_unavailable_control_never_types(browser, result):
     browser.companion.call.return_value = result
     with pytest.raises(UserError, match='fullscreen control'):
         await browser.control('fullscreen')
-    assert not clicks(browser)
+    assert not shortcuts(browser)
     assert 'noviewonly' in browser.native_command.await_args_list[-1].args
 
 
 @pytest.mark.asyncio
-async def test_foreign_active_window_never_receives_a_click(browser):
+async def test_foreign_active_window_never_receives_a_shortcut(browser):
     native = browser.native_command.side_effect
     async def foreign(*args, **kwargs):
         return '999' if 'getwindowpid' in args else await native(*args, **kwargs)
@@ -79,11 +82,33 @@ async def test_foreign_active_window_never_receives_a_click(browser):
     with pytest.raises(UserError):
         await browser.control('fullscreen')
     browser.companion.call.assert_not_awaited()
-    assert not clicks(browser)
+    assert not shortcuts(browser)
 
 
 @pytest.mark.asyncio
-async def test_cancelled_click_verification_restores_preview_input(browser):
+async def test_window_change_after_page_check_does_not_receive_shortcut(browser):
+    native = browser.native_command.side_effect
+    windows = iter(('456', '789'))
+    async def changed(*args, **kwargs):
+        return next(windows) if 'getactivewindow' in args else await native(*args, **kwargs)
+    browser.native_command.side_effect = changed
+    browser.companion.call.return_value = intent()
+    with pytest.raises(UserError):
+        await browser.control('fullscreen')
+    assert not shortcuts(browser)
+
+
+@pytest.mark.asyncio
+async def test_failed_fullscreen_confirmation_never_repeats_toggle(browser):
+    browser.companion.call.side_effect = [intent()] + [dict(ready=True, fullscreen=False)] * 20
+    with pytest.raises(UserError, match='fullscreen control'):
+        await browser.control('fullscreen')
+    assert shortcuts(browser) == [('xdotool', 'key', '--clearmodifiers', 'f')]
+    assert 'noviewonly' in browser.native_command.await_args_list[-1].args
+
+
+@pytest.mark.asyncio
+async def test_cancelled_shortcut_verification_restores_preview_input(browser):
     entered = asyncio.Event()
     async def response(action, **kwargs):
         if action == 'fullscreen':
@@ -96,7 +121,7 @@ async def test_cancelled_click_verification_restores_preview_input(browser):
     operation.cancel()
     with pytest.raises(asyncio.CancelledError):
         await operation
-    assert len(clicks(browser)) == 1
+    assert len(shortcuts(browser)) == 1
     assert 'noviewonly' in browser.native_command.await_args_list[-1].args
 
 
@@ -164,3 +189,54 @@ def test_controller_only_exposes_fixed_browser_status(setup):
     controller.browser.youtube_status = 'Opened YouTube fullscreen'
     controller.browser.running = False
     assert controller.status()['browser_status'] == ''
+
+
+def test_companion_shortcut_requires_focused_watch_video_without_text_entry():
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node is required for companion intent checks')
+    source = (Path(__file__).parents[1] / 'companion/youtube.js').read_text()
+    harness = r'''
+const assert = require('node:assert/strict');
+const element = (tag='div', editable=false) => ({
+  isConnected:true, parentElement:null, isContentEditable:editable,
+  matches:selectors=>selectors.split(',').map(value=>value.trim()).includes(tag),
+  getBoundingClientRect:()=>({left:0,top:0,width:1920,height:1080}),
+});
+const video = {...element('video'), readyState:2};
+const player = {...element(), querySelector:selector=>selector==='video'?video:null,
+  contains:child=>child===video};
+let prompts=[], focused=true;
+global.location={origin:'https://www.youtube.com',pathname:'/watch'};
+global.innerWidth=1920; global.innerHeight=1080;
+global.getComputedStyle=()=>({display:'block',visibility:'visible',opacity:'1'});
+global.document={querySelector:()=>player,querySelectorAll:()=>prompts,
+  activeElement:element('body'),fullscreenEnabled:true,fullscreenElement:null,
+  hasFocus:()=>focused};
+const inspect=()=>youtubeControl({action:'fullscreen'});
+assert.deepEqual(inspect(),{ready:true,fullscreen:false,shortcut:'f'});
+for(const tag of ['input','textarea','select','iframe']){
+  document.activeElement=element(tag);
+  assert.equal(inspect().interaction,true,tag+' focus allowed a shortcut');
+  assert.equal(inspect().shortcut,undefined);
+}
+document.activeElement=element('div',true);
+assert.equal(inspect().interaction,true,'Editable content allowed a shortcut');
+document.activeElement=element('body'); focused=false;
+assert.equal(inspect().interaction,true,'Unfocused page allowed typing');
+focused=true; prompts=[element()];
+assert.equal(inspect().interaction,true,'Visible prompt allowed a shortcut');
+prompts=[]; video.readyState=1;
+assert.equal(inspect().ready,false,'Unready video allowed a shortcut');
+video.readyState=2; location.pathname='/playlist';
+assert.equal(inspect().interaction,true,'Non-watch page allowed a shortcut');
+location.pathname='/watch'; location.origin='https://example.com';
+assert.equal(inspect().interaction,true,'Foreign origin allowed a shortcut');
+location.origin='https://www.youtube.com'; document.fullscreenEnabled=false;
+assert.equal(inspect().interaction,true,'Unavailable fullscreen allowed a shortcut');
+document.fullscreenEnabled=true; document.fullscreenElement=player;
+assert.deepEqual(inspect(),{ready:true,fullscreen:true});
+'''
+    result = subprocess.run([node], input=source + '\n' + harness,
+                            text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr

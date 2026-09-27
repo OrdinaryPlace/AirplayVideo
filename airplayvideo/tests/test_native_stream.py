@@ -1,8 +1,11 @@
 import asyncio
 from fractions import Fraction
+import gzip
+import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import sys
 import time
 
@@ -12,6 +15,7 @@ from service.native_plan import plan_media
 from service.native_stream import (NativeHLSStream, StreamError, choose_encoder, hardware_arguments,
                                    hls_arguments, parse_capabilities, playlist_segments, child_environment)
 from service.native_stream import validate_source_durations, playlist_durations, classify_probe_failure, PROBE_FAILURES
+from service.native_prepare import PrepareError, validate_tracks
 
 
 def plan(*, four_k=False, convert_audio=False, convert_video=False):
@@ -234,6 +238,7 @@ async def test_remote_headers_reach_both_metadata_and_first_packet_probes_and_ea
     assert [kwargs['probe_role'] for _, kwargs in calls] == ['video_metadata', 'audio_metadata', 'video_first_packet', 'audio_first_packet']
     for (args, _), agent in zip(calls, ['Video Agent', 'Audio Agent', 'Video Agent', 'Audio Agent']):
         assert args[args.index('-headers') + 1] == 'User-Agent: ' + agent + '\r\n'
+        assert '-probesize' not in args and '-analyzeduration' not in args
     args = hls_arguments('ffmpeg', video, audio, tmp_path, plan(), video_headers=video_headers, audio_headers=audio_headers)
     inputs = [index for index, value in enumerate(args) if value == '-i']
     positions = [index for index, value in enumerate(args) if value == '-headers']
@@ -241,6 +246,84 @@ async def test_remote_headers_reach_both_metadata_and_first_packet_probes_and_ea
     assert [args[index + 1] for index in positions] == ['User-Agent: Video Agent\r\n', 'User-Agent: Audio Agent\r\n']
     assert stream.status['source_probes'] == []
     await stream.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('kind', [None, 'video', 'audio'])
+async def test_local_probe_covers_the_bounded_file_with_unchanged_command_deadline(tmp_path, monkeypatch, kind):
+    stream = session(tmp_path)
+    source = tmp_path / 'probe.mp4'
+    with source.open('wb') as output:
+        output.truncate(8 * 1024 * 1024)
+    calls = []
+
+    async def command(args, **kwargs):
+        calls.append((args, kwargs))
+        return {}
+
+    monkeypatch.setattr(stream, '_json_command', command)
+    await stream._probe(source, local=True, kind=kind)
+    args, options = calls[0]
+    assert int(args[args.index('-probesize') + 1]) == source.stat().st_size
+    assert args[args.index('-analyzeduration') + 1] == '180000000'
+    assert args[args.index('-protocol_whitelist') + 1] == 'file,pipe'
+    assert options['timeout'] == 25
+    assert args[-1] == str(source) and args.index('-probesize') < len(args) - 1
+    await stream.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('size', [None, 0, 16 * 1024 * 1024 + 1])
+async def test_local_probe_rejects_unreadable_empty_or_over_budget_input_before_spawning(tmp_path, monkeypatch, size):
+    stream = session(tmp_path, disk_limit=16 * 1024 * 1024)
+    source = tmp_path / 'probe.mp4'
+    if size is not None:
+        with source.open('wb') as output:
+            output.truncate(size)
+
+    async def command(*args, **kwargs):
+        pytest.fail('The rejected local file must not spawn a media command')
+
+    monkeypatch.setattr(stream, '_json_command', command)
+    with pytest.raises(StreamError, match='cannot be probed within the disk limit'):
+        await stream._probe(source, local=True)
+    assert not stream._jobs
+    await stream.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(not shutil.which('ffprobe'), reason='Requires the installed FFprobe media runtime')
+async def test_real_fmp4_large_video_packet_requires_full_local_probe_to_verify_aac_lc(tmp_path):
+    # Valid H.264 filler makes a tiny compressed fixture cross FFprobe's real
+    # default 5 MB limit before its first AAC packet, without costly encoding.
+    data = gzip.decompress((Path(__file__).parent / 'fixtures/large-video-aac.mp4.gz').read_bytes())
+    assert len(data) == 6304771
+    assert hashlib.sha256(data).hexdigest() == '331892eb3708a312bd7edc32d83de629379e47fd1d32e360c2f2ee3a3893c76d'
+    source = tmp_path / 'probe.mp4'
+    source.write_bytes(data)
+    stream = NativeHLSStream(output_dir=tmp_path, ffmpeg=sys.executable, ffprobe=shutil.which('ffprobe'))
+    try:
+        before = await stream._json_command([
+            stream.ffprobe, '-v', 'error', '-protocol_whitelist', 'file,pipe',
+            '-show_streams', '-of', 'json', str(source)], timeout=25, probe_role='output_metadata')
+        before_audio, = [row for row in before['streams'] if row['codec_type'] == 'audio']
+        assert before_audio['codec_name'] == 'aac' and 'profile' not in before_audio
+        after = await stream._probe(source, local=True)
+        after_audio, = [row for row in after['streams'] if row['codec_type'] == 'audio']
+        assert after_audio['profile'] == 'LC'
+        assert (after_audio['sample_rate'], after_audio['channels']) == ('44100', 2)
+        assert stream.status['source_probes'][0]['result'] == 'ok'
+        expected = plan()
+        after_video, = [row for row in after['streams'] if row['codec_type'] == 'video']
+        rate = Fraction(after_video['avg_frame_rate'])
+        expected['target'].update(width=320, height=180, fps=str(rate))
+        seconds = float(after_video['duration'])
+        with pytest.raises(PrepareError, match='AAC profile'):
+            validate_tracks(expected, before, before, output=True, seconds=seconds, source_rate=rate)
+        assert validate_tracks(expected, after, after, output=True, seconds=seconds, source_rate=rate) == rate
+    finally:
+        await stream.close()
+    assert not stream._jobs and not stream._owned_groups
 
 
 def test_playlist_accepts_only_finalized_generated_files(tmp_path):

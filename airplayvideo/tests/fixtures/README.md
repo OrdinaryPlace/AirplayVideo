@@ -32,3 +32,38 @@ The uncompressed fixture SHA-256 is
 Version 0.2.1 fails this fixture on its first incomplete video packet. The
 regression requires recovery, non-silent audio, a common timeline, bounded audio
 processing age, prompt cancellation, and bounded failure for unrecoverable data.
+
+# Fragmented MP4 probe coverage fixture
+
+`large-video-aac.mp4.gz` contains one generated black H.264 video frame and a
+one-second 1 kHz AAC-LC tone (44.1 kHz stereo). It has no external media, URLs or
+private metadata. Its first video sample includes a valid H.264 filler-data NAL
+unit, putting the first AAC packet beyond FFprobe's default 5,000,000-byte probe
+limit. The 6,304,771-byte file compresses to 17,597 bytes. This models a large
+video fragment without expensive encoding in CI.
+
+The test exercises the installed FFprobe binary: default analysis exits zero
+but leaves the AAC profile absent; analysis covering the bounded local file
+identifies LC. The existing strict output validator rejects the former and
+accepts the latter. The same behavior was separately reproduced with a generated
+59.9 MB, four-second HEVC/AAC HLS fragment using FFprobe 8.0.1.
+
+The small base MP4 was generated with development-only FFmpeg 4.4.1/libx264:
+
+```sh
+ffmpeg -f lavfi -i color=c=black:s=320x180:r=1 \
+  -f lavfi -i sine=frequency=1000:sample_rate=44100 -t 1 \
+  -c:v libx264 -preset ultrafast -profile:v baseline -bf 0 \
+  -c:a aac -profile:a aac_low -ac 2 \
+  -f mp4 -movflags frag_keyframe+empty_moov+default_base_moof small.mp4
+```
+
+Its single video sample was extended with a length-prefixed filler NAL: byte
+`0x0c`, 6 MiB of `0xff`, then `0x80`. Update the video `tfhd` default sample size,
+the audio `trun` data offset, and the `mdat` box size by the filler length before
+inserting it immediately after the original video sample. This leaves the
+encoded picture, AAC packets, sample counts and timestamps intact. Compress
+with `gzip.compress(data, mtime=0)`.
+
+The uncompressed fixture SHA-256 is
+`331892eb3708a312bd7edc32d83de629379e47fd1d32e360c2f2ee3a3893c76d`.

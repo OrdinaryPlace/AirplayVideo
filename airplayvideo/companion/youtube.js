@@ -44,8 +44,8 @@ function youtubeControl(command) {
     video.play().catch(() => {});
     return {ready: true};
   }
-  // Fullscreen is owned by the site and browser. This only reports a verified
-  // native control's position; trusted X input supplies the required gesture.
+  // Fullscreen is owned by the site and browser. This only authorizes YouTube's
+  // native shortcut; trusted X input supplies the required user gesture.
   const full = document.fullscreenElement;
   const rect = player.getBoundingClientRect();
   const fullscreen = !!full && (full === video || full.contains(video)) &&
@@ -54,22 +54,8 @@ function youtubeControl(command) {
   if (command.action === 'fullscreen_status') return {ready: true, fullscreen};
   if (command.action !== 'fullscreen') return {ready: false};
   if (fullscreen) return {ready: true, fullscreen: true};
-  if (!document.fullscreenEnabled) return {ready: false, interaction: true};
-  const scale = window.devicePixelRatio;
-  const viewport = {width: Math.round(innerWidth * scale), height: Math.round(innerHeight * scale)};
-  const center = element => {
-    const bounds = element.getBoundingClientRect();
-    const x = bounds.left + bounds.width / 2, y = bounds.top + bounds.height / 2;
-    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight || !element.contains(document.elementFromPoint(x, y))) return null;
-    return {x: Math.round(x * scale), y: Math.round(y * scale)};
-  };
-  const button = player.querySelector('button.ytp-fullscreen-button');
-  if (visible(button) && !button.disabled && button.getAttribute('aria-disabled') !== 'true') {
-    const click = center(button);
-    return click ? {ready: true, fullscreen: false, viewport, click} : {ready: false, interaction: true};
-  }
-  // Hidden controls can be revealed by an owned pointer move, followed by a
-  // fresh control lookup. Never click the player or guess the button location.
-  const reveal = center(player);
-  return reveal ? {ready: true, fullscreen: false, viewport, reveal} : {ready: false, interaction: true};
+  // Do not type into Chrome's address bar or an embedded frame. The editable
+  // focus guard above also applies when the page has a search/comment field.
+  if (!document.fullscreenEnabled || !document.hasFocus() || active?.matches('iframe')) return {ready: false, interaction: true};
+  return {ready: true, fullscreen: false, shortcut: 'f'};
 }

@@ -83,6 +83,7 @@ _KNOWN_FAILURES = {
     'The audio probe differs from the selected codec',
     'HDR output is not verified by this experiment',
     'The first media segment has no valid video duration',
+    'The first media segment cannot be probed within the disk limit',
     'The native HLS session cannot verify its first segment within the disk limit',
     'The generated HLS playlist is invalid',
     'The generated HLS playlist contains an unexpected media path',

@@ -37,8 +37,8 @@ async def main():
         form.addEventListener('submit',e=>{e.preventDefault();report('submitted')});
         </script>''')
     async def video_fixture(request):
-        # The account-free fixture uses the production read-only button intent;
-        # only its origin guard is adapted. Native X input must supply the click.
+        # The account-free fixture uses the production read-only shortcut intent;
+        # only its origin guard is adapted. Native X input must supply the keypress.
         script = (Path(__file__).parents[1] / 'companion/youtube.js').read_text()
         assert not any(term in script for term in ('__airplayVideoFit', 'style.setProperty', 'setInterval(', '.requestFullscreen('))
         script = script.replace("location.origin !== 'https://www.youtube.com'", "location.origin !== new URL(location.href).origin")
@@ -46,7 +46,7 @@ async def main():
         <style>#movie_player{position:relative;width:640px;height:360px;background:#183849}video{width:100%;height:100%}.ytp-fullscreen-button{position:absolute;right:0;bottom:0;width:96px;height:48px;opacity:0}</style>
         <input id="search" aria-label="Search fixture"><main><div id="movie_player"><video></video><button class="ytp-fullscreen-button">Fullscreen</button></div></main><aside style="height:2400px">Scrollable page</aside>
         <script>''' + script + '''
-        let clickedTrusted=false, replaced=false, sequence=0;
+        let keyTrusted=false, replaced=false, sequence=0;
         const assert=(value,message)=>{if(!value)throw new Error(message)};
         const roots=[document.documentElement,document.body,document.querySelector('main')];
         const original=roots.map(element=>element.getAttribute('style'));
@@ -59,15 +59,19 @@ async def main():
         };
         const report=(event,error='')=>{
           const player=document.querySelector('#movie_player'), rect=player.getBoundingClientRect();
-          return fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'/watch',event,sequence:++sequence,webdriver:navigator.webdriver,error,control:inspect(),trusted:clickedTrusted,fullscreen_element:!!document.fullscreenElement,covers_display:Math.round(rect.width*devicePixelRatio)===screen.width&&Math.round(rect.height*devicePixelRatio)===screen.height,visible:getComputedStyle(player).visibility==='visible',styles_unchanged:roots.every((element,index)=>element.getAttribute('style')===original[index])})});
+          return fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'/watch',event,sequence:++sequence,webdriver:navigator.webdriver,error,control:inspect(),trusted:keyTrusted,fullscreen_element:!!document.fullscreenElement,covers_display:Math.round(rect.width*devicePixelRatio)===screen.width&&Math.round(rect.height*devicePixelRatio)===screen.height,visible:getComputedStyle(player).visibility==='visible',styles_unchanged:roots.every((element,index)=>element.getAttribute('style')===original[index])})});
         };
         function wirePlayer(){
-          const player=document.querySelector('#movie_player'), button=player.querySelector('button');
+          const player=document.querySelector('#movie_player');
           Object.defineProperty(player.querySelector('video'),'readyState',{value:2});
-          player.addEventListener('pointermove',()=>{button.style.opacity='1';report('intent')});
-          button.addEventListener('click',event=>{clickedTrusted=event.isTrusted;player.requestFullscreen().catch(()=>report('fullscreen-error','Native fullscreen request failed'))});
         }
         wirePlayer();
+        document.addEventListener('keydown',event=>{
+          if(event.key!=='f'||event.altKey||event.ctrlKey||event.metaKey)return;
+          if(inspect().shortcut!=='f')return;
+          keyTrusted=event.isTrusted;
+          document.querySelector('#movie_player').requestFullscreen().catch(()=>report('fullscreen-error','Native fullscreen request failed'));
+        });
         document.addEventListener('fullscreenchange',()=>requestAnimationFrame(async()=>{
           if(document.fullscreenElement)report('fullscreen');
           else{
@@ -84,7 +88,7 @@ async def main():
             const dialog=document.createElement('div');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.textContent='Consent fixture';document.body.append(dialog);
             assert(inspect().interaction===true,'Consent did not block fullscreen intent');dialog.remove();
             search.focus();assert(inspect().interaction===true,'Text entry did not block fullscreen intent');search.blur();
-            assert(inspect().reveal,'Hidden native controls did not request a pointer reveal');
+            assert(inspect().shortcut==='f','Hidden native controls blocked the keyboard shortcut');
           }catch(caught){error=caught.message}
           report('intent',error);
         });
@@ -133,7 +137,7 @@ async def main():
                                 initial_version.enter_context(patch('service.browser.install_companion', lambda root: install_companion(root, source=old_companion)))
                                 initial_version.enter_context(patch('service.companion.SOURCE', old_companion))
                             await browser.navigate(base + f'/{number}/first', default_setup())
-                        expected_version = '1.0.1' if number == 0 else '1.0.3'
+                        expected_version = '1.0.1' if number == 0 else '1.0.4'
                         assert (await browser.companion.call('ready'))['version'] == expected_version
                         await expect(f'/{number}/first')
                         argv = Path(f'/proc/{browser.chrome_process.pid}/cmdline').read_bytes().split(b'\0')
@@ -176,9 +180,9 @@ async def main():
                     await browsers[0].navigate(base + '/0/restored', default_setup())
                     assert (await expect('/0/restored'))['retained'] == 'yes'
                     assert browsers[0].companion.identity == identity
-                    assert (await browsers[0].companion.call('ready'))['version'] == '1.0.3', 'Retained profile did not run the updated companion'
+                    assert (await browsers[0].companion.call('ready'))['version'] == '1.0.4', 'Retained profile did not run the updated companion'
                     assert browsers[0].chrome_process.pid != previous_chrome.pid
-                    assert (await browsers[1].companion.call('ready'))['version'] == '1.0.3', 'Updating one profile interrupted the other browser'
+                    assert (await browsers[1].companion.call('ready'))['version'] == '1.0.4', 'Updating one profile interrupted the other browser'
                     await browsers[0].navigate(base + '/watch', default_setup())
                     assert not (await expect('/watch', 'intent'))['error'], 'Fullscreen intent guard failed'
                     real_call = browsers[0].companion.call

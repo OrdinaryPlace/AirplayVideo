@@ -498,7 +498,20 @@ class NativeHLSStream:
 
     async def _probe(self, source, *, kind=None, local=False, role=None, headers=None):
         args = [self.ffprobe, "-v", "error", "-protocol_whitelist", "file,pipe" if local else "https,tls,tcp,crypto"]
-        if not local:
+        if local:
+            try:
+                size = Path(source).stat().st_size
+                if not 0 < size <= self.disk_limit:
+                    raise ValueError
+            except (OSError, ValueError):
+                raise StreamError("The first media segment cannot be probed within the disk limit") from None
+            # A fragment stores video packets before its audio packets. The
+            # default 5 MB scan can stop before AAC is decoded, returning exit
+            # zero without its profile. Cover this already bounded local file
+            # and the existing maximum accepted segment duration. The command
+            # and startup deadlines still bound work; remote limits stay put.
+            args += ["-probesize", str(max(32, size)), "-analyzeduration", "180000000"]
+        else:
             _cdn_url(source)
             args += http_input_arguments(headers)
             args += ["-rw_timeout", "10000000"]

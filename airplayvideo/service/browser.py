@@ -297,15 +297,9 @@ class Browser:
             pass
 
     async def youtube_fullscreen(self):
-        """Called under control_lock; one native click, then read-only proof."""
+        """Called under control_lock; one native shortcut, then read-only proof."""
         remote = ["x11vnc", "-display", self.environment["DISPLAY"], "-auth", self.environment["XAUTHORITY"]]
         message = "Use YouTube's fullscreen control in the preview"
-        def point(result, field):
-            viewport, position = result.get("viewport"), result.get(field)
-            check(isinstance(viewport, dict) and (viewport.get("width"), viewport.get("height")) == self.dimensions, message)
-            check(isinstance(position, dict) and all(type(position.get(key)) is int for key in ("x", "y")), message)
-            check(0 <= position["x"] < self.dimensions[0] and 0 <= position["y"] < self.dimensions[1], message)
-            return str(position["x"]), str(position["y"])
         try:
             guarded = await self.native_command(*remote, "-R", "viewonly", "-Q", "viewonly", "-sync")
             check("viewonly:1" in guarded, "Preview input could not be paused for fullscreen")
@@ -315,15 +309,9 @@ class Browser:
             check(owner == str(self.chrome_process.pid), message)
             result = await self.companion.call("fullscreen")
             if result.get("fullscreen") is not True:
-                if result.get("reveal"):
-                    x, y = point(result, "reveal")
-                    await self.native_command("xdotool", "mousemove", "--sync", x, y)
-                    await asyncio.sleep(0.2)
-                    result = await self.companion.call("fullscreen")
-                check(result.get("ready") is True and not result.get("interaction"), message)
-                x, y = point(result, "click")
+                check(result.get("ready") is True and not result.get("interaction") and result.get("shortcut") == "f", message)
                 check(await self.native_command("xdotool", "getactivewindow") == window, message)
-                await self.native_command("xdotool", "mousemove", "--sync", x, y, "click", "1")
+                await self.native_command("xdotool", "key", "--clearmodifiers", "f")
                 for _ in range(20):
                     result = await self.companion.call("fullscreen_status")
                     if result.get("fullscreen") is True:

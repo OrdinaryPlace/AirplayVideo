@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.18
+
+- Keep copied AAC audio working in large 4K segments by probing the complete bounded local segment. Strict audio validation and startup deadlines remain in place.
+- Enter YouTube fullscreen with its native keyboard shortcut, even when player controls are hidden. Verify real fullscreen and leave page layout untouched.
+- Add regressions for large fragmented MP4 audio discovery, focused keyboard input, and trusted fullscreen activation in Chrome.
+
 ## 0.2.17
 
 - Use YouTube's own fullscreen control through the browser's normal input path. Remove the custom page-hiding and player-positioning code, and verify actual video fullscreen before reporting success.

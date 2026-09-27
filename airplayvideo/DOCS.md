@@ -5,7 +5,7 @@ to your Apple TVs from Home Assistant. Browser, tuner and generated sources shar
 one encoder across selected TVs. Direct YouTube video uses one TV's native media
 player. Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.17.** This is an independent implementation in a new
+**Experimental, version 0.2.18.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -115,7 +115,7 @@ The local controls extension uses normal navigation APIs; its page permission
 is limited to YouTube playback. It cannot inspect Google account pages. Paste
 uses a temporary native clipboard on the private display, inserts one line
 without submitting it, then clears that clipboard. **Fullscreen video** uses
-YouTube's own fullscreen button; on other sites use the player's own control.
+YouTube's own fullscreen shortcut; on other sites use the player's own control.
 Sign-ins and consent remain under your control. Watch Later uses YouTube's
 native queue and requires signing in inside this app's browser.
 
