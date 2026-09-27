@@ -96,7 +96,7 @@ Choose **Browser playback** explicitly for the existing browser path, including
 multiple TVs or playback requiring browser sign-in. **Watch Later** still uses
 the signed-in browser and YouTube's own queue. Direct video does not use browser
 cookies or account data; it supports completed public SDR videos and rejects
-live, DRM, HDR or unverified media. Native MP4 delivery and the Basement beep
+live, DRM, HDR or unverified media. Native MP4 delivery and a receiver beep
 have passed a live trial; installed YouTube/HLS and 4K60 playback still need
 physical acceptance.
 

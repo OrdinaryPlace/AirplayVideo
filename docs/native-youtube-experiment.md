@@ -95,7 +95,7 @@ not physical picture, sound or lip-sync.
   reached readiness at 1080p60 without encoding, then cancelled and cleaned up.
   Those tests used the experiment runtime and did not contact a TV.
 - Installed 0.2.12 native MP4 control, receiver fetches and cleanup passed on
-  Cart and Basement. The user confirmed the Basement beep was audible.
+  two saved receivers. The user confirmed the beep was audible on one receiver.
 - Installed 0.2.15 YouTube/HLS playback, complete-video behavior, picture and
   lip-sync acceptance, and sustained 4K60 host conversion/receiver playback
   remain pending. The MP4 beep does not establish those results.
