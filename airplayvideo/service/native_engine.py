@@ -26,6 +26,23 @@ class _StoppedDuringStart(NativeEngineError):
     """The owner closed a worker while its subprocess was being adopted."""
 
 
+FAILURE_OPERATIONS = frozenset({'unknown', 'read_event', 'dispatch_event', 'build_ack', 'write_ack', 'exchange', 'open_events'})
+FAILURE_REASONS = frozenset({'unknown', 'closed_or_read_failed', 'timeout', 'socket_error', 'authentication', 'framing',
+                           'unsupported_url_assistance', 'unsupported_event_protocol', 'invalid_event_sequence'})
+
+
+def safe_native_failure_fields(details):
+    """Revalidate fixed failure categories at each public report boundary."""
+    if not isinstance(details, dict) or type(details.get('status')) is not int or details['status'] != 0:
+        return {}
+    result = {}
+    for key, allowed in (('failure_operation', FAILURE_OPERATIONS), ('failure_reason', FAILURE_REASONS)):
+        value = details.get(key)
+        if isinstance(value, str) and value in allowed:
+            result[key] = value
+    return result
+
+
 def validate_media_url(value):
     try:
         parsed = urlsplit(value)
@@ -101,6 +118,7 @@ class NativeEnginePlayer:
             for key in ('status', 'elapsed_ms'):
                 if type(details.get(key)) is int and 0 <= details[key] <= 86400000:
                     safe_details[key] = details[key]
+            safe_details.update(safe_native_failure_fields(details))
             safe = {'event': event, 'details': safe_details}
             if stage == 'finished' and safe_details.get('status') in (0, 200):
                 self._finished_status = safe_details['status']

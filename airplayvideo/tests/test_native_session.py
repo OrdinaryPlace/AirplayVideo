@@ -162,6 +162,36 @@ async def test_two_phase_start_preserves_best_quality_and_exact_saved_target(rig
     assert (await session.wait())['state'] == 'stopped' and not producer.directory.exists()
 
 
+@pytest.mark.parametrize('operation,reason', [
+    ('read_event', 'closed_or_read_failed'), ('read_event', 'timeout'),
+    ('dispatch_event', 'unsupported_url_assistance'), ('build_ack', 'invalid_event_sequence'),
+    ('write_ack', 'socket_error'), ('exchange', 'unknown'),
+])
+def test_session_report_revalidates_failure_categories_independently(rig, operation, reason):
+    session = NativeSession(rig[0], TV)
+    details = {'stage': 'events', 'status': 0, 'elapsed_ms': 6701,
+               'failure_operation': operation, 'failure_reason': reason,
+               'message': 'private exception', 'body': 'private body', 'headers': {'Cookie': 'private'}}
+    session._event({'event': 'native_stage', 'details': details})
+    safe = session.status['events'][0]['details']
+    assert safe == {'stage': 'events', 'status': 0, 'elapsed_ms': 6701,
+                    'failure_operation': operation, 'failure_reason': reason}
+    assert 'private' not in json.dumps(session.status)
+    details['failure_reason'] = 'private later mutation'
+    assert session.status['events'][0]['details']['failure_reason'] == reason
+
+
+@pytest.mark.parametrize('value', ['private URL', '', [], {}, True, 1, None])
+def test_session_report_drops_unrecognized_failure_values(rig, value):
+    session = NativeSession(rig[0], TV)
+    session._event({'event': 'native_stage', 'details': {
+        'stage': 'events', 'status': 0, 'failure_operation': value, 'failure_reason': value}})
+    assert session.status['events'] == [{'event': 'native_stage', 'details': {'stage': 'events', 'status': 0}}]
+    session._event({'event': 'native_stage', 'details': {
+        'stage': 'events', 'status': 200, 'failure_operation': 'read_event', 'failure_reason': 'timeout'}})
+    assert session.status['events'][-1] == {'event': 'native_stage', 'details': {'stage': 'events', 'status': 200}}
+
+
 @pytest.mark.asyncio
 async def test_explicit_resolution_limit_and_copy_decisions_are_passed_without_capture_fps(rig):
     root, _, producers, _, _, _, _ = rig

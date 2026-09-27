@@ -112,6 +112,42 @@ def test_event_schema_is_closed(tmp_path):
     assert player.events == [{'event': 'native_stage', 'details': {'stage': 'verify'}}]
 
 
+@pytest.mark.parametrize('operation,reason', [
+    ('read_event', 'closed_or_read_failed'), ('read_event', 'timeout'),
+    ('dispatch_event', 'unsupported_url_assistance'), ('build_ack', 'unsupported_event_protocol'),
+    ('build_ack', 'invalid_event_sequence'), ('write_ack', 'socket_error'),
+    ('exchange', 'unknown'), ('open_events', 'timeout'), ('read_event', 'authentication'),
+    ('read_event', 'framing'),
+])
+def test_failure_categories_survive_worker_boundary_without_private_fields(tmp_path, operation, reason):
+    player = NativeEnginePlayer(tmp_path, RECEIVER, URL)
+    player._event({'event': 'native_stage', 'details': {
+        'stage': 'events', 'status': 0, 'elapsed_ms': 6701,
+        'failure_operation': operation, 'failure_reason': reason,
+        'message': 'private exception', 'body': 'private body', 'headers': {'Cookie': 'private'}, 'url': URL}})
+    assert player.events == [{'event': 'native_stage', 'details': {
+        'stage': 'events', 'status': 0, 'elapsed_ms': 6701,
+        'failure_operation': operation, 'failure_reason': reason}}]
+    assert 'private' not in json.dumps(player.events) and URL not in json.dumps(player.events)
+
+
+@pytest.mark.parametrize('value', ['private URL', '', [], {}, True, 1, None])
+def test_unrecognized_failure_fields_are_dropped_without_string_conversion(tmp_path, value):
+    player = NativeEnginePlayer(tmp_path, RECEIVER, URL)
+    player._event({'event': 'native_stage', 'details': {
+        'stage': 'events', 'status': 0, 'failure_operation': value, 'failure_reason': value}})
+    assert player.events == [{'event': 'native_stage', 'details': {'stage': 'events', 'status': 0}}]
+
+
+@pytest.mark.parametrize('status', [200, None, False, '0', -1])
+def test_failure_categories_require_an_explicit_zero_status(tmp_path, status):
+    player = NativeEnginePlayer(tmp_path, RECEIVER, URL)
+    player._event({'event': 'native_stage', 'details': {
+        'stage': 'events', 'status': status, 'failure_operation': 'read_event', 'failure_reason': 'timeout'}})
+    assert 'failure_reason' not in player.events[0]['details']
+    assert 'failure_operation' not in player.events[0]['details']
+
+
 @pytest.mark.asyncio
 async def test_selected_address_is_included_for_engine_identity_match(tmp_path):
     engine = fake_engine(tmp_path, '''import json, sys

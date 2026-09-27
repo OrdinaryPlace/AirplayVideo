@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.19
+
+- Distinguish native connection, event handling and acknowledgement failures in the direct-playback report with fixed diagnostic categories. Keep receiver data and raw error messages private.
+- Preserve direct media quality, track-copy decisions and transport behavior while improving failure diagnosis.
+
 ## 0.2.18
 
 - Keep copied AAC audio working in large 4K segments by probing the complete bounded local segment. Strict audio validation and startup deadlines remain in place.

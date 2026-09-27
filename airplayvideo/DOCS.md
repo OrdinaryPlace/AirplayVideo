@@ -5,7 +5,7 @@ to your Apple TVs from Home Assistant. Browser, tuner and generated sources shar
 one encoder across selected TVs. Direct YouTube video uses one TV's native media
 player. Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.18.** This is an independent implementation in a new
+**Experimental, version 0.2.19.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -99,7 +99,10 @@ cookies or account data; it supports completed public SDR videos and rejects
 live, DRM, HDR or unverified media. Installed short YouTube/HLS trials passed
 at 1080p60 with both tracks copied and at 4K60 with HEVC video conversion and
 AAC audio copied. The user confirmed smooth video and audio in both cases.
-Long playback and measured lip sync remain unverified.
+Later 4K trials began receiver media delivery but disconnected within seconds;
+the cause is still under investigation. Download the direct-playback report after a
+failure to retain its preparation and connection-stage results. Long playback
+and measured lip sync remain unverified.
 
 The browser preview lets you navigate, sign in, paste text, and operate the
 container browser. In **Settings → Source defaults** (or **Setup → Configure**
