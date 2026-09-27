@@ -3,6 +3,7 @@
 #include <iostream>
 #include <sodium.h>
 #include <sys/socket.h>
+#include <tuple>
 
 using namespace lab;
 namespace {
@@ -40,6 +41,8 @@ public:
   std::vector<NativeRequest> calls;
   std::string fail, cancel_after;
   bool throw_error = false, missing_event = false, invalid_identity = false, event_health = true, missing_control = false;
+  std::optional<NativeFailure> failure_snapshot;
+  std::string exception_message = "private signed URL";
   int closed = 0, verified = 0, opened = 0;
   std::atomic<bool> *stop = nullptr;
   Clock::time_point time{};
@@ -52,7 +55,7 @@ public:
   const NativeIdentity &identity() const override { return id; }
   Message exchange(const NativeRequest &value) override {
     calls.push_back(value);
-    if (value.stage == fail && throw_error) throw std::runtime_error("private signed URL");
+    if (value.stage == fail && throw_error) throw std::runtime_error(exception_message);
     Message result; result.status = value.stage == fail ? 500 : 200;
     if (value.stage == "probe") result.body = plist_encode(probe_info.is_null() ? Json{{"pi", invalid_identity ? "" : id.receiver_id}} : probe_info);
     else if (value.stage == "setup") result.body = plist_encode(missing_event ? Json::object() : Json{{"eventPort", 7001}});
@@ -66,6 +69,7 @@ public:
     if (fail == "events") throw std::runtime_error("private event address");
   }
   bool healthy() const override { return event_health; }
+  std::optional<NativeFailure> event_failure() const override { return failure_snapshot; }
   Clock::time_point now() const override { return time; }
   void wait(std::chrono::milliseconds value) override { time += wait_jump.count() ? wait_jump : value; }
   void close() noexcept override { ++closed; }
@@ -225,8 +229,10 @@ void lifecycle() {
   std::vector<Json> events;
   Note note = [&](const std::string &name, const Json &data) {
     check(name == "native_stage", "Only safe native telemetry emitted");
-    check(data.size() == 3 && data["stage"].is_string() && data["status"].is_number_integer() && data["elapsed_ms"].is_number_integer(),
-          "Telemetry contains only stage, status and elapsed time");
+    check((data.size() == 3 || (data.size() == 5 && data["status"] == 0 &&
+              data["failure_operation"].is_string() && data["failure_reason"].is_string())) &&
+              data["stage"].is_string() && data["status"].is_number_integer() && data["elapsed_ms"].is_number_integer(),
+          "Telemetry contains only stage, status, elapsed time and fixed failure categories");
     events.push_back(data);
   };
   native_session(transport, media, stop, note, 3);
@@ -274,7 +280,11 @@ void lifecycle() {
   rejects([&] { native_session(txt_conflict, media, stop, note, 1); }, "Conflicting TXT identity stops the state machine");
   check(txt_conflict.count("setup") == 0 && txt_conflict.closed == 1, "Conflicting identities close before setup");
   Fake event_failure; event_failure.event_health = false;
+  event_failure.failure_snapshot = NativeFailure{NativeFailureOperation::ReadEvent, NativeFailureReason::Timeout};
   rejects([&] { native_session(event_failure, media, stop, note, 1); }, "Event connection loss stops trial");
+  check(events[events.size() - 2]["failure_operation"] == "read_event" &&
+            events[events.size() - 2]["failure_reason"] == "timeout",
+        "Event pump failure snapshot reaches the session thread without private text");
   check(event_failure.count("teardown") == 1 && event_failure.closed == 1, "Event connection failure cleans up");
   check(event_failure.count("record") == 0 && event_failure.count("insert") == 0, "Failed event channel prevents subsequent startup and playback");
   Fake control_failure; control_failure.missing_control = true;
@@ -289,6 +299,72 @@ void lifecycle() {
   stop = false;
   Fake callback; native_session(callback, media, stop, [](const std::string &, const Json &) { throw std::runtime_error("UI failed"); }, 1);
   check(callback.closed == 1, "Throwing telemetry cannot abandon resources");
+
+  for (const auto &message : {std::string("Network timeout"), std::string("private receiver URL")}) {
+    Fake setup_failure; setup_failure.fail = "setup"; setup_failure.throw_error = true;
+    setup_failure.exception_message = message;
+    rejects([&] { native_session(setup_failure, media, stop, note, 1); }, "Failed exchange retains its fixed category");
+    check(events.back()["failure_operation"] == "exchange" &&
+              events.back()["failure_reason"] == (message == "Network timeout" ? "timeout" : "unknown"),
+          "Request timeout and unrecognized private exceptions are distinguished safely");
+    check(Json(events).dump().find("private") == std::string::npos, "Unknown exception text never reaches telemetry");
+  }
+}
+
+void event_diagnostics() {
+  using Operation = NativeFailureOperation;
+  using Reason = NativeFailureReason;
+  for (const auto &[message, expected] : std::vector<std::pair<std::string, Reason>>{
+           {"Connection closed", Reason::ClosedOrReadFailed}, {"Network timeout", Reason::Timeout},
+           {"Network read timeout", Reason::Timeout}, {"Network write timeout", Reason::Timeout},
+           {"Message timeout", Reason::Timeout}, {"Request timeout", Reason::Timeout}, {"Encrypted message timeout", Reason::Timeout},
+           {"Network socket error", Reason::SocketError}, {"Network write failed", Reason::SocketError},
+           {"Channel authentication failed", Reason::Authentication}, {"Invalid encrypted block length", Reason::Framing},
+           {"Duplicate response header", Reason::Framing}, {"Unsupported response framing", Reason::Framing},
+           {"Receiver requires unsupported URL assistance", Reason::UnsupportedUrlAssistance},
+           {"Unsupported event protocol", Reason::UnsupportedEventProtocol}, {"Invalid event sequence", Reason::InvalidEventSequence},
+           {"Connection closed private-url", Reason::Unknown}, {"private auth/header/body", Reason::Unknown}}) {
+    const auto failure = native_classify_failure(Operation::ReadEvent, message);
+    check(failure.operation == Operation::ReadEvent && failure.reason == expected,
+          "Only exact fixed exception messages become diagnostic categories");
+    check(native_failure_fields(failure).dump().find("private") == std::string::npos,
+          "No exception text is serialized");
+  }
+  check(native_failure_fields({static_cast<Operation>(-1), static_cast<Reason>(-1)}) ==
+            Json{{"failure_operation", "unknown"}, {"failure_reason", "unknown"}},
+        "Unknown enum values never produce arbitrary report data");
+
+  int sockets[2]; check(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0, "Diagnostic event socket pair");
+  Channel channel{Socket(sockets[0])}; Socket peer(sockets[1]);
+  check(!native_event_step(channel, 5, 20), "Quiet event silence remains healthy");
+  peer.write(bytes("POST /event HTTP/1.1\r\nCSeq: 7\r\nContent-Length: 0\r\n\r\n"));
+  check(!native_event_step(channel, 20, 50), "Normal event remains acknowledged");
+  check(peer.read_some(50) == bytes("HTTP/1.1 200 OK\r\nContent-Length: 0\r\nCSeq: 7\r\n\r\n"),
+        "Diagnostic wrapper preserves exact event ACK bytes");
+  peer.write(bytes("RTSP/1.0 500 Rejected\r\nContent-Length: 0\r\n\r\n"));
+  check(!native_event_step(channel, 20, 50), "Diagnostic wrapper preserves ignored response behavior");
+  peer.shutdown();
+  auto closed = native_event_step(channel, 20, 50);
+  check(closed && closed->operation == Operation::ReadEvent && closed->reason == Reason::ClosedOrReadFailed,
+        "Actual peer closure has a fixed read category without claiming exclusive EOF");
+
+  int stalled[2]; check(socketpair(AF_UNIX, SOCK_STREAM, 0, stalled) == 0, "Diagnostic stalled socket pair");
+  Channel incomplete{Socket(stalled[0])}; Socket slow_peer(stalled[1]);
+  slow_peer.write(bytes("POST /event HTTP/1.1\r\n"));
+  auto timeout = native_event_step(incomplete, 20, 20);
+  check(timeout && timeout->operation == Operation::ReadEvent && timeout->reason == Reason::Timeout,
+        "A started but incomplete event retains its bounded read-timeout category");
+
+  for (const auto &[wire, operation, reason] : std::vector<std::tuple<std::string, Operation, Reason>>{
+           {"POST /event HTTP/1.1\r\nContent-Length: 19\r\n\r\nunhandledURLRequest", Operation::DispatchEvent, Reason::UnsupportedUrlAssistance},
+           {"POST /event OTHER/1.0\r\nContent-Length: 0\r\n\r\n", Operation::BuildAck, Reason::UnsupportedEventProtocol},
+           {"POST /event HTTP/1.1\r\nCSeq: private\r\nContent-Length: 0\r\n\r\n", Operation::BuildAck, Reason::InvalidEventSequence}}) {
+    int test[2]; check(socketpair(AF_UNIX, SOCK_STREAM, 0, test) == 0, "Diagnostic rejected-event socket pair");
+    Channel rejected{Socket(test[0])}; Socket sender(test[1]); sender.write(bytes(wire));
+    auto failure = native_event_step(rejected, 20, 50);
+    check(failure && failure->operation == operation && failure->reason == reason,
+          "Unsupported event dispatch and ACK construction are separately classified");
+  }
 }
 void rtsp_options() {
   int sockets[2]; check(socketpair(AF_UNIX, SOCK_STREAM, 0, sockets) == 0, "RTSP socket pair");
@@ -329,7 +405,7 @@ void rtsp_options() {
 int main() {
   try {
     require(sodium_init() >= 0, "Sodium initialization failed");
-    run_options(); receiver_ids(); builders(); lifecycle(); rtsp_options();
+    run_options(); receiver_ids(); builders(); lifecycle(); event_diagnostics(); rtsp_options();
     std::cout << assertions << " native assertions passed\n";
     return 0;
   } catch (const std::exception &error) { std::cerr << error.what() << '\n'; return 1; }
