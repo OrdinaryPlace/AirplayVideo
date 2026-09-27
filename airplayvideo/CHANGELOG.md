@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.17
+
+- Use YouTube's own fullscreen control through the browser's normal input path. Remove the custom page-hiding and player-positioning code, and verify actual video fullscreen before reporting success.
+- Preserve the resolver's bounded public media request headers for source probes and streaming. Browser cookies and account credentials remain separate from direct playback.
+- Show the direct preparation step in playback status. Report fixed source-read error categories and bounded media properties when validation fails, without exposing media URLs or raw process output.
+
 ## 0.2.16
 
 - Accept YouTube's rounded 24/30/60 fps metadata for matching 23.976/29.97/59.94 fps media. Preserve the probed fractional frame rate through copying, conversion and quality reporting.

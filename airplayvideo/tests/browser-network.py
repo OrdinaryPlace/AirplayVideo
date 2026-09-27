@@ -18,60 +18,75 @@ from service.model import default_setup, UserError
 async def main():
     os.umask(0o077)
     reports = asyncio.Queue()
+    latest_video = {}
     async def report(request):
-        await reports.put(await request.json())
+        value = await request.json()
+        if value.get('path') == '/watch' and value.get('sequence', 0) >= latest_video.get('sequence', 0):
+            latest_video.clear()
+            latest_video.update(value)
+        await reports.put(value)
         return web.Response(text='ok')
     async def fixture(request):
         return web.Response(content_type='text/html', text='''<!doctype html><title>Control fixture</title>
         <form id="form"><input id="field" type="password" autofocus style="position:fixed;left:20vw;top:20vh;width:60vw;height:50vh"><button>Submit</button></form>
         <script>
         const prior=localStorage.getItem('retained');localStorage.setItem('retained','yes');
-        const report=event=>fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:location.pathname,event,webdriver:navigator.webdriver,value:field.value,retained:prior})});
+        const report=event=>fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:location.pathname,event,webdriver:navigator.webdriver,value:field.value,retained:prior,fullscreen_element:!!document.fullscreenElement})});
         addEventListener('pageshow',()=>{field.focus();requestAnimationFrame(()=>requestAnimationFrame(()=>report('ready')))});
         field.addEventListener('input',()=>report('input'));
         form.addEventListener('submit',e=>{e.preventDefault();report('submitted')});
         </script>''')
     async def video_fixture(request):
-        # Exercise production fitting in a local, account-free page. Only the
-        # origin guard is adapted; extension permissions stay YouTube-only.
+        # The account-free fixture uses the production read-only button intent;
+        # only its origin guard is adapted. Native X input must supply the click.
         script = (Path(__file__).parents[1] / 'companion/youtube.js').read_text()
+        assert not any(term in script for term in ('__airplayVideoFit', 'style.setProperty', 'setInterval(', '.requestFullscreen('))
         script = script.replace("location.origin !== 'https://www.youtube.com'", "location.origin !== new URL(location.href).origin")
         return web.Response(content_type='text/html', text='''<!doctype html><html style="overflow:auto"><body style="margin:0;overflow:scroll">
-        <aside style="height:2400px">Scrollable page</aside><main><div id="movie_player"><video></video></div></main>
+        <style>#movie_player{position:relative;width:640px;height:360px;background:#183849}video{width:100%;height:100%}.ytp-fullscreen-button{position:absolute;right:0;bottom:0;width:96px;height:48px;opacity:0}</style>
+        <input id="search" aria-label="Search fixture"><main><div id="movie_player"><video></video><button class="ytp-fullscreen-button">Fullscreen</button></div></main><aside style="height:2400px">Scrollable page</aside>
         <script>''' + script + '''
+        let clickedTrusted=false, replaced=false, sequence=0;
+        const assert=(value,message)=>{if(!value)throw new Error(message)};
+        const roots=[document.documentElement,document.body,document.querySelector('main')];
+        const original=roots.map(element=>element.getAttribute('style'));
+        const inspect=()=>{
+          const player=document.querySelector('#movie_player'), before=player.getAttribute('style');
+          const control=youtubeControl({action:'fullscreen'});
+          assert(roots.every((element,index)=>element.getAttribute('style')===original[index]),'Fullscreen control changed page styles');
+          assert(player.getAttribute('style')===before,'Fullscreen control changed player styles');
+          return control;
+        };
+        const report=(event,error='')=>{
+          const player=document.querySelector('#movie_player'), rect=player.getBoundingClientRect();
+          return fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'/watch',event,sequence:++sequence,webdriver:navigator.webdriver,error,control:inspect(),trusted:clickedTrusted,fullscreen_element:!!document.fullscreenElement,covers_display:Math.round(rect.width*devicePixelRatio)===screen.width&&Math.round(rect.height*devicePixelRatio)===screen.height,visible:getComputedStyle(player).visibility==='visible',styles_unchanged:roots.every((element,index)=>element.getAttribute('style')===original[index])})});
+        };
+        function wirePlayer(){
+          const player=document.querySelector('#movie_player'), button=player.querySelector('button');
+          Object.defineProperty(player.querySelector('video'),'readyState',{value:2});
+          player.addEventListener('pointermove',()=>{button.style.opacity='1';report('intent')});
+          button.addEventListener('click',event=>{clickedTrusted=event.isTrusted;player.requestFullscreen().catch(()=>report('fullscreen-error','Native fullscreen request failed'))});
+        }
+        wirePlayer();
+        document.addEventListener('fullscreenchange',()=>requestAnimationFrame(async()=>{
+          if(document.fullscreenElement)report('fullscreen');
+          else{
+            await report('exit');
+            if(!replaced){
+              const prior=document.querySelector('#movie_player'), next=prior.cloneNode(true);
+              next.querySelector('button').style.opacity='0';prior.replaceWith(next);replaced=true;wirePlayer();report('replacement');
+            }
+          }
+        }));
         requestAnimationFrame(()=>{
-          const assert=(value,message)=>{if(!value)throw new Error(message)};
           let error='';
-          try {
-            const original=[document.documentElement.getAttribute('style'),document.body.getAttribute('style')];
-            Object.defineProperty(document.querySelector('video'),'readyState',{value:2});
-            youtubeControl({action:'fit'});
-            for(const element of [document.documentElement,document.body]) assert(getComputedStyle(element).overflow==='hidden','Scrollbar not hidden');
-            assert(document.documentElement.clientWidth===innerWidth,'Scrollbar occupies picture width');
-            const rect=document.querySelector('#movie_player').getBoundingClientRect();
-            assert(rect.width===innerWidth && rect.height===innerHeight,'Video does not fill viewport');
-            const first=document.querySelector('#movie_player'), parent=first.parentElement;
-            const destination=document.createElement('section');destination.setAttribute('style','color: rgb(1, 2, 3)');document.body.append(destination);
-            window.__airplayVideoFit.refresh();
-            assert(getComputedStyle(destination).visibility==='hidden','Reparent fixture was not initially hidden');
-            destination.append(first);window.__airplayVideoFit.refresh();
-            assert(getComputedStyle(first).visibility==='visible','Moved player inherits a hidden ancestor');
-            first.remove();
-            const replacement=document.createElement('div');replacement.id='movie_player';replacement.setAttribute('style','background: rgb(4, 5, 6)');parent.append(replacement);
-            window.__airplayVideoFit.refresh();
-            assert(getComputedStyle(replacement).visibility==='visible','Replacement player inherits a hidden ancestor');
-            const resized=replacement.getBoundingClientRect();
-            assert(resized.width===innerWidth && resized.height===innerHeight,'Replacement player does not fill viewport');
+          try{
             const dialog=document.createElement('div');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.textContent='Consent fixture';document.body.append(dialog);
-            window.__airplayVideoFit.refresh();
-            assert(document.documentElement.getAttribute('style')===original[0] && document.body.getAttribute('style')===original[1],'Dialog did not restore scrolling');
-            assert(destination.getAttribute('style')==='color: rgb(1, 2, 3)' && replacement.getAttribute('style')==='background: rgb(4, 5, 6)','Reparenting did not restore original inline styles');
-            dialog.remove();window.__airplayVideoFit.refresh();
-            history.pushState(null,'','/home');window.__airplayVideoFit.refresh();
-            assert(document.documentElement.getAttribute('style')===original[0] && document.body.getAttribute('style')===original[1],'Navigation did not restore scrolling');
-            assert(document.querySelector('aside').getAttribute('style')==='height:2400px','Page styling was not restored');
-          } catch(e) {error=e.message;}
-          fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'/watch',event:'fit',webdriver:navigator.webdriver,error})});
+            assert(inspect().interaction===true,'Consent did not block fullscreen intent');dialog.remove();
+            search.focus();assert(inspect().interaction===true,'Text entry did not block fullscreen intent');search.blur();
+            assert(inspect().reveal,'Hidden native controls did not request a pointer reveal');
+          }catch(caught){error=caught.message}
+          report('intent',error);
         });
         </script></body></html>''')
     app = web.Application()
@@ -118,7 +133,7 @@ async def main():
                                 initial_version.enter_context(patch('service.browser.install_companion', lambda root: install_companion(root, source=old_companion)))
                                 initial_version.enter_context(patch('service.companion.SOURCE', old_companion))
                             await browser.navigate(base + f'/{number}/first', default_setup())
-                        expected_version = '1.0.1' if number == 0 else '1.0.2'
+                        expected_version = '1.0.1' if number == 0 else '1.0.3'
                         assert (await browser.companion.call('ready'))['version'] == expected_version
                         await expect(f'/{number}/first')
                         argv = Path(f'/proc/{browser.chrome_process.pid}/cmdline').read_bytes().split(b'\0')
@@ -161,12 +176,30 @@ async def main():
                     await browsers[0].navigate(base + '/0/restored', default_setup())
                     assert (await expect('/0/restored'))['retained'] == 'yes'
                     assert browsers[0].companion.identity == identity
-                    assert (await browsers[0].companion.call('ready'))['version'] == '1.0.2', 'Retained profile did not run the updated companion'
+                    assert (await browsers[0].companion.call('ready'))['version'] == '1.0.3', 'Retained profile did not run the updated companion'
                     assert browsers[0].chrome_process.pid != previous_chrome.pid
-                    assert (await browsers[1].companion.call('ready'))['version'] == '1.0.2', 'Updating one profile interrupted the other browser'
+                    assert (await browsers[1].companion.call('ready'))['version'] == '1.0.3', 'Updating one profile interrupted the other browser'
                     await browsers[0].navigate(base + '/watch', default_setup())
-                    assert not (await expect('/watch', 'fit'))['error'], 'Video fit/scroll restoration failed'
-                    print('PASS: updated companion in retained profile; moved/replaced video stays visible; consent and navigation restore styles', flush=True)
+                    assert not (await expect('/watch', 'intent'))['error'], 'Fullscreen intent guard failed'
+                    real_call = browsers[0].companion.call
+                    async def fixture_call(action, **fields):
+                        if action in {'fullscreen', 'fullscreen_status'}:
+                            return dict(latest_video['control'])
+                        return await real_call(action, **fields)
+                    with patch.object(browsers[0].companion, 'call', fixture_call):
+                        await browsers[0].control('fullscreen')
+                        full = await expect('/watch', 'fullscreen')
+                        assert full['trusted'] and full['fullscreen_element'] and full['covers_display'] and full['styles_unchanged'], 'Native fullscreen was not verified'
+                        await browsers[0].native_command('xdotool', 'key', 'Escape')
+                        exited = await expect('/watch', 'exit')
+                        assert not exited['fullscreen_element'] and exited['styles_unchanged'], 'Manual fullscreen exit changed the page'
+                        replaced = await expect('/watch', 'replacement')
+                        assert replaced['visible'] and replaced['styles_unchanged'], 'Replacement player was hidden'
+                        await browsers[0].control('fullscreen')
+                        assert (await expect('/watch', 'fullscreen'))['fullscreen_element']
+                        await browsers[0].navigate(base + '/0/after-fullscreen', default_setup())
+                        assert not (await expect('/0/after-fullscreen'))['fullscreen_element'], 'Navigation did not exit video fullscreen'
+                    print('PASS: updated companion in retained profile; trusted native fullscreen covers display; consent, text entry, manual exit and navigation are preserved', flush=True)
                     print('PASS: two sandboxed browsers; no automation/debugging flags; native Unicode paste, navigation, zoom, private previews and saved profile after restart', flush=True)
                 finally:
                     for browser in browsers:

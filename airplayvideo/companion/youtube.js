@@ -3,6 +3,18 @@
 // Serialized by Chrome's scripting API; this function has no outer dependencies.
 function youtubeControl(command) {
   if (location.origin !== 'https://www.youtube.com') return {ready: false, interaction: true};
+  const visible = element => {
+    if (!element || !element.isConnected) return false;
+    const rect = element.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+    for (let parent = element; parent; parent = parent.parentElement) {
+      const style = getComputedStyle(parent);
+      if (style.display === 'none' || style.visibility !== 'visible' || Number(style.opacity) === 0) return false;
+    }
+    return true;
+  };
+  const prompt = [...document.querySelectorAll('[role="dialog"][aria-modal="true"], tp-yt-paper-dialog, ytd-consent-bump-v2-lightbox')].some(visible);
+  if (prompt) return {ready: false, interaction: true};
   if (command.watch_later && location.pathname === '/playlist') {
     const rows = [...document.querySelectorAll('ytd-playlist-video-renderer')];
     const next = rows.find(row => {
@@ -16,66 +28,48 @@ function youtubeControl(command) {
     }
     return {ready: false};
   }
-  const video = document.querySelector('video');
+  if (location.pathname !== '/watch') return {ready: false, interaction: true};
   const player = document.querySelector('#movie_player');
-  if (!video || !player || video.readyState < 2) return {ready: false};
+  const video = player?.querySelector('video');
+  if (!video || video.readyState < 2 || !visible(player)) return {ready: false};
   if (command.action === 'play_pause') {
     if (video.paused) video.play().catch(() => {}); else video.pause();
     return {ready: true};
   }
+  const active = document.activeElement;
+  if (active && (active.matches('input, textarea, select') || active.isContentEditable)) return {ready: false, interaction: true};
   if (command.action === 'youtube_prepare') {
     const quality = {'1080p': 'hd1080', '720p': 'hd720', auto: 'auto'}[command.quality];
     if (quality !== 'auto' && typeof player.setPlaybackQualityRange === 'function') player.setPlaybackQualityRange(quality, quality);
     video.play().catch(() => {});
+    return {ready: true};
   }
-  // Fit the player inside the already-fullscreen Chrome window. This does not
-  // forge a user gesture or modify browser automation/security indicators.
-  if (!window.__airplayVideoFit) {
-    const saved = new Map();
-    const restore = () => {
-      for (const [element, style] of saved) {
-        if (style === null) element.removeAttribute('style'); else element.setAttribute('style', style);
-      }
-      saved.clear();
-    };
-    const remember = element => {if (!saved.has(element)) saved.set(element, element.getAttribute('style'));};
-    const refresh = () => {
-      // YouTube can move or replace the player during initial page setup. Its
-      // new parent may be a sibling hidden by the previous fit. Rebuild from
-      // the original styles so the current player's ancestors remain visible.
-      restore();
-      const current = document.querySelector('#movie_player');
-      const prompt = [...document.querySelectorAll('[role="dialog"][aria-modal="true"], tp-yt-paper-dialog, ytd-consent-bump-v2-lightbox')].some(element => {
-        const rect = element.getBoundingClientRect();
-        return rect.width > 0 && rect.height > 0;
-      });
-      if (!current || prompt || !location.pathname.startsWith('/watch')) {restore(); return;}
-      // Fixed-position video does not remove the underlying document's scroll
-      // range. Hide its scrollbar only while filling video, and restore it for
-      // normal navigation, sign-in and consent dialogs.
-      for (const root of [document.documentElement, document.body]) {
-        remember(root);
-        root.style.setProperty('overflow', 'hidden', 'important');
-        root.style.setProperty('scrollbar-gutter', 'auto', 'important');
-      }
-      for (let branch = current; branch.parentElement; branch = branch.parentElement) {
-        for (const sibling of branch.parentElement.children) {
-          if (sibling !== branch && sibling instanceof HTMLElement) {
-            remember(sibling); sibling.style.setProperty('visibility', 'hidden', 'important');
-          }
-        }
-        if (branch === document.body) break;
-      }
-      remember(current);
-      for (const [property, value] of Object.entries({position: 'fixed', top: '0', left: '0', width: '100vw', height: '100vh', maxWidth: 'none', maxHeight: 'none', zIndex: '2147483000'})) {
-        const cssName = property.replace(/[A-Z]/g, c => '-' + c.toLowerCase());
-        current.style.setProperty(cssName, value, 'important');
-      }
-      window.dispatchEvent(new Event('resize'));
-    };
-    window.__airplayVideoFit = {refresh};
-    setInterval(refresh, 1000);
+  // Fullscreen is owned by the site and browser. This only reports a verified
+  // native control's position; trusted X input supplies the required gesture.
+  const full = document.fullscreenElement;
+  const rect = player.getBoundingClientRect();
+  const fullscreen = !!full && (full === video || full.contains(video)) &&
+    Math.abs(rect.left) <= 2 && Math.abs(rect.top) <= 2 &&
+    Math.abs(rect.width - innerWidth) <= 2 && Math.abs(rect.height - innerHeight) <= 2;
+  if (command.action === 'fullscreen_status') return {ready: true, fullscreen};
+  if (command.action !== 'fullscreen') return {ready: false};
+  if (fullscreen) return {ready: true, fullscreen: true};
+  if (!document.fullscreenEnabled) return {ready: false, interaction: true};
+  const scale = window.devicePixelRatio;
+  const viewport = {width: Math.round(innerWidth * scale), height: Math.round(innerHeight * scale)};
+  const center = element => {
+    const bounds = element.getBoundingClientRect();
+    const x = bounds.left + bounds.width / 2, y = bounds.top + bounds.height / 2;
+    if (x < 0 || y < 0 || x >= innerWidth || y >= innerHeight || !element.contains(document.elementFromPoint(x, y))) return null;
+    return {x: Math.round(x * scale), y: Math.round(y * scale)};
+  };
+  const button = player.querySelector('button.ytp-fullscreen-button');
+  if (visible(button) && !button.disabled && button.getAttribute('aria-disabled') !== 'true') {
+    const click = center(button);
+    return click ? {ready: true, fullscreen: false, viewport, click} : {ready: false, interaction: true};
   }
-  window.__airplayVideoFit.refresh();
-  return {ready: true};
+  // Hidden controls can be revealed by an owned pointer move, followed by a
+  // fresh control lookup. Never click the player or guess the button location.
+  const reveal = center(player);
+  return reveal ? {ready: true, fullscreen: false, viewport, reveal} : {ready: false, interaction: true};
 }

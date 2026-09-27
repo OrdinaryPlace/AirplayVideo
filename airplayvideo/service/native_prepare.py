@@ -35,6 +35,114 @@ _MAX_OUTPUT = 256 * 1024 * 1024
 _FORMAT_FIELDS = ("format_id", "width", "height", "fps", "vcodec", "acodec",
                   "dynamic_range", "pix_fmt", "vbr", "tbr", "abr", "asr",
                   "audio_channels", "has_drm", "url", "protocol", "filesize")
+_MEDIA_HEADER_NAMES = ("User-Agent", "Accept", "Accept-Language", "Sec-Fetch-Mode")
+_MEDIA_HEADER_KEYS = {name.lower(): name for name in _MEDIA_HEADER_NAMES}
+
+
+def media_headers(value):
+    """Keep only bounded, nonsecret HTTP headers needed by a public source."""
+    if value is None:
+        return {}
+    if not isinstance(value, dict) or len(value) > 32:
+        raise PrepareError("The selected source HTTP headers are invalid")
+    result, total = {}, 0
+    for key, item in value.items():
+        name = _MEDIA_HEADER_KEYS.get(key.lower()) if isinstance(key, str) else None
+        if name is None:
+            continue
+        if (name in result or not isinstance(item, str) or len(item) > 1024
+                or any(not 32 <= ord(character) <= 126 for character in item)):
+            raise PrepareError("The selected source HTTP headers are invalid")
+        total += len(name) + len(item) + 4  # Colon, space and CRLF on the wire.
+        if total > 4096:
+            raise PrepareError("The selected source HTTP headers are invalid")
+        result[name] = item
+    return result
+
+
+def http_input_arguments(headers):
+    """Create one validated FFmpeg input option without exposing header values."""
+    clean = media_headers(headers)
+    if not clean:
+        return []
+    return ["-headers", "".join(f"{name}: {clean[name]}\r\n"
+                              for name in _MEDIA_HEADER_NAMES if name in clean)]
+
+
+def _summary_integer(value, minimum, maximum):
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, str) and re.fullmatch(r"[+-]?[0-9]{1,6}", value):
+        value = int(value)
+    return value if isinstance(value, int) and minimum <= value <= maximum else None
+
+
+def _summary_duration(value):
+    if (isinstance(value, bool) or not isinstance(value, (int, float, str))
+            or isinstance(value, str) and len(value) > 64):
+        return None
+    try:
+        number = float(value)
+        return number if math.isfinite(number) and 0 <= number <= 86400 else None
+    except (ValueError, OverflowError):
+        return None
+
+
+def _summary_rate(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9]{1,9}(?:/[0-9]{1,9})?", value):
+        return None
+    try:
+        rate = Fraction(value)
+        return f"{rate.numerator}/{rate.denominator}" if 0 <= rate <= 240 else None
+    except (ValueError, ZeroDivisionError):
+        return None
+
+
+def safe_probe_summary(probe):
+    """Return bounded codec/timing facts, never arbitrary FFprobe text or tags."""
+    codecs = {"h264", "hevc", "vp9", "av1", "aac", "opus"}
+    profiles = {"Main", "Main 10", "High", "Baseline", "Constrained Baseline", "LC",
+                "HE-AAC", "HE-AACv2", "High 10", "High 4:2:2", "High 4:4:4 Predictive",
+                "Profile 0", "Profile 1", "Profile 2", "Profile 3"}
+    pixels = {"yuv420p", "yuv420p10le", "yuv420p10be", "yuv422p", "yuv422p10le",
+              "yuv444p", "yuv444p10le", "yuvj420p", "yuvj422p", "yuvj444p",
+              "nv12", "p010le", "p010be"}
+
+    def known(value, choices):
+        return value if isinstance(value, str) and value in choices else "unrecognized"
+
+    probe = probe if isinstance(probe, dict) else {}
+    container = probe.get("format")
+    container = container if isinstance(container, dict) else {}
+    result = {"streams": [], "format": {"duration": _summary_duration(container.get("duration"))}}
+    rows = probe.get("streams")
+    if not isinstance(rows, list):
+        return result
+    seen = set()
+    for row in rows[:64]:
+        if not isinstance(row, dict):
+            continue
+        kind = row.get("codec_type")
+        if not isinstance(kind, str) or kind not in {"video", "audio"} or kind in seen:
+            continue
+        seen.add(kind)
+        stream = {"codec_type": kind, "codec_name": known(row.get("codec_name"), codecs),
+                  "profile": known(row.get("profile"), profiles),
+                  "duration": _summary_duration(row.get("duration"))}
+        if kind == "video":
+            stream.update({"width": _summary_integer(row.get("width"), 2, 16384),
+                           "height": _summary_integer(row.get("height"), 2, 16384),
+                           "level": _summary_integer(row.get("level"), -99, 999),
+                           "pix_fmt": known(row.get("pix_fmt"), pixels),
+                           "avg_frame_rate": _summary_rate(row.get("avg_frame_rate")),
+                           "r_frame_rate": _summary_rate(row.get("r_frame_rate"))})
+        else:
+            stream.update({"sample_rate": _summary_integer(row.get("sample_rate"), 8000, 192000),
+                           "channels": _summary_integer(row.get("channels"), 1, 64)})
+        result["streams"].append(stream)
+        if len(seen) == 2:
+            break
+    return result
 
 
 def youtube_url(value):
@@ -91,7 +199,8 @@ def _extract_metadata(url, ydl_factory=None):
     formats = data.get("formats")
     if not isinstance(formats, list) or len(formats) > 10000:
         raise PrepareError("The video has no usable media formats")
-    result["formats"] = [{key: row[key] for key in _FORMAT_FIELDS if key in row}
+    result["formats"] = [{**{key: row[key] for key in _FORMAT_FIELDS if key in row},
+                          "http_headers": media_headers(row.get("http_headers"))}
                          for row in formats if isinstance(row, dict)]
     return result
 
@@ -196,8 +305,9 @@ def download_prefix(row, destination, *, audio=False, byte_limit=None):
         if isinstance(byte_limit, bool) or not isinstance(byte_limit, int) or not 1 <= byte_limit <= limit:
             raise PrepareError("The media prefix byte limit is invalid")
         limit = byte_limit
-    request = Request(url, headers={"Range": f"bytes=0-{limit - 1}",
-                                   "User-Agent": "Mozilla/5.0", "Accept-Encoding": "identity"})
+    request = Request(url, headers={"User-Agent": "Mozilla/5.0",
+                                   **media_headers(row.get("http_headers")),
+                                   "Range": f"bytes=0-{limit - 1}", "Accept-Encoding": "identity"})
     # Do not import proxy credentials from the process environment.
     opener = build_opener(ProxyHandler({}), HTTPSHandler(), _CDNRedirect())
     deadline = time.monotonic() + 60

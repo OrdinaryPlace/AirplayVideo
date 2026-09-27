@@ -46,6 +46,8 @@ def rig(tmp_path, monkeypatch):
                 await gates['prepare'].wait()
             if gates.get('prepare_error'):
                 self.status['preparation_stage'] = gates.get('preparation_stage')
+                self.status['source_probes'] = gates.get('source_probes', [])
+                self.status['first_segment'] = gates.get('first_segment')
                 raise gates['prepare_error']
             self.status.update(state='streaming', ready=True)
         async def close(self):
@@ -379,6 +381,34 @@ async def test_prepare_diagnostics_never_admit_unrecognized_stage_or_raw_error(r
     result = session.status
     assert result['failure_stage'] is None and result['preparation_stage'] is None
     assert 'secret' not in json.dumps(result) and not origins and not players
+
+
+@pytest.mark.asyncio
+async def test_source_probe_and_segment_diagnostics_are_resanitized_for_public_report(rig):
+    root, _, _, origins, players, gates, _ = rig
+    message = 'The HEVC profile, pixel format, level or frame rate is not verified for the receiver'
+    gates.update(prepare_error=StreamError(message), preparation_stage='segment_validation',
+        source_probes=[{'role': 'output_metadata', 'result': 'ok', 'returncode': 0,
+                        'elapsed_ms': 5, 'http_status': None, 'stderr': 'secret'},
+                       {'role': 'https://secret', 'result': 'unknown', 'elapsed_ms': 0}],
+        first_segment={'streams': [{'codec_type': 'video', 'codec_name': 'hevc', 'profile': 'Main',
+                                    'level': 180, 'width': 3840, 'height': 2160, 'pix_fmt': 'yuv420p',
+                                    'duration': '4.004', 'tags': {'secret': 'private'}}],
+                       'format': {'filename': 'https://secret', 'duration': '4.004'},
+                       'video_start_seconds': 0.0, 'audio_start_seconds': 0.0,
+                       'source_audio_minus_video_start_seconds': 10**1000, 'source_fps': '30000/1001'})
+    session = NativeSession(root, TV)
+    with pytest.raises(SessionError, match='HEVC profile'):
+        await session.start(URL)
+    result = session.status
+    assert result['error'] == message
+    assert result['source_probes'] == [{'role': 'output_metadata', 'result': 'ok', 'returncode': 0,
+                                      'elapsed_ms': 5, 'http_status': None}]
+    assert result['first_segment']['streams'][0]['level'] == 180
+    assert result['first_segment']['source_fps'] == '30000/1001'
+    assert 'source_audio_minus_video_start_seconds' not in result['first_segment']
+    assert 'secret' not in json.dumps(result) and 'private' not in json.dumps(result)
+    assert not origins and not players
 
 
 @pytest.mark.asyncio

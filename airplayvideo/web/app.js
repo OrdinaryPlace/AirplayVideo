@@ -363,6 +363,13 @@ function stableMarkup(element, html) {
   element.innerHTML = html;
 }
 
+function renderBrowserStatus(){
+  const allowed=['Opened YouTube fullscreen','Finish interacting with the page, then use Fullscreen video',"Use YouTube's fullscreen control in the preview"];
+  const status=state.runtime.browser_status;
+  $('browserVideoStatus').textContent=state.runtime.browser_open&&allowed.includes(status)?status:'';
+  $('browserVideoStatus').hidden=!$('browserVideoStatus').textContent;
+}
+
 function renderUsage(){
   if(!state)return;
   renderRecordings();
@@ -388,7 +395,17 @@ function renderUsage(){
   $('nativePlaybackStatus').hidden=!native;
   $('nativePlaybackReport').hidden=!native;
   if(native){
-    const phase={preparing:'Preparing direct video',ready:'Direct video ready',connecting:'Connecting direct video',playing:'Sending direct video',completed:'Direct video finished',stopped:'Direct video stopped',failed:'Direct video needs attention'}[native.phase]||'Direct video';
+    const stages={
+      resolve_and_capabilities:'Resolving public video and checking media tools',
+      plan:'Selecting direct video tracks',source_probe:'Reading the selected source tracks',
+      source_validation:'Checking source quality and timing',encoder_probe:'Verifying the required encoder',
+      hls_start:'Preparing the first media segment',segment_validation:'Checking the first media segment',
+      ready:'Direct video is ready'
+    };
+    const stageKey=native.phase==='failed'?native.failure_stage:native.phase==='preparing'?native.preparation_stage:null;
+    const stage=Object.hasOwn(stages,stageKey)?stages[stageKey]:'';
+    let phase={preparing:'Preparing direct video',ready:'Direct video ready',connecting:'Connecting direct video',playing:'Sending direct video',completed:'Direct video finished',stopped:'Direct video stopped',failed:'Direct video needs attention'}[native.phase]||'Direct video';
+    if(stage)phase=native.phase==='failed'?`Direct video failed: ${stage}`:`Preparing direct video: ${stage}`;
     const parts=String(quality?.fps||'').split('/').map(Number), fps=parts[0]&&parts[1]?parts[0]/parts[1]:parts[0];
     const detail=quality?.height?`${quality.width} × ${quality.height} · ${Number.isFinite(fps)?Number(fps.toFixed(3)):'?'} fps · video ${quality.copy_video?'copied':'converted'} · audio ${quality.copy_audio?'copied':'converted'}`:'';
     const previous=['completed','stopped','failed'].includes(native.phase)&&runtime.source?.kind!=='youtube';
@@ -432,6 +449,7 @@ function renderRecordings(){
 
 function renderPreview(){
   if(!state)return;
+  renderBrowserStatus();
   const setup = !$('wizard').hidden;
   previewWanted = state.runtime.browser_open && (setup ? step===1 && (state.setup.complete || draft?.modes.browser) : mode==='browser');
   $('previewSection').hidden = !previewWanted;

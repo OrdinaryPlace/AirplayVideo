@@ -14,6 +14,12 @@ from .network import unused_loopback_port
 from .companion import Companion, CompanionVersionMismatch, install as install_companion
 from .browser_gpu import chrome_gpu_arguments
 
+BROWSER_VIDEO_STATUSES = frozenset({
+    "Opened YouTube fullscreen",
+    "Finish interacting with the page, then use Fullscreen video",
+    "Use YouTube's fullscreen control in the preview",
+})
+
 
 def child_environment():
     # In particular, never give a webpage/browser the Supervisor or MQTT secrets.
@@ -40,6 +46,7 @@ class Browser:
         self.companion = None
         self.chrome_process = None
         self.youtube_task = None
+        self.youtube_status = ""
         self.environment = child_environment()
         self.environment.update(LANG="C.UTF-8", LC_ALL="C.UTF-8", HOME=str(self.root), DISPLAY=":99.0", XAUTHORITY=str(self.root / "Xauthority"), XDG_RUNTIME_DIR=str(self.root / "runtime"), PULSE_SERVER="unix:" + str(self.root / "pulse.sock"), PULSE_COOKIE=str(self.root / "pulse-cookie"), PULSE_SINK="airplayvideo")
 
@@ -258,6 +265,7 @@ class Browser:
         url = browser_url(url)
         await self.start(setup)
         self.cancel_youtube()
+        self.youtube_status = ""
         async with self.control_lock:
             check(self.running and self.companion, "Open the browser first")
             # Chrome can accept navigation before its acknowledgement is lost.
@@ -269,20 +277,82 @@ class Browser:
             self.youtube_task = asyncio.create_task(self.prepare_youtube(setup["browser"]["youtube_quality"], watch_later))
 
     async def prepare_youtube(self, quality, watch_later):
-        try:
+        async def prepare():
             for _ in range(45):
-                result = await self.companion.call("youtube_prepare", quality=quality, watch_later=watch_later)
-                if result.get("ready"):
-                    return
+                async with self.control_lock:
+                    result = await self.companion.call("youtube_prepare", quality=quality, watch_later=watch_later)
+                    if result.get("interaction"):
+                        self.youtube_status = "Finish interacting with the page, then use Fullscreen video"
+                        return
+                    if result.get("ready"):
+                        await asyncio.wait_for(self.youtube_fullscreen(), 8)
+                        return
                 await asyncio.sleep(1)
-        except (UserError, asyncio.CancelledError):
-            # The companion cannot inspect or operate Google account pages.
-            return
+            raise UserError("Use YouTube's fullscreen control in the preview")
+        try:
+            await asyncio.wait_for(prepare(), 45)
+        except (UserError, asyncio.TimeoutError):
+            self.youtube_status = "Use YouTube's fullscreen control in the preview"
+        except asyncio.CancelledError:
+            pass
+
+    async def youtube_fullscreen(self):
+        """Called under control_lock; one native click, then read-only proof."""
+        remote = ["x11vnc", "-display", self.environment["DISPLAY"], "-auth", self.environment["XAUTHORITY"]]
+        message = "Use YouTube's fullscreen control in the preview"
+        def point(result, field):
+            viewport, position = result.get("viewport"), result.get(field)
+            check(isinstance(viewport, dict) and (viewport.get("width"), viewport.get("height")) == self.dimensions, message)
+            check(isinstance(position, dict) and all(type(position.get(key)) is int for key in ("x", "y")), message)
+            check(0 <= position["x"] < self.dimensions[0] and 0 <= position["y"] < self.dimensions[1], message)
+            return str(position["x"]), str(position["y"])
+        try:
+            guarded = await self.native_command(*remote, "-R", "viewonly", "-Q", "viewonly", "-sync")
+            check("viewonly:1" in guarded, "Preview input could not be paused for fullscreen")
+            window = await self.native_command("xdotool", "getactivewindow")
+            check(window.isdigit() and self.chrome_process is not None, message)
+            owner = await self.native_command("xdotool", "getwindowpid", window)
+            check(owner == str(self.chrome_process.pid), message)
+            result = await self.companion.call("fullscreen")
+            if result.get("fullscreen") is not True:
+                if result.get("reveal"):
+                    x, y = point(result, "reveal")
+                    await self.native_command("xdotool", "mousemove", "--sync", x, y)
+                    await asyncio.sleep(0.2)
+                    result = await self.companion.call("fullscreen")
+                check(result.get("ready") is True and not result.get("interaction"), message)
+                x, y = point(result, "click")
+                check(await self.native_command("xdotool", "getactivewindow") == window, message)
+                await self.native_command("xdotool", "mousemove", "--sync", x, y, "click", "1")
+                for _ in range(20):
+                    result = await self.companion.call("fullscreen_status")
+                    if result.get("fullscreen") is True:
+                        break
+                    check(not result.get("interaction"), message)
+                    await asyncio.sleep(0.1)
+                else:
+                    raise UserError(message)
+            self.youtube_status = "Opened YouTube fullscreen"
+        finally:
+            restoring = asyncio.create_task(self.native_command(*remote, "-R", "noviewonly", "-sync"))
+            cancelled = False
+            while not restoring.done():
+                try:
+                    await asyncio.shield(restoring)
+                except asyncio.CancelledError:
+                    cancelled = True
+                except (UserError, OSError):
+                    break
+            with contextlib.suppress(UserError, OSError):
+                restoring.result()
+            if cancelled:
+                raise asyncio.CancelledError
 
     async def control(self, action, value=None):
         check(self.running, "Open the browser first")
         if action in {"back", "forward", "reload"}:
             self.cancel_youtube()
+            self.youtube_status = ""
             async with self.control_lock:
                 if action in {"back", "forward"}:
                     # History changes the page without granting permission to
@@ -294,7 +364,18 @@ class Browser:
                 await self.native_command("xdotool", "key", "--clearmodifiers", {"zoom_in": "ctrl+plus", "zoom_out": "ctrl+minus", "zoom_reset": "ctrl+0"}[action])
         elif action == "paste":
             await self.paste(value)
-        elif action in {"play_pause", "fullscreen"}:
+        elif action == "fullscreen":
+            self.cancel_youtube()
+            async with self.control_lock:
+                try:
+                    await asyncio.wait_for(self.youtube_fullscreen(), 8)
+                except asyncio.TimeoutError as exc:
+                    self.youtube_status = "Use YouTube's fullscreen control in the preview"
+                    raise UserError("Use YouTube's fullscreen control in the preview") from exc
+                except UserError:
+                    self.youtube_status = "Use YouTube's fullscreen control in the preview"
+                    raise
+        elif action == "play_pause":
             async with self.control_lock:
                 result = await self.companion.call(action)
                 if not result.get("ready") and action == "play_pause":
@@ -330,6 +411,7 @@ class Browser:
 
     async def _close(self, *, graceful=False):
         self.cancel_youtube()
+        self.youtube_status = ""
         if (self.running or graceful) and self.companion:
             with contextlib.suppress(UserError, OSError):
                 await self.companion.call("close")
@@ -358,5 +440,20 @@ class Browser:
         self.chrome_process = None
 
     async def close(self):
+        # Automatic fullscreen owns control_lock while waiting for page proof.
+        # Cancel it before waiting for that lock, and let its input guard restore
+        # preview access before tearing down the display and companion.
+        youtube_task = self.youtube_task
+        self.cancel_youtube()
+        if youtube_task is not None:
+            finishing = asyncio.gather(youtube_task, return_exceptions=True)
+            cancelled = False
+            while not finishing.done():
+                try:
+                    await asyncio.shield(finishing)
+                except asyncio.CancelledError:
+                    cancelled = True
+            if cancelled:
+                raise asyncio.CancelledError
         async with self.lock, self.control_lock:
             await self._close()

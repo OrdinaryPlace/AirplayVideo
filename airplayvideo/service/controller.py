@@ -9,7 +9,7 @@ import signal
 import uuid
 from urllib.parse import parse_qs, urlsplit
 import aiohttp
-from .browser import child_environment
+from .browser import BROWSER_VIDEO_STATUSES, child_environment
 from .model import UserError, check, atomic_json, browser_url, youtube_url, identifier, validate_generated
 from .native_session import NativeSession
 
@@ -168,7 +168,10 @@ class Controller:
 
     def status(self):
         phase = "stopping" if self.phase == "idle" and self.tearing_down else self.phase
-        return {"phase": phase, "source": self.source, "targets": sorted(self.targets), "receivers": self.receivers, "error": self.error, "metrics": self.metrics, "native": self.native_report, "browser_open": self.browser.running}
+        browser_status = getattr(self.browser, "youtube_status", "")
+        if not self.browser.running or not isinstance(browser_status, str) or browser_status not in BROWSER_VIDEO_STATUSES:
+            browser_status = ""
+        return {"phase": phase, "source": self.source, "targets": sorted(self.targets), "receivers": self.receivers, "error": self.error, "metrics": self.metrics, "native": self.native_report, "browser_open": self.browser.running, "browser_status": browser_status}
 
     @property
     def tearing_down(self):

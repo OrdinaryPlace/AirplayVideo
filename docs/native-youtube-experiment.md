@@ -54,6 +54,15 @@ and nonfree features disabled while adding HTTPS/HLS, VP9/HEVC/Opus decoding,
 dav1d AV1 decoding and HEVC VAAPI encoding. See [dependency
 provenance](provenance.md) for versions, hashes, sources and notices.
 
+Version 0.2.17 preserves the resolver's bounded public request headers for every
+source probe and each FFmpeg input. This follows yt-dlp's [per-format header
+handling](https://github.com/yt-dlp/yt-dlp/blob/2026.08.19/yt_dlp/YoutubeDL.py#L2984)
+and [FFmpeg input arguments](https://github.com/yt-dlp/yt-dlp/blob/2026.08.19/yt_dlp/downloader/external.py#L447-L451).
+Only `User-Agent`, `Accept`, `Accept-Language` and `Sec-Fetch-Mode` are retained,
+with size limits and rejection of control characters. Cookies, authorization
+and other headers are excluded. This corrects a transport compatibility gap;
+it does not establish the cause of an earlier intermittent source-probe failure.
+
 HEVC conversion requires a working host VAAPI encoder. Before playback, an
 actual bounded encode checks the requested profile, dimensions and frame rate;
 opening a render node or listing an encoder is insufficient. Source tracks,
@@ -92,6 +101,18 @@ shows selected quality and track-copy decisions. Fetch counters prove delivery,
 not physical picture, sound or lip-sync.
 If preparation fails, the report identifies the fixed preparation stage and
 safe validation reason without including media URLs, cookies or process logs.
+The `source_probes` field identifies the metadata or first-packet probe, with
+a fixed result category, process exit status, elapsed milliseconds and an HTTP
+status when recognized. A bounded stderr prefix and tail are classified in
+memory and discarded; raw output and request headers are never saved in the
+report. An HTTP denial is not assumed to identify its underlying cause.
+
+The `first_segment` field records bounded codec/profile/level/pixel-format,
+dimensions, frame rates, durations and initial A/V timestamps before validation.
+It also retains the probed source frame rate and starting offset for comparison.
+Missing values remain explicit; incompatible media still fails validation.
+These diagnostic fields do not prove receiver playback or authorize a quality
+reduction when a 4K conversion fails.
 
 ## Verification and remaining acceptance
 

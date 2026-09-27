@@ -38,8 +38,11 @@ It verifies ordinary `navigator.webdriver === false` from a synthetic page,
 absence of debugging/automation flags, native Unicode paste without submitting,
 Back/Forward/Reload, zoom, and retained profile/extension identity after restart.
 It also upgrades a signed companion in that retained profile and verifies the
-running version. YouTube fitting fixtures move and replace the player inside
-previously hidden page branches, then verify visibility and restored styles.
+running version. The YouTube fullscreen fixture uses a trusted native click on
+the player's own fullscreen button and verifies a real `fullscreenElement`
+covering the container display. It checks hidden-control reveal, consent and
+text-entry guards, Escape and navigation exit, and visible replacement players.
+The companion does not change page styles or continuously reposition video.
 The companion's native port can keep an old worker alive during an update.
 Startup permits one graceful browser restart only after detecting that stale
 version, before navigation, and waits for owned cleanup even when cancelled.

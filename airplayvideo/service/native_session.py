@@ -20,8 +20,8 @@ from .model import UserError, identifier, local_address
 from .native_engine import NativeEnginePlayer
 from .native_hls_origin import NativeHLSOrigin
 from .native_plan import receiver_capabilities
-from .native_prepare import youtube_url
-from .native_stream import NativeHLSStream, PREPARATION_STAGES, playlist_segments
+from .native_prepare import youtube_url, safe_probe_summary
+from .native_stream import NativeHLSStream, PREPARATION_STAGES, PROBE_FAILURES, PROBE_ROLES, playlist_segments
 
 
 class SessionError(UserError):
@@ -75,7 +75,24 @@ _KNOWN_FAILURES = {
     'The prepared media did not retain the requested audio and video duration',
     'Native HLS conversion stopped before completion',
     'Native HLS startup failed or timed out',
+    'The selected source HTTP headers are invalid',
+    'The media probe must contain exactly one selected track of each kind',
+    'The H.264 profile, pixel format or level is not verified for the receiver',
+    'The HEVC profile, pixel format, level or frame rate is not verified for the receiver',
+    'The AAC profile, channel count or sample rate is not verified for the receiver',
+    'The audio probe differs from the selected codec',
+    'HDR output is not verified by this experiment',
+    'The first media segment has no valid video duration',
+    'The native HLS session cannot verify its first segment within the disk limit',
+    'The generated HLS playlist is invalid',
+    'The generated HLS playlist contains an unexpected media path',
+    'The generated HLS durations or media sequence are invalid',
+    'The generated HLS media sequence skipped a segment',
+    'Native HLS conversion ended without a complete playlist',
+    'Native HLS monitoring failed',
+    'A media command returned excessive data',
 }
+_KNOWN_FAILURES.update(PROBE_FAILURES.values())
 _POLL_SECONDS = 0.25
 
 
@@ -165,6 +182,8 @@ class NativeSession:
             'source_finished': self._source_finished, 'completed': self._state == 'completed',
             'error': self._error, 'failure': self._failure, 'events': self._events,
             'preparation_stage': self._preparation_stage(), 'failure_stage': self._failure_stage,
+            'source_probes': self._source_probes(),
+            'first_segment': self._first_segment(),
             'delivery': self._delivery, 'physical_playback_verified': False,
             'seek_supported': False, 'pause_supported': False,
         })
@@ -193,6 +212,46 @@ class NativeSession:
             return None
         stage = self.producer.status.get('preparation_stage')
         return stage if isinstance(stage, str) and stage in PREPARATION_STAGES else None
+
+    def _source_probes(self):
+        if self.producer is None:
+            return []
+        rows = self.producer.status.get('source_probes', [])
+        if not isinstance(rows, list) or len(rows) > len(PROBE_ROLES):
+            return []
+        result = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            role, reason = row.get('role'), row.get('result')
+            elapsed, code, http = row.get('elapsed_ms'), row.get('returncode'), row.get('http_status')
+            if (not isinstance(role, str) or role not in PROBE_ROLES
+                    or not isinstance(reason, str) or reason not in {*PROBE_FAILURES, 'ok'}
+                    or type(elapsed) is not int or not 0 <= elapsed <= 2**31 - 1
+                    or (code is not None and (type(code) is not int or not -255 <= code <= 255))
+                    or (http is not None and (type(http) is not int or not 100 <= http <= 599))):
+                continue
+            result.append({'role': role, 'result': reason, 'elapsed_ms': elapsed,
+                           'returncode': code, 'http_status': http})
+        return result
+
+    def _first_segment(self):
+        if self.producer is None:
+            return None
+        value = self.producer.status.get('first_segment')
+        if not isinstance(value, dict):
+            return None
+        result = safe_probe_summary(value)
+        for key in ('video_start_seconds', 'audio_start_seconds', 'source_audio_minus_video_start_seconds'):
+            number = value.get(key)
+            if type(number) in (int, float) and -14400 <= number <= 14400 and math.isfinite(number):
+                result[key] = number
+        rate = value.get('source_fps')
+        if isinstance(rate, str) and len(rate) <= 32 and re.fullmatch(r'\d+/[1-9]\d*', rate):
+            parsed = Fraction(rate)
+            if 0 < parsed <= 120 and parsed.denominator <= 1000000:
+                result['source_fps'] = f'{parsed.numerator}/{parsed.denominator}'
+        return result
 
     def _read_counters(self):
         if self.origin is None:

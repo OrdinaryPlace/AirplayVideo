@@ -11,7 +11,7 @@ import pytest
 from service.native_plan import plan_media
 from service.native_stream import (NativeHLSStream, StreamError, choose_encoder, hardware_arguments,
                                    hls_arguments, parse_capabilities, playlist_segments, child_environment)
-from service.native_stream import validate_source_durations, playlist_durations
+from service.native_stream import validate_source_durations, playlist_durations, classify_probe_failure, PROBE_FAILURES
 
 
 def plan(*, four_k=False, convert_audio=False, convert_video=False):
@@ -133,6 +133,114 @@ def test_vaapi_device_is_an_explicit_render_node(device):
 def test_remote_arguments_reject_non_youtube_media_hosts():
     with pytest.raises(ValueError):
         hls_arguments("ffmpeg", "https://private.invalid/secret", "https://private.invalid/audio", Path("out"), plan())
+
+
+@pytest.mark.parametrize('text,reason,code', [
+    ('HTTP error 403 Forbidden', 'http_forbidden', 403),
+    ('Server returned 401 Unauthorized', 'http_authentication', 401),
+    ('HTTP error 429 Too Many Requests', 'http_throttled', 429),
+    ('HTTP error 503 Unavailable', 'http_unavailable', 503),
+    ('HTTP error 416 Requested Range Not Satisfiable', 'http_error', 416),
+    ('Failed to resolve hostname private.example', 'dns', None),
+    ('TLS error: certificate verify failed', 'tls', None),
+    ('Protocol https not on whitelist', 'protocol', None),
+    ('Decoder not found', 'decoder', None),
+    ('Invalid data found when processing input', 'invalid_media', None),
+    ('Connection timed out', 'timeout', None),
+    ('Connection reset by peer', 'network', None),
+    ('private unexplained process output', 'unknown', None),
+])
+def test_probe_failure_classification_never_returns_raw_text(text, reason, code):
+    payload = (text + '\nhttps://r1.googlevideo.com/videoplayback?secret=private\nCookie: private').encode()
+    assert classify_probe_failure(payload) == (reason, code)
+    assert 'private' not in PROBE_FAILURES[reason]
+
+
+@pytest.mark.asyncio
+async def test_probe_drains_both_pipes_and_classifies_tail_without_retaining_private_stderr(tmp_path):
+    stream = session(tmp_path)
+    code = ("import sys;sys.stderr.write('private-cookie\\n'+'x'*300000);sys.stderr.flush();"
+            "sys.stdout.write('y'*300000);sys.stdout.flush();"
+            "sys.stderr.write('\\nHTTP error 403 Forbidden https://private-source/?token=private\\n');sys.exit(1)")
+    with pytest.raises(StreamError, match='HTTP 403') as error:
+        await stream._command([sys.executable, '-c', code], probe_role='video_metadata', timeout=3)
+    assert 'private' not in str(error.value)
+    report = stream.status['source_probes']
+    assert len(report) == 1 and report[0]['role'] == 'video_metadata'
+    assert report[0]['result'] == 'http_forbidden' and report[0]['http_status'] == 403
+    assert report[0]['returncode'] == 1 and report[0]['elapsed_ms'] >= 0
+    assert 'private' not in json.dumps(stream.status) and not stream._jobs and not stream._owned_groups
+    await stream.close()
+
+
+@pytest.mark.asyncio
+async def test_successful_probe_with_stderr_warning_still_succeeds(tmp_path):
+    stream = session(tmp_path)
+    output = await stream._command([sys.executable, '-c',
+        "import sys;sys.stderr.write('HTTP error 403 private historical warning');print('{}')"],
+        probe_role='audio_metadata')
+    assert output == b'{}\n'
+    assert stream.status['source_probes'][0]['result'] == 'ok'
+    assert stream.status['source_probes'][0]['http_status'] is None
+    await stream.close()
+
+
+@pytest.mark.asyncio
+async def test_probe_timeout_and_stdout_limit_reap_the_process_and_discard_stderr(tmp_path):
+    stream = session(tmp_path)
+    with pytest.raises(StreamError, match='timed out'):
+        await stream._command([sys.executable, '-c', "import sys,time;sys.stderr.write('private');sys.stderr.flush();time.sleep(30)"],
+                              probe_role='audio_first_packet', timeout=0.05)
+    assert stream.status['source_probes'][0]['result'] == 'timeout'
+    with pytest.raises(StreamError, match='excessive data'):
+        await stream._command([sys.executable, '-c',
+            "import sys,time;sys.stdout.write('x'*2200000);sys.stdout.flush();sys.stderr.write('private'*100000);time.sleep(30)"],
+            probe_role='video_first_packet', timeout=3)
+    assert not stream._jobs and not stream._owned_groups and 'private' not in json.dumps(stream.status)
+    await stream.close()
+
+
+@pytest.mark.asyncio
+async def test_probe_cancellation_closes_both_readers_and_owned_process(tmp_path):
+    stream = session(tmp_path)
+    task = asyncio.create_task(stream._command([sys.executable, '-c',
+        "import sys,time;sys.stdout.write('private');sys.stdout.flush();sys.stderr.write('private');sys.stderr.flush();time.sleep(30)"],
+        probe_role='video_metadata'))
+    while not stream._jobs:
+        await asyncio.sleep(0)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not stream._jobs and not stream._owned_groups and 'private' not in json.dumps(stream.status)
+    await stream.close()
+
+
+@pytest.mark.asyncio
+async def test_remote_headers_reach_both_metadata_and_first_packet_probes_and_each_hls_input(tmp_path, monkeypatch):
+    stream = session(tmp_path)
+    calls = []
+
+    async def command(args, **kwargs):
+        calls.append((args, kwargs))
+        return {'packets': [{'pts_time': '0'}], 'streams': [{'codec_type': 'audio', 'sample_rate': '44100'}]}
+
+    monkeypatch.setattr(stream, '_json_command', command)
+    video, audio = 'https://r1.googlevideo.com/videoplayback?v=private', 'https://r1.googlevideo.com/videoplayback?a=private'
+    video_headers, audio_headers = {'User-Agent': 'Video Agent'}, {'User-Agent': 'Audio Agent', 'Cookie': 'private'}
+    await stream._probe(video, role='video_metadata', headers=video_headers)
+    await stream._probe(audio, role='audio_metadata', headers=audio_headers)
+    await stream._initial_pts(video, 'video', headers=video_headers)
+    await stream._initial_pts(audio, 'audio', headers=audio_headers)
+    assert [kwargs['probe_role'] for _, kwargs in calls] == ['video_metadata', 'audio_metadata', 'video_first_packet', 'audio_first_packet']
+    for (args, _), agent in zip(calls, ['Video Agent', 'Audio Agent', 'Video Agent', 'Audio Agent']):
+        assert args[args.index('-headers') + 1] == 'User-Agent: ' + agent + '\r\n'
+    args = hls_arguments('ffmpeg', video, audio, tmp_path, plan(), video_headers=video_headers, audio_headers=audio_headers)
+    inputs = [index for index, value in enumerate(args) if value == '-i']
+    positions = [index for index, value in enumerate(args) if value == '-headers']
+    assert positions[0] < inputs[0] < positions[1] < inputs[1]
+    assert [args[index + 1] for index in positions] == ['User-Agent: Video Agent\r\n', 'User-Agent: Audio Agent\r\n']
+    assert stream.status['source_probes'] == []
+    await stream.close()
 
 
 def test_playlist_accepts_only_finalized_generated_files(tmp_path):
@@ -387,14 +495,14 @@ async def test_public_nominal_fps_is_refined_before_encoder_probe_and_report(tmp
     async def capabilities():
         return {}
 
-    async def probe(source):
+    async def probe(source, **kwargs):
         video = {'codec_type': 'video', 'codec_name': 'vp9', 'width': 3840, 'height': 2160,
                  'avg_frame_rate': '30000/1001', 'duration': '1377.809767'}
         audio = {'codec_type': 'audio', 'codec_name': 'aac', 'profile': 'LC',
                  'sample_rate': '44100', 'channels': 2, 'duration': '1377.872109'}
         return {'streams': [video if source.endswith('video') else audio]}
 
-    async def initial(*args):
+    async def initial(*args, **kwargs):
         return Fraction(0)
 
     async def encoder(capabilities):
@@ -414,6 +522,44 @@ async def test_public_nominal_fps_is_refined_before_encoder_probe_and_report(tmp
     assert stream.status['preparation_stage'] == 'encoder_probe'
     assert stream.closed.is_set() and stream.directory is None and not stream._jobs
     assert 'private=' not in json.dumps(stream.status)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('video_duration,level,message', [
+    ('4.004', 180, 'HEVC profile'),
+    (None, 153, 'no valid video duration'),
+])
+async def test_first_segment_failure_retains_only_safe_codec_and_timing_evidence(tmp_path, monkeypatch, video_duration, level, message):
+    stream = session(tmp_path)
+    stream.directory = tmp_path / 'owned-segment'
+    write_playlist(stream.directory)
+    stream.plan = plan(four_k=True)
+    stream.plan['target']['fps'] = '30000/1001'
+    stream._source_rate, stream._source_offset = Fraction(30000, 1001), Fraction(0)
+    result = {'streams': [
+        {'codec_type': 'video', 'codec_name': 'hevc', 'profile': 'Main', 'level': level,
+         'pix_fmt': 'yuv420p', 'width': 3840, 'height': 2160, 'avg_frame_rate': '30000/1001',
+         'r_frame_rate': '30000/1001', 'duration': video_duration, 'tags': {'private': 'secret'}},
+        {'codec_type': 'audio', 'codec_name': 'aac', 'profile': 'LC', 'sample_rate': '44100',
+         'channels': 2, 'duration': '4.04'}], 'format': {'duration': '4.04', 'filename': 'private-url'}}
+
+    async def probe(*args, **kwargs):
+        return result
+
+    async def initial(*args, **kwargs):
+        return Fraction(0)
+
+    monkeypatch.setattr(stream, '_probe', probe)
+    monkeypatch.setattr(stream, '_initial_pts', initial)
+    with pytest.raises(ValueError, match=message):
+        await stream._verify_first_segment('segment-00000000.m4s')
+    report = stream.status['first_segment']
+    assert report['streams'][0]['level'] == level
+    assert report['streams'][0]['duration'] == (float(video_duration) if video_duration else None)
+    assert report['streams'][0]['avg_frame_rate'] == report['source_fps'] == '30000/1001'
+    assert report['video_start_seconds'] == report['audio_start_seconds'] == 0
+    assert 'private' not in json.dumps(report) and not (stream.directory / 'probe.unverified.mp4').exists()
+    await stream.close()
 
 
 @pytest.mark.asyncio

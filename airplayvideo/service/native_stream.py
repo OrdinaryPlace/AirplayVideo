@@ -23,7 +23,8 @@ import time
 
 from .native_prepare import (PrepareError, _binary, _cdn_url, _extract_metadata,
                              _stream, plan_direct_media, validate_initial_timing,
-                             validate_tracks, retain_probed_rate, youtube_url)
+                             validate_tracks, retain_probed_rate, youtube_url,
+                             media_headers, http_input_arguments, safe_probe_summary)
 from .native_plan import PlanError
 
 
@@ -32,6 +33,24 @@ class StreamError(ValueError):
 
 
 _MAX_COMMAND_OUTPUT = 2 * 1024 * 1024
+_MAX_PROBE_STDERR = 64 * 1024
+PROBE_ROLES = frozenset({"video_metadata", "audio_metadata", "video_first_packet", "audio_first_packet",
+                         "output_metadata", "output_video_first_packet", "output_audio_first_packet"})
+PROBE_FAILURES = {
+    "http_forbidden": "YouTube denied access to a selected media track (HTTP 403)",
+    "http_authentication": "YouTube requires authentication for a selected media track (HTTP 401)",
+    "http_throttled": "YouTube temporarily limited requests for a selected media track (HTTP 429)",
+    "http_unavailable": "YouTube could not serve a selected media track (HTTP server error)",
+    "http_error": "YouTube returned an HTTP error for a selected media track",
+    "dns": "The media server address could not be resolved",
+    "tls": "The secure connection to the media server failed",
+    "protocol": "The selected media track requires an unavailable or blocked input protocol",
+    "decoder": "The selected media track requires an unavailable decoder",
+    "invalid_media": "The selected media track could not be read as a supported media file",
+    "timeout": "Reading a selected media track timed out",
+    "network": "The connection to the media server failed",
+    "unknown": "The selected media track could not be read",
+}
 _SEGMENT = re.compile(r"segment-\d{8}\.m4s\Z")
 _PROBE_FIELDS = ("stream=codec_type,codec_name,profile,level,pix_fmt,width,height,avg_frame_rate,"
                  "r_frame_rate,color_transfer,sample_rate,channels,duration,nb_frames:format=duration,size")
@@ -45,6 +64,27 @@ PREPARATION_STAGES = {
     "segment_validation": "Checking the first media segment",
     "ready": "Direct video is ready",
 }
+
+
+def classify_probe_failure(stderr):
+    """Reduce private process output to fixed categories; never return raw text."""
+    text = stderr.decode("utf-8", "replace").lower()
+    match = re.search(r"(?:http error |server returned |http/[12](?:\.\d)?\s+)([45]\d\d)", text)
+    if match:
+        code = int(match.group(1))
+        reason = {401: "http_authentication", 403: "http_forbidden", 429: "http_throttled"}.get(
+            code, "http_unavailable" if code >= 500 else "http_error")
+        return reason, code
+    patterns = (
+        ("dns", ("failed to resolve hostname", "name or service not known", "nodename nor servname", "temporary failure in name resolution")),
+        ("tls", ("tls error", "tls handshake", "certificate verify failed", "certificate verification failed", "gnutls_handshake")),
+        ("protocol", ("not on whitelist", "protocol not found")),
+        ("decoder", ("decoder not found", "unknown decoder", "no decoder could be found", "decoding requested, but no decoder found")),
+        ("invalid_media", ("invalid data found when processing input", "moov atom not found", "ebml header parsing failed")),
+        ("timeout", ("connection timed out", "operation timed out")),
+        ("network", ("connection refused", "connection reset", "network is unreachable", "no route to host", "i/o error")),
+    )
+    return next(((reason, None) for reason, phrases in patterns if any(phrase in text for phrase in phrases)), ("unknown", None))
 
 
 async def _gather(*coroutines):
@@ -146,13 +186,14 @@ def hardware_arguments(encoder, device):
 
 
 def hls_arguments(ffmpeg, video, audio, directory, plan, *, encoder=None, vaapi_device=None, remote=True,
-                  low_power=False):
+                  low_power=False, video_headers=None, audio_headers=None):
     """Build shell-free arguments; source values must never be put in logs."""
     args = [ffmpeg, "-hide_banner", "-loglevel", "error", "-nostdin", "-n"]
     args += hardware_arguments(encoder, vaapi_device)
-    for source in (video, audio):
+    for source, headers in ((video, video_headers), (audio, audio_headers)):
         if remote:
             _cdn_url(source)
+            args += http_input_arguments(headers)
             args += ["-protocol_whitelist", "https,tls,tcp,crypto", "-rw_timeout", "10000000"]
         else:
             args += ["-protocol_whitelist", "file,pipe"]
@@ -275,6 +316,8 @@ class NativeHLSStream:
         self._error = None
         self._state = "new"
         self._preparation_stage = None
+        self._probe_results = {}
+        self._first_segment_summary = None
         self._bytes = 0
         self._started = None
         self._source_rate = self._source_offset = None
@@ -290,6 +333,8 @@ class NativeHLSStream:
     def status(self):
         return {"state": self._state, "ready": self._state in {"streaming", "finished"} and self._error is None,
                 "preparation_stage": self._preparation_stage,
+                "source_probes": [dict(self._probe_results[role]) for role in sorted(self._probe_results)],
+                "first_segment": self._first_segment_summary,
                 "finished": self._finished.is_set(), "error": self._error,
                 "disk_bytes": self._bytes, "experimental": True,
                 "receiver_playback_verified": False,
@@ -356,17 +401,27 @@ class NativeHLSStream:
                 pass
             raise
 
-    async def _command(self, args, *, timeout=20, payload=None):
+    async def _command(self, args, *, timeout=20, payload=None, probe_role=None):
+        if probe_role is not None and (not isinstance(probe_role, str) or probe_role not in PROBE_ROLES):
+            raise StreamError("The media probe role is invalid")
         process = None
+        started = time.monotonic()
+
+        def record(reason, http_status=None):
+            if probe_role is not None:
+                self._probe_results[probe_role] = {
+                    "role": probe_role, "result": reason,
+                    "returncode": process.returncode if process is not None else None,
+                    "elapsed_ms": max(0, round((time.monotonic() - started) * 1000)),
+                    "http_status": http_status,
+                }
+
         try:
             process = await self._spawn(args, stdin=asyncio.subprocess.PIPE if payload else asyncio.subprocess.DEVNULL,
-                                        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL)
+                                        stdout=asyncio.subprocess.PIPE,
+                                        stderr=asyncio.subprocess.PIPE if probe_role else asyncio.subprocess.DEVNULL)
 
-            async def finish():
-                if payload:
-                    process.stdin.write(payload)
-                    await process.stdin.drain()
-                    process.stdin.close()
+            async def read_output():
                 chunks, total = [], 0
                 while True:
                     block = await process.stdout.read(min(65536, _MAX_COMMAND_OUTPUT - total + 1))
@@ -376,17 +431,46 @@ class NativeHLSStream:
                     if total > _MAX_COMMAND_OUTPUT:
                         raise StreamError("A media command returned excessive data")
                     chunks.append(block)
-                if await process.wait() != 0:
-                    raise StreamError("A media command failed; no source quality fallback was attempted")
                 return b"".join(chunks)
+
+            async def read_errors():
+                if not probe_role:
+                    return "unknown", None
+                first, tail = bytearray(), bytearray()
+                half = _MAX_PROBE_STDERR // 2
+                while block := await process.stderr.read(65536):
+                    first.extend(block[:max(0, half - len(first))])
+                    tail.extend(block)
+                    if len(tail) > half:
+                        del tail[:-half]
+                # Only the fixed category escapes this coroutine. The bounded
+                # private bytes are neither attached to errors nor stored.
+                return classify_probe_failure(bytes(first) + bytes(tail))
+
+            async def finish():
+                if payload:
+                    process.stdin.write(payload)
+                    await process.stdin.drain()
+                    process.stdin.close()
+                output, (reason, http_status) = await _gather(read_output(), read_errors())
+                if await process.wait() != 0:
+                    record(reason, http_status)
+                    raise StreamError(PROBE_FAILURES[reason] if probe_role else
+                                      "A media command failed; no source quality fallback was attempted")
+                record("ok")
+                return output
 
             return await asyncio.wait_for(finish(), timeout)
         except asyncio.CancelledError:
             raise
         except StreamError:
             raise
+        except asyncio.TimeoutError:
+            record("timeout")
+            raise StreamError(PROBE_FAILURES["timeout"] if probe_role else "A media command failed or timed out") from None
         except Exception:
-            raise StreamError("A media command failed or timed out") from None
+            record("unknown")
+            raise StreamError(PROBE_FAILURES["unknown"] if probe_role else "A media command failed or timed out") from None
         finally:
             if process is not None:
                 await self._stop_process(process)
@@ -412,20 +496,23 @@ class NativeHLSStream:
             raise StreamError("FFprobe lacks the required HTTPS input protocols")
         return result
 
-    async def _probe(self, source, *, kind=None, local=False):
+    async def _probe(self, source, *, kind=None, local=False, role=None, headers=None):
         args = [self.ffprobe, "-v", "error", "-protocol_whitelist", "file,pipe" if local else "https,tls,tcp,crypto"]
         if not local:
             _cdn_url(source)
+            args += http_input_arguments(headers)
             args += ["-rw_timeout", "10000000"]
         if kind:
             args += ["-select_streams", "v:0" if kind == "video" else "a:0", "-read_intervals", "%+#1",
                      "-show_entries", "packet=pts_time:packet_side_data=side_data_type,skip_samples:stream=codec_type,sample_rate"]
         else:
             args += ["-show_entries", _PROBE_FIELDS]
-        return await self._json_command(args + ["-of", "json", str(source)], timeout=25)
+        if role is None:
+            role = (("output_" if local else "") + kind + "_first_packet") if kind else "output_metadata"
+        return await self._json_command(args + ["-of", "json", str(source)], timeout=25, probe_role=role)
 
-    async def _initial_pts(self, source, kind, *, local=False):
-        result = await self._probe(source, kind=kind, local=local)
+    async def _initial_pts(self, source, kind, *, local=False, headers=None):
+        result = await self._probe(source, kind=kind, local=local, headers=headers)
         try:
             packet, = result["packets"]
             initial = Fraction(packet["pts_time"])
@@ -516,9 +603,14 @@ class NativeHLSStream:
         rows = {row["format_id"]: row for row in metadata["formats"] if isinstance(row, dict) and isinstance(row.get("format_id"), str)}
         video = _cdn_url(rows[self.plan["video"]["format_id"]]["url"])
         audio = _cdn_url(rows[self.plan["audio"]["format_id"]]["url"])
+        video_headers = media_headers(rows[self.plan["video"]["format_id"]].get("http_headers"))
+        audio_headers = media_headers(rows[self.plan["audio"]["format_id"]].get("http_headers"))
         self._preparation_stage = "source_probe"
         video_probe, audio_probe, video_pts, audio_pts = await _gather(
-            self._probe(video), self._probe(audio), self._initial_pts(video, "video"), self._initial_pts(audio, "audio"))
+            self._probe(video, role="video_metadata", headers=video_headers),
+            self._probe(audio, role="audio_metadata", headers=audio_headers),
+            self._initial_pts(video, "video", headers=video_headers),
+            self._initial_pts(audio, "audio", headers=audio_headers))
         self._preparation_stage = "source_validation"
         self._source_rate = validate_tracks(self.plan, video_probe, audio_probe)
         retain_probed_rate(self.plan, self._source_rate)
@@ -530,7 +622,8 @@ class NativeHLSStream:
         self.directory = Path(tempfile.mkdtemp(prefix="native-stream-", dir=self.root))
         self.process = await self._spawn(
             hls_arguments(self.ffmpeg, video, audio, self.directory, self.plan, encoder=self.encoder,
-                          vaapi_device=self.vaapi_device, low_power=self.vaapi_mode == "low_power"),
+                          vaapi_device=self.vaapi_device, low_power=self.vaapi_mode == "low_power",
+                          video_headers=video_headers, audio_headers=audio_headers),
             stdin=asyncio.subprocess.DEVNULL, stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
         self._monitor_task = asyncio.create_task(self._monitor())
         await self._ready.wait()
@@ -549,7 +642,18 @@ class NativeHLSStream:
                         shutil.copyfileobj(input_file, output, length=65536)
             result, video_pts, audio_pts = await _gather(
                 self._probe(path, local=True), self._initial_pts(path, "video", local=True), self._initial_pts(path, "audio", local=True))
-            duration = float(_stream(result, "video")["duration"])
+            self._first_segment_summary = {
+                **safe_probe_summary(result),
+                "video_start_seconds": float(video_pts), "audio_start_seconds": float(audio_pts),
+                "source_audio_minus_video_start_seconds": float(self._source_offset),
+                "source_fps": f"{self._source_rate.numerator}/{self._source_rate.denominator}",
+            }
+            try:
+                duration = float(_stream(result, "video").get("duration"))
+                if not math.isfinite(duration) or not 0 < duration <= 180:
+                    raise ValueError
+            except (ValueError, TypeError, OverflowError):
+                raise StreamError("The first media segment has no valid video duration") from None
             validate_tracks(self.plan, result, result, output=True, seconds=duration, source_rate=self._source_rate)
             validate_initial_timing(video_pts, audio_pts, source_offset=self._source_offset)
         finally:

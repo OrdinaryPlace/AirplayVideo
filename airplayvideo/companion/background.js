@@ -24,9 +24,10 @@ async function command(message) {
   } else if (message.action === 'close') {
     // Acknowledge before closing the window and its native-messaging connection.
     setTimeout(() => chrome.windows.remove(tab.windowId).catch(() => {}), 50);
-  } else if (['youtube_prepare', 'play_pause', 'fullscreen'].includes(message.action)) {
+  } else if (['youtube_prepare', 'play_pause', 'fullscreen', 'fullscreen_status'].includes(message.action)) {
     // Only the YouTube permission makes this URL visible. There is no account,
     // cookie, debugger, arbitrary-page script, or broad tabs permission.
+    if (message.action === 'youtube_prepare' && tab.status === 'loading') return {ready: false};
     if (!tab.url || new URL(tab.url).origin !== 'https://www.youtube.com') return {ready: false, interaction: true};
     if (!['auto', '1080p', '720p'].includes(message.quality || 'auto')) throw new Error('Invalid quality');
     const results = await chrome.scripting.executeScript({target: {tabId: tab.id}, world: 'MAIN', func: youtubeControl, args: [{action: message.action, quality: message.quality || 'auto', watch_later: message.watch_later === true}]});

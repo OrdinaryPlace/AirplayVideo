@@ -48,6 +48,12 @@ def test_other_sites_playlists_and_embedded_credentials_are_rejected_without_ech
 
 def test_resolver_does_not_read_accounts_cache_or_download_and_discards_unneeded_metadata():
     options_seen = {}
+    data = metadata()
+    data["formats"][0]["http_headers"] = {
+        "uSeR-aGeNt": "Resolver browser/1.0", "Accept": "*/*", "Accept-Language": "en-us",
+        "Sec-Fetch-Mode": "navigate", "Cookie": "private-cookie", "Authorization": "private-auth",
+        "Proxy-Authorization": "private-proxy", "Host": "private-host",
+    }
 
     class Resolver:
         def __init__(self, options):
@@ -61,14 +67,149 @@ def test_resolver_does_not_read_accounts_cache_or_download_and_discards_unneeded
 
         def extract_info(self, url, download):
             assert download is False
-            return {**metadata(), "availability": "public", "title": "private-title",
+            return {**data, "availability": "public", "title": "private-title",
                     "http_headers": {"Cookie": "private-cookie"}}
 
     result = prepare._extract_metadata("https://www.youtube.com/watch?v=aqz-KE-bpKQ", Resolver)
     assert options_seen["cookiesfrombrowser"] is None and options_seen["cookiefile"] is None
     assert options_seen["usenetrc"] is False and options_seen["cachedir"] is False
     assert options_seen["username"] is None and options_seen["password"] is None
-    assert "private-title" not in json.dumps(result) and "private-cookie" not in json.dumps(result)
+    assert "private-" not in json.dumps(result)
+    assert result["formats"][0]["http_headers"] == {
+        "User-Agent": "Resolver browser/1.0", "Accept": "*/*", "Accept-Language": "en-us",
+        "Sec-Fetch-Mode": "navigate",
+    }
+    assert result["formats"][1]["http_headers"] == {}
+    data["formats"][0]["http_headers"]["Accept"] = "changed"
+    assert result["formats"][0]["http_headers"]["Accept"] == "*/*"
+
+
+@pytest.mark.parametrize("headers", [None, {}, {"Cookie": "secret", "Host": "secret", 1: "secret"}])
+def test_absent_or_unapproved_http_headers_preserve_default_input_arguments(headers):
+    assert prepare.media_headers(headers) == {}
+    assert prepare.http_input_arguments(headers) == []
+
+
+def test_http_input_arguments_preserve_resolver_identity_in_fixed_order():
+    assert prepare.http_input_arguments({
+        "accept-language": "en-us,en;q=0.5", "SEC-FETCH-MODE": "navigate",
+        "Accept": "*/*", "user-agent": "Resolver browser/1.0", "Cookie": "secret",
+    }) == ["-headers", "User-Agent: Resolver browser/1.0\r\nAccept: */*\r\n"
+                       "Accept-Language: en-us,en;q=0.5\r\nSec-Fetch-Mode: navigate\r\n"]
+
+
+@pytest.mark.parametrize("headers", [
+    [], "secret", {"User-Agent": 123}, {"User-Agent": None},
+    {"User-Agent": "secret\r\nCookie: injected"}, {"Accept": "secret\n"},
+    {"Accept-Language": "secret\t"}, {"Sec-Fetch-Mode": "secret\x00"},
+    {"User-Agent": "secret\x1f"}, {"User-Agent": "secret\x7f"},
+    {"User-Agent": "secret\u00e9"}, {"User-Agent": "x" * 1025},
+    {"User-Agent": "one", "user-agent": "two"},
+    {f"Unknown-{number}": "secret" for number in range(33)},
+])
+def test_invalid_allowed_http_headers_fail_with_fixed_message_at_both_boundaries(headers):
+    for validate in (prepare.media_headers, prepare.http_input_arguments):
+        with pytest.raises(prepare.PrepareError) as error:
+            validate(headers)
+        assert str(error.value) == "The selected source HTTP headers are invalid"
+
+
+def test_http_header_count_and_serialized_size_limits_accept_boundary_only():
+    names = ("User-Agent", "Accept", "Accept-Language", "Sec-Fetch-Mode")
+    headers = {name: "x" * 1024 for name in names}
+    overhead = sum(len(name) + 4 for name in names)
+    headers[names[-1]] = "x" * (1024 - overhead)
+    headers.update({f"Unknown-{number}": "ignored" for number in range(28)})
+    assert len(prepare.http_input_arguments(headers)[1].encode("ascii")) == 4096
+    headers[names[-1]] += "x"
+    with pytest.raises(prepare.PrepareError, match="HTTP headers are invalid"):
+        prepare.media_headers(headers)
+
+
+def test_safe_probe_summary_preserves_codec_and_timing_facts_and_is_idempotent():
+    data = probe()
+    data["format"] = {"duration": "20.016667", "filename": "private-url", "tags": {"comment": "secret"}}
+    data["streams"][0]["r_frame_rate"] = "60000/1001"
+    data["streams"][0]["tags"] = {"title": "secret"}
+    summary = prepare.safe_probe_summary(data)
+    assert summary == {
+        "streams": [
+            {"codec_type": "video", "codec_name": "h264", "profile": "High", "duration": 20.016667,
+             "width": 1920, "height": 1080, "level": 42, "pix_fmt": "yuv420p",
+             "avg_frame_rate": "60/1", "r_frame_rate": "60000/1001"},
+            {"codec_type": "audio", "codec_name": "aac", "profile": "LC", "duration": 20.016667,
+             "sample_rate": 44100, "channels": 2},
+        ],
+        "format": {"duration": 20.016667},
+    }
+    assert prepare.safe_probe_summary(summary) == summary
+    assert "secret" not in json.dumps(summary) and "private-url" not in json.dumps(summary)
+
+
+def test_safe_probe_summary_discards_arbitrary_text_and_rejects_malformed_fields():
+    secret = "https://private.invalid/media?token=secret\r\nCookie: secret"
+    data = {"streams": [
+        {"codec_type": "video", **{field: secret for field in (
+            "codec_name", "profile", "pix_fmt", "width", "height", "level", "duration",
+            "avg_frame_rate", "r_frame_rate", "url", "headers", "tags")}},
+        {"codec_type": "audio", "codec_name": {"url": secret}, "profile": [secret],
+         "sample_rate": secret, "channels": secret, "duration": "N/A", "tags": secret},
+    ], "format": {"duration": secret, "filename": secret}, "headers": {"Cookie": secret}}
+    summary = prepare.safe_probe_summary(data)
+    assert summary["format"] == {"duration": None}
+    for row in summary["streams"]:
+        assert row["codec_name"] == row["profile"] == "unrecognized"
+        assert row["duration"] is None
+    assert summary["streams"][0]["pix_fmt"] == "unrecognized"
+    for field in ("width", "height", "level", "avg_frame_rate", "r_frame_rate"):
+        assert summary["streams"][0][field] is None
+    assert summary["streams"][1]["sample_rate"] is summary["streams"][1]["channels"] is None
+    assert "secret" not in json.dumps(summary) and "https" not in json.dumps(summary)
+    assert prepare.safe_probe_summary(summary) == summary
+
+
+@pytest.mark.parametrize("value", [None, "N/A", "0/0", "nan", "inf", "-1", "86401", True, {}, 10 ** 400])
+def test_safe_probe_summary_invalid_or_missing_duration_is_none(value):
+    summary = prepare.safe_probe_summary({"streams": [{"codec_type": "video", "duration": value}],
+                                          "format": {"duration": value}})
+    assert summary["streams"][0]["duration"] is None
+    assert summary["format"]["duration"] is None
+
+
+@pytest.mark.parametrize("value,expected", [("0/1", "0/1"), ("480/2", "240/1"),
+                                             ("30000/1001", "30000/1001"), ("0/0", None),
+                                             ("241/1", None), ("-1/1", None), ("1" * 40, None),
+                                             ("30\r\nCookie: secret", None), (30, None)])
+def test_safe_probe_summary_rates_are_bounded_rationals(value, expected):
+    summary = prepare.safe_probe_summary({"streams": [{"codec_type": "video", "avg_frame_rate": value,
+                                                       "r_frame_rate": value}]})
+    assert summary["streams"][0]["avg_frame_rate"] == expected
+    assert summary["streams"][0]["r_frame_rate"] == expected
+
+
+def test_safe_probe_summary_bounds_stream_count_and_numeric_fields():
+    summary = prepare.safe_probe_summary({"streams": [
+        {"codec_type": "secret"}, {"codec_type": ["secret"]},
+        {"codec_type": "audio", "sample_rate": "192000", "channels": 64},
+        {"codec_type": "audio", "sample_rate": "secret"},
+        {"codec_type": "video", "width": 16384, "height": 2, "level": -99},
+        {"codec_type": "video", "profile": "secret"},
+    ]})
+    assert [row["codec_type"] for row in summary["streams"]] == ["audio", "video"]
+    assert summary["streams"][0]["sample_rate"] == 192000 and summary["streams"][0]["channels"] == 64
+    assert (summary["streams"][1]["width"], summary["streams"][1]["height"],
+            summary["streams"][1]["level"]) == (16384, 2, -99)
+    invalid = prepare.safe_probe_summary({"streams": [
+        {"codec_type": "video", "width": 16385, "height": True, "level": 1000},
+        {"codec_type": "audio", "sample_rate": 7999, "channels": 1.5},
+    ]})
+    assert all(invalid["streams"][0][field] is None for field in ("width", "height", "level"))
+    assert invalid["streams"][1]["sample_rate"] is invalid["streams"][1]["channels"] is None
+
+
+@pytest.mark.parametrize("data", [None, [], "secret", {"streams": "secret", "format": "secret"}])
+def test_safe_probe_summary_missing_structure_has_fixed_empty_shape(data):
+    assert prepare.safe_probe_summary(data) == {"streams": [], "format": {"duration": None}}
 
 
 @pytest.mark.parametrize("url", ["http://r1.googlevideo.com/videoplayback", "https://googlevideo.com.evil/videoplayback",
@@ -229,6 +370,46 @@ def test_prefix_download_stops_at_limit_even_if_server_ignores_range(tmp_path, m
     path = tmp_path / "audio.source"
     count = prepare.download_prefix(metadata()["formats"][1], path, audio=True)
     assert path.stat().st_size == count == response.count == 8 * 1024 * 1024
+
+
+def test_prefix_download_uses_approved_source_headers_and_owns_range_and_encoding(tmp_path, monkeypatch):
+    class Response:
+        status = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def read(self, size):
+            return b"x" * size
+
+    class Opener:
+        def open(self, request, timeout):
+            assert {key.lower(): value for key, value in request.header_items()} == {
+                "user-agent": "Resolver browser/1.0", "accept": "*/*", "accept-language": "en-us",
+                "sec-fetch-mode": "navigate", "range": "bytes=0-3", "accept-encoding": "identity",
+            }
+            return Response()
+
+    monkeypatch.setattr(prepare, "build_opener", lambda *args: Opener())
+    row = {**metadata()["formats"][1], "http_headers": {
+        "User-Agent": "Resolver browser/1.0", "Accept": "*/*", "Accept-Language": "en-us",
+        "Sec-Fetch-Mode": "navigate", "Range": "bytes=100-", "Accept-Encoding": "gzip",
+        "Cookie": "secret", "Authorization": "secret", "Host": "secret",
+    }}
+    assert prepare.download_prefix(row, tmp_path / "source", byte_limit=4) == 4
+
+
+def test_prefix_download_rejects_invalid_headers_before_opening_network_or_file(tmp_path, monkeypatch):
+    monkeypatch.setattr(prepare, "build_opener", lambda *args: pytest.fail("No network on invalid headers"))
+    row = {**metadata()["formats"][1], "http_headers": {"User-Agent": "secret\r\nInjected: value"}}
+    path = tmp_path / "source"
+    with pytest.raises(prepare.PrepareError, match="HTTP headers are invalid"):
+        prepare.download_prefix(row, path, byte_limit=4)
+    assert not path.exists()
 
 
 def test_tiny_clip_uses_bitrate_estimate_and_headroom_instead_of_maximum_prefix():
