@@ -96,9 +96,10 @@ Choose **Browser playback** explicitly for the existing browser path, including
 multiple TVs or playback requiring browser sign-in. **Watch Later** still uses
 the signed-in browser and YouTube's own queue. Direct video does not use browser
 cookies or account data; it supports completed public SDR videos and rejects
-live, DRM, HDR or unverified media. Native MP4 delivery and a receiver beep
-have passed a live trial; installed YouTube/HLS and 4K60 playback still need
-physical acceptance.
+live, DRM, HDR or unverified media. Installed short YouTube/HLS trials passed
+at 1080p60 with both tracks copied and at 4K60 with HEVC video conversion and
+AAC audio copied. The user confirmed smooth video and audio in both cases.
+Long playback and measured lip sync remain unverified.
 
 The browser preview lets you navigate, sign in, paste text, and operate the
 container browser. In **Settings → Source defaults** (or **Setup → Configure**

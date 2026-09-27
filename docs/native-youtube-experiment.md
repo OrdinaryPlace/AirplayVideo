@@ -2,9 +2,10 @@
 
 Version 0.2.15 makes **Direct video** the default for the everyday **YouTube
 video** source. It prepares the public video's media tracks and lets one Apple
-TV fetch rolling HLS, without capturing Chrome. This remains experimental:
-native MP4 delivery has passed a live trial, but installed YouTube/HLS playback
-and 4K60 picture, sound and synchronization still need acceptance.
+TV fetch rolling HLS, without capturing Chrome. Installed short trials passed
+at 1080p60 with both tracks copied and at 4K60 with video converted to HEVC and
+AAC audio copied. The user confirmed smooth video and audio for both. This
+remains experimental; long playback and measured synchronization need validation.
 
 ## Everyday controls
 
@@ -96,9 +97,12 @@ not physical picture, sound or lip-sync.
   Those tests used the experiment runtime and did not contact a TV.
 - Installed 0.2.12 native MP4 control, receiver fetches and cleanup passed on
   two saved receivers. The user confirmed the beep was audible on one receiver.
-- Installed 0.2.15 YouTube/HLS playback, complete-video behavior, picture and
-  lip-sync acceptance, and sustained 4K60 host conversion/receiver playback
-  remain pending. The MP4 beep does not establish those results.
+- Installed 0.2.15 played public YouTube HLS on a saved Apple TV 4K in two
+  bounded trials: H.264/AAC 1920×1080 at 60 fps with both tracks copied, then
+  HEVC/AAC 3840×2160 at 60 fps with video converted and audio copied. The user
+  confirmed smooth video and audio in both trials; Chrome stayed closed.
+- Complete-video behavior, long-run conversion stability, other receivers and
+  measured lip sync remain unverified by those short playback trials.
 
 The troubleshooting **Test direct video** action remains a bounded generated
 MP4 picture-and-sound test for one TV. It is separate from everyday YouTube
