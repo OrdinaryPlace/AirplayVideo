@@ -1,11 +1,19 @@
 # Changelog
 
-## 0.2.13
+## 0.2.15
 
 - Play public YouTube links directly on one paired TV using progressive HLS, without opening or recording the browser. Keep Browser playback available as an explicit choice.
 - Select the best resolution and frame rate supported by the TV. Copy compatible video and audio independently; convert incompatible tracks only after validating the encoder. Do not silently reduce quality.
 - Add the pinned public-video resolver and LGPL media dependencies, actual-quality reporting, cancellation, orderly source replacement, and bounded session cleanup.
 - Direct playback starts from the beginning. Watch Later, seeking, long pauses, HDR and multiple simultaneous TVs remain outside this direct path.
+
+## 0.2.13
+
+- Enable the browser's hardware video decoder through ANGLE/Vulkan when an
+  accessible render device is mapped, allowing compatible Linux GPUs to decode
+  HEVC camera feeds. Include the Vulkan runtime and driver-inspection utility.
+- Preserve ordinary Chrome, its sandbox, existing profile and native controls;
+  hosts without a usable render device keep the existing software browser path.
 
 ## 0.2.12
 

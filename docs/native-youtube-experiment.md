@@ -1,6 +1,6 @@
 # Direct YouTube video
 
-Version 0.2.13 makes **Direct video** the default for the everyday **YouTube
+Version 0.2.15 makes **Direct video** the default for the everyday **YouTube
 video** source. It prepares the public video's media tracks and lets one Apple
 TV fetch rolling HLS, without capturing Chrome. This remains experimental:
 native MP4 delivery has passed a live trial, but installed YouTube/HLS playback
@@ -42,7 +42,7 @@ repackaging rather than video transcoding.
 | VP9 2160p60 + AAC-LC | Convert video to HEVC 2160p60; copy AAC |
 | Compatible HEVC + Opus | Copy video; convert audio to AAC-LC |
 
-The 0.2.13 image recipe packages pinned yt-dlp, its matching EJS solver and a
+The 0.2.15 image recipe packages pinned yt-dlp, its matching EJS solver and a
 supported Node runtime in the service's Python environment. FFmpeg keeps GPL
 and nonfree features disabled while adding HTTPS/HLS, VP9/HEVC/Opus decoding,
 dav1d AV1 decoding and HEVC VAAPI encoding. See [dependency
@@ -96,7 +96,7 @@ not physical picture, sound or lip-sync.
   Those tests used the experiment runtime and did not contact a TV.
 - Installed 0.2.12 native MP4 control, receiver fetches and cleanup passed on
   Cart and Basement. The user confirmed the Basement beep was audible.
-- Installed 0.2.13 YouTube/HLS playback, complete-video behavior, picture and
+- Installed 0.2.15 YouTube/HLS playback, complete-video behavior, picture and
   lip-sync acceptance, and sustained 4K60 host conversion/receiver playback
   remain pending. The MP4 beep does not establish those results.
 
