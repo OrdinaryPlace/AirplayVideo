@@ -50,6 +50,25 @@ async def test_fullscreen_sends_one_native_shortcut_and_verifies(browser):
 
 
 @pytest.mark.asyncio
+async def test_cold_page_receives_owned_focus_before_single_shortcut(browser):
+    browser.companion.call.side_effect = [dict(ready=False, focus=True), intent(), dict(ready=True, fullscreen=True)]
+    await browser.control('fullscreen')
+    assert [call.args for call in browser.companion.call.await_args_list] == [('fullscreen',), ('fullscreen_focus',), ('fullscreen_status',)]
+    commands = [call.args for call in browser.native_command.await_args_list]
+    assert commands.index(('xdotool', 'windowfocus', '--sync', '456')) < commands.index(('xdotool', 'key', '--clearmodifiers', 'f'))
+    assert len(shortcuts(browser)) == 1
+
+
+@pytest.mark.asyncio
+async def test_failed_page_focus_does_not_type(browser):
+    browser.companion.call.side_effect = [dict(ready=False, focus=True), dict(ready=False, interaction=True)]
+    with pytest.raises(UserError):
+        await browser.control('fullscreen')
+    assert not shortcuts(browser)
+    assert 'noviewonly' in browser.native_command.await_args_list[-1].args
+
+
+@pytest.mark.asyncio
 async def test_existing_fullscreen_is_not_toggled_off(browser):
     browser.companion.call.return_value = dict(ready=True, fullscreen=True)
     await browser.control('fullscreen')
@@ -64,12 +83,14 @@ async def test_existing_fullscreen_is_not_toggled_off(browser):
     dict(ready=True, shortcut='x'),
     dict(ready=True, shortcut=None),
     dict(ready=True, shortcut='f', interaction=True),
+    dict(ready=False, focus=True, interaction=True),
 ])
 async def test_unsafe_or_unavailable_control_never_types(browser, result):
     browser.companion.call.return_value = result
     with pytest.raises(UserError, match='fullscreen control'):
         await browser.control('fullscreen')
     assert not shortcuts(browser)
+    assert not any('windowfocus' in call.args for call in browser.native_command.await_args_list)
     assert 'noviewonly' in browser.native_command.await_args_list[-1].args
 
 
@@ -204,9 +225,11 @@ const element = (tag='div', editable=false) => ({
   getBoundingClientRect:()=>({left:0,top:0,width:1920,height:1080}),
 });
 const video = {...element('video'), readyState:2};
+let prompts=[], focused=true, focusable=true, canFocus=true, focusCalls=0;
 const player = {...element(), querySelector:selector=>selector==='video'?video:null,
-  contains:child=>child===video};
-let prompts=[], focused=true;
+  contains:child=>child===video, hasAttribute:name=>name==='tabindex'&&focusable,
+  focus:options=>{assert.deepEqual(options,{preventScroll:true});focusCalls++;
+    if(canFocus){focused=true;document.activeElement=player}}};
 global.location={origin:'https://www.youtube.com',pathname:'/watch'};
 global.innerWidth=1920; global.innerHeight=1080;
 global.getComputedStyle=()=>({display:'block',visibility:'visible',opacity:'1'});
@@ -214,18 +237,35 @@ global.document={querySelector:()=>player,querySelectorAll:()=>prompts,
   activeElement:element('body'),fullscreenEnabled:true,fullscreenElement:null,
   hasFocus:()=>focused};
 const inspect=()=>youtubeControl({action:'fullscreen'});
+const focus=()=>youtubeControl({action:'fullscreen_focus'});
 assert.deepEqual(inspect(),{ready:true,fullscreen:false,shortcut:'f'});
 for(const tag of ['input','textarea','select','iframe']){
   document.activeElement=element(tag);
   assert.equal(inspect().interaction,true,tag+' focus allowed a shortcut');
   assert.equal(inspect().shortcut,undefined);
+  focused=false;
+  assert.equal(focus().interaction,true,tag+' focus was replaced');
+  assert.equal(focusCalls,0);
+  focused=true;
 }
 document.activeElement=element('div',true);
 assert.equal(inspect().interaction,true,'Editable content allowed a shortcut');
+assert.equal(focus().interaction,true,'Editable content focus was replaced');
 document.activeElement=element('body'); focused=false;
-assert.equal(inspect().interaction,true,'Unfocused page allowed typing');
+assert.deepEqual(inspect(),{ready:false,focus:true},'Unfocused page allowed typing');
+focusable=false;
+assert.equal(focus().interaction,true,'Player without tabindex received focus');
+assert.equal(focusCalls,0);
+focusable=true; canFocus=false;
+assert.equal(focus().interaction,true,'Failed page focus allowed typing');
+assert.equal(focusCalls,1);
+canFocus=true;
+assert.deepEqual(focus(),{ready:true,fullscreen:false,shortcut:'f'});
+assert.equal(focusCalls,2);
 focused=true; prompts=[element()];
 assert.equal(inspect().interaction,true,'Visible prompt allowed a shortcut');
+assert.equal(focus().interaction,true,'Visible prompt allowed focus replacement');
+assert.equal(focusCalls,2);
 prompts=[]; video.readyState=1;
 assert.equal(inspect().ready,false,'Unready video allowed a shortcut');
 video.readyState=2; location.pathname='/playlist';

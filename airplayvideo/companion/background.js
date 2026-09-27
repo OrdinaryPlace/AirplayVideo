@@ -24,7 +24,7 @@ async function command(message) {
   } else if (message.action === 'close') {
     // Acknowledge before closing the window and its native-messaging connection.
     setTimeout(() => chrome.windows.remove(tab.windowId).catch(() => {}), 50);
-  } else if (['youtube_prepare', 'play_pause', 'fullscreen', 'fullscreen_status'].includes(message.action)) {
+  } else if (['youtube_prepare', 'play_pause', 'fullscreen', 'fullscreen_focus', 'fullscreen_status'].includes(message.action)) {
     // Only the YouTube permission makes this URL visible. There is no account,
     // cookie, debugger, arbitrary-page script, or broad tabs permission.
     if (message.action === 'youtube_prepare' && tab.status === 'loading') return {ready: false};

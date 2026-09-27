@@ -19,6 +19,14 @@ async def main():
     os.umask(0o077)
     reports = asyncio.Queue()
     latest_video = {}
+    focus_requested = asyncio.Event()
+    async def fixture_focus(request):
+        try:
+            await asyncio.wait_for(focus_requested.wait(), 10)
+        except asyncio.TimeoutError:
+            return web.json_response({'action': None})
+        focus_requested.clear()
+        return web.json_response({'action': 'fullscreen_focus'})
     async def report(request):
         value = await request.json()
         if value.get('path') == '/watch' and value.get('sequence', 0) >= latest_video.get('sequence', 0):
@@ -44,9 +52,10 @@ async def main():
         script = script.replace("location.origin !== 'https://www.youtube.com'", "location.origin !== new URL(location.href).origin")
         return web.Response(content_type='text/html', text='''<!doctype html><html style="overflow:auto"><body style="margin:0;overflow:scroll">
         <style>#movie_player{position:relative;width:640px;height:360px;background:#183849}video{width:100%;height:100%}.ytp-fullscreen-button{position:absolute;right:0;bottom:0;width:96px;height:48px;opacity:0}</style>
-        <input id="search" aria-label="Search fixture"><main><div id="movie_player"><video></video><button class="ytp-fullscreen-button">Fullscreen</button></div></main><aside style="height:2400px">Scrollable page</aside>
+        <input id="search" aria-label="Search fixture"><main><div id="movie_player" tabindex="-1"><video></video><button class="ytp-fullscreen-button">Fullscreen</button></div></main><aside style="height:2400px">Scrollable page</aside>
         <script>''' + script + '''
         let keyTrusted=false, replaced=false, sequence=0;
+        const initiallyFocused=document.hasFocus();
         const assert=(value,message)=>{if(!value)throw new Error(message)};
         const roots=[document.documentElement,document.body,document.querySelector('main')];
         const original=roots.map(element=>element.getAttribute('style'));
@@ -57,10 +66,21 @@ async def main():
           assert(player.getAttribute('style')===before,'Fullscreen control changed player styles');
           return control;
         };
-        const report=(event,error='')=>{
+        const report=(event,error='',control=inspect())=>{
           const player=document.querySelector('#movie_player'), rect=player.getBoundingClientRect();
-          return fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'/watch',event,sequence:++sequence,webdriver:navigator.webdriver,error,control:inspect(),trusted:keyTrusted,fullscreen_element:!!document.fullscreenElement,covers_display:Math.round(rect.width*devicePixelRatio)===screen.width&&Math.round(rect.height*devicePixelRatio)===screen.height,visible:getComputedStyle(player).visibility==='visible',styles_unchanged:roots.every((element,index)=>element.getAttribute('style')===original[index])})});
+          const active=document.activeElement?.tagName;
+          const focus={initially_focused:initiallyFocused,focused:document.hasFocus(),active:['BODY','INPUT','TEXTAREA','SELECT','BUTTON','IFRAME'].includes(active)?active:'OTHER',video_ready:player.querySelector('video').readyState,fullscreen_enabled:document.fullscreenEnabled};
+          return fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:'/watch',event,sequence:++sequence,webdriver:navigator.webdriver,error,focus,control,trusted:keyTrusted,fullscreen_element:!!document.fullscreenElement,covers_display:Math.round(rect.width*devicePixelRatio)===screen.width&&Math.round(rect.height*devicePixelRatio)===screen.height,visible:getComputedStyle(player).visibility==='visible',styles_unchanged:roots.every((element,index)=>element.getAttribute('style')===original[index])})});
         };
+        // This account-free fixture mirrors the companion's narrow focus
+        // command without granting the production extension another origin.
+        (async()=>{
+          for(let attempt=0;attempt<2;attempt++){
+            const command=await (await fetch('/fixture-focus')).json();
+            if(command.action!=='fullscreen_focus')return;
+            await report('focused','',youtubeControl(command));
+          }
+        })();
         function wirePlayer(){
           const player=document.querySelector('#movie_player');
           Object.defineProperty(player.querySelector('video'),'readyState',{value:2});
@@ -83,19 +103,26 @@ async def main():
           }
         }));
         requestAnimationFrame(()=>{
-          let error='';
+          let error='', guard='consent';
           try{
             const dialog=document.createElement('div');dialog.setAttribute('role','dialog');dialog.setAttribute('aria-modal','true');dialog.textContent='Consent fixture';document.body.append(dialog);
             assert(inspect().interaction===true,'Consent did not block fullscreen intent');dialog.remove();
+            guard='text_entry';
             search.focus();assert(inspect().interaction===true,'Text entry did not block fullscreen intent');search.blur();
-            assert(inspect().shortcut==='f','Hidden native controls blocked the keyboard shortcut');
-          }catch(caught){error=caught.message}
+            guard='unfocused_refusal';
+            if(!document.hasFocus())assert(inspect().focus===true&&!inspect().shortcut,'Unfocused page allowed a shortcut');
+            else {
+              guard='shortcut_intent';
+              assert(inspect().shortcut==='f','Hidden native controls blocked the keyboard shortcut');
+            }
+          }catch(caught){error=guard}
           report('intent',error);
         });
         </script></body></html>''')
     app = web.Application()
     app.router.add_post('/report', report)
     app.router.add_get('/watch', video_fixture)
+    app.router.add_get('/fixture-focus', fixture_focus)
     app.router.add_get('/{browser}/{page}', fixture)
     runner = web.AppRunner(app)
     await runner.setup()
@@ -184,16 +211,30 @@ async def main():
                     assert browsers[0].chrome_process.pid != previous_chrome.pid
                     assert (await browsers[1].companion.call('ready'))['version'] == '1.0.4', 'Updating one profile interrupted the other browser'
                     await browsers[0].navigate(base + '/watch', default_setup())
-                    assert not (await expect('/watch', 'intent'))['error'], 'Fullscreen intent guard failed'
+                    intent = await expect('/watch', 'intent')
+                    # Only account-free fixture state and fixed guard labels;
+                    # never print arbitrary browser/page content or errors.
+                    print('Fullscreen fixture initial evidence: ' + json.dumps({
+                        'guard': intent['error'], 'focus': intent['focus'],
+                        'control': intent['control'],
+                    }, sort_keys=True), flush=True)
+                    assert not intent['error'], 'Fullscreen intent guard failed'
                     real_call = browsers[0].companion.call
                     async def fixture_call(action, **fields):
+                        if action == 'fullscreen_focus':
+                            focus_requested.set()
+                            result = await expect('/watch', 'focused')
+                            print('Fullscreen fixture focus evidence: ' + json.dumps({
+                                'focus': result['focus'], 'control': result['control'],
+                            }, sort_keys=True), flush=True)
+                            return result['control']
                         if action in {'fullscreen', 'fullscreen_status'}:
                             return dict(latest_video['control'])
                         return await real_call(action, **fields)
                     with patch.object(browsers[0].companion, 'call', fixture_call):
                         await browsers[0].control('fullscreen')
                         full = await expect('/watch', 'fullscreen')
-                        assert full['trusted'] and full['fullscreen_element'] and full['covers_display'] and full['styles_unchanged'], 'Native fullscreen was not verified'
+                        assert full['trusted'] and full['focus']['focused'] and full['fullscreen_element'] and full['covers_display'] and full['styles_unchanged'], 'Native fullscreen was not verified'
                         await browsers[0].native_command('xdotool', 'key', 'Escape')
                         exited = await expect('/watch', 'exit')
                         assert not exited['fullscreen_element'] and exited['styles_unchanged'], 'Manual fullscreen exit changed the page'
@@ -209,6 +250,7 @@ async def main():
                     for browser in browsers:
                         await browser.close()
     finally:
+        focus_requested.set()
         await runner.cleanup()
 
 

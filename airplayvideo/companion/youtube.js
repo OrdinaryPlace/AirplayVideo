@@ -37,7 +37,7 @@ function youtubeControl(command) {
     return {ready: true};
   }
   const active = document.activeElement;
-  if (active && (active.matches('input, textarea, select') || active.isContentEditable)) return {ready: false, interaction: true};
+  if (active && (active.matches('input, textarea, select, iframe') || active.isContentEditable)) return {ready: false, interaction: true};
   if (command.action === 'youtube_prepare') {
     const quality = {'1080p': 'hd1080', '720p': 'hd720', auto: 'auto'}[command.quality];
     if (quality !== 'auto' && typeof player.setPlaybackQualityRange === 'function') player.setPlaybackQualityRange(quality, quality);
@@ -52,10 +52,17 @@ function youtubeControl(command) {
     Math.abs(rect.left) <= 2 && Math.abs(rect.top) <= 2 &&
     Math.abs(rect.width - innerWidth) <= 2 && Math.abs(rect.height - innerHeight) <= 2;
   if (command.action === 'fullscreen_status') return {ready: true, fullscreen};
-  if (command.action !== 'fullscreen') return {ready: false};
+  if (!['fullscreen', 'fullscreen_focus'].includes(command.action)) return {ready: false};
   if (fullscreen) return {ready: true, fullscreen: true};
-  // Do not type into Chrome's address bar or an embedded frame. The editable
-  // focus guard above also applies when the page has a search/comment field.
-  if (!document.fullscreenEnabled || !document.hasFocus() || active?.matches('iframe')) return {ready: false, interaction: true};
+  if (!document.fullscreenEnabled) return {ready: false, interaction: true};
+  if (!document.hasFocus()) {
+    // A newly opened Chrome window can leave its page unfocused. Authorize
+    // focus separately from typing; never replace a focused field or frame.
+    if (command.action === 'fullscreen') return {ready: false, focus: true};
+    if (!player.hasAttribute('tabindex')) return {ready: false, interaction: true};
+    player.focus({preventScroll: true});
+    if (document.activeElement !== player) return {ready: false, interaction: true};
+  }
+  if (!document.hasFocus()) return {ready: false, interaction: true};
   return {ready: true, fullscreen: false, shortcut: 'f'};
 }

@@ -308,6 +308,10 @@ class Browser:
             owner = await self.native_command("xdotool", "getwindowpid", window)
             check(owner == str(self.chrome_process.pid), message)
             result = await self.companion.call("fullscreen")
+            if result.get("focus") is True and not result.get("interaction"):
+                check(await self.native_command("xdotool", "getactivewindow") == window, message)
+                await self.native_command("xdotool", "windowfocus", "--sync", window)
+                result = await self.companion.call("fullscreen_focus")
             if result.get("fullscreen") is not True:
                 check(result.get("ready") is True and not result.get("interaction") and result.get("shortcut") == "f", message)
                 check(await self.native_command("xdotool", "getactivewindow") == window, message)
