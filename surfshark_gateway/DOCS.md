@@ -108,6 +108,38 @@ HA deployment, TUN access, a real handshake, tunnel failure, browser leaks,
 Sportsnet authentication/DRM, or receiver playback. These require scoped live
 checks after configuration, while preserving unrelated viewing.
 
+On 2026-10-24, the pinned `linux/amd64` gateway image built successfully at
+15,144,542 bytes with jq `1.8.2-r0`. All 11 startup boundary tests passed;
+shell syntax, YAML parsing, and whitespace checks passed. The pinned image's
+real `ip` command also accepted the address-discovery arguments in a container
+with no network. No HA app was installed or real VPN credentials used in these
+checks. Independent review found and resolved the wildcard-listener and
+multiple-JSON-object issues before these results were recorded.
+
+### 2026-10-24 — Preserve required disabled-profiling defaults
+
+The first HA startup reached Gluetun but panicked at
+`internal/pprof/server.go:16`, called by `cmd/gluetun/main.go:259`.
+Gluetun v3.41.3 constructs the profiling server even when profiling is disabled
+and dereferences both rate pointers before using it. Its settings defaults
+omit these pointers; the upstream image supplies their zero values through
+`PPROF_BLOCK_PROFILE_RATE` and `PPROF_MUTEX_PROFILE_RATE`. The wrapper's clean
+environment had removed both values. This failure was unrelated to DNS-based
+health checks or VPN credentials.
+
+The wrapper now explicitly supplies both rates as `0`, `PPROF_ENABLED=off`,
+and `PPROF_HTTP_SERVER_ADDRESS=127.0.0.1:6060`. Startup probes require all four
+values and check that inherited profiling overrides cannot replace them.
+Keep these explicit defaults when changing the environment allowlist. The
+synthetic startup probe replaces Gluetun and does not exercise its constructors.
+A separate smoke test now starts the real binary with synthetic credentials in
+a disposable `--network none` container. Its only interface is loopback, with
+TEST-NET-1 addresses and a default route added inside that namespace so Gluetun
+can initialize. The test requires a real local health response and rejects
+panic/configuration errors, then terminates the process. It cannot establish a
+VPN or reach an external host. A subsequent HA startup must still confirm the
+deployed result.
+
 For rollback, stop only this gateway and return the AirplayVideo browser to its
 previous connection after stopping its own trial. Preserve private app data
 and the existing Chrome profile. No host route, DNS, firewall, or Core change

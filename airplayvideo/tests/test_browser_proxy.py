@@ -21,8 +21,10 @@ def test_gateway_dns_is_the_only_local_resolution_exception():
 
 
 @pytest.mark.parametrize("proxy", ["http://172.30.33.10:8888", "http://[fd00::10]:8888"])
-def test_literal_gateway_needs_no_local_hostname_exception(proxy):
-    assert "--host-resolver-rules=MAP * ~NOTFOUND" in chrome_proxy_arguments(proxy)
+def test_literal_gateway_is_excluded_from_host_mapping(proxy):
+    from urllib.parse import urlsplit
+    assert ("--host-resolver-rules=MAP * ~NOTFOUND, EXCLUDE " + urlsplit(proxy).hostname
+            in chrome_proxy_arguments(proxy))
 
 
 def test_invalid_proxy_cannot_inject_a_chrome_fallback_or_reveal_credentials():

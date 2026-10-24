@@ -10,7 +10,7 @@ import uuid
 from urllib.parse import parse_qs, urlsplit
 import aiohttp
 from .browser import BROWSER_VIDEO_STATUSES, child_environment
-from .model import UserError, check, atomic_json, browser_url, youtube_url, identifier, validate_generated
+from .model import UserError, check, atomic_json, browser_url, youtube_url, identifier, validate_generated, check_browser_connection
 from .native_session import NativeSession
 
 
@@ -290,6 +290,10 @@ class Controller:
             url, label = browser_url(request.get("url")), "Web page"
         else:
             raise UserError("Choose a browser source")
+        # Play and preview resolve this under controller.lock, shared with
+        # settings updates. Reject stale UI intent before any browser, stream,
+        # receiver, or generation state can change. Native YouTube returns above.
+        check_browser_connection(request, self.store.data["setup"])
         return {"kind": "browser", "key": "browser", "label": label, "url": url, "page_id": request.get("page"), "browser_source": kind}, {"kind": "browser", "pulse": "airplayvideo.monitor"}
 
     async def open_browser(self, request):

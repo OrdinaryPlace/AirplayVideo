@@ -139,6 +139,11 @@ async def main():
                 cleanup.push_async_callback(browser.close)
                 await browser.navigate('http://origin.invalid/through-proxy', setup)
                 check_browser(browser)
+                try:
+                    await proxy.expect(lambda method, target:
+                        method == 'GET' and target == 'http://origin.invalid/through-proxy')
+                except asyncio.TimeoutError:
+                    raise AssertionError('Fixture proxy did not receive the HTTP navigation') from None
                 await proxy.loaded('/through-proxy')
                 assert any(method == 'GET' and target == 'http://origin.invalid/through-proxy'
                     for method, target in proxy.requests), 'HTTP did not use absolute-form proxy requests'

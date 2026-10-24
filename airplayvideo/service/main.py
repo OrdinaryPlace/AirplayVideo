@@ -11,7 +11,7 @@ import time
 import uuid
 import aiohttp
 from aiohttp import web
-from .model import Store, VERSION, UserError, check, identifier, local_address, validate_setup, patch_setup, atomic_json
+from .model import Store, VERSION, UserError, check, identifier, local_address, validate_setup, patch_setup, atomic_json, check_browser_connection
 from .browser import Browser
 from .controller import PairingEngine, Controller
 from .hdhomerun import Channels, inspect as inspect_tuner, discover as discover_tuners
@@ -232,6 +232,7 @@ class Application:
             elif action == "open_browser":
                 # First-run sign-in needs no tuner, receiver or saved setup.
                 # Reopening the preview must preserve an in-progress login.
+                check_browser_connection(data, self.store.data["setup"])
                 if not self.browser.running:
                     await self.browser.navigate(data.get("url"), self.store.data["setup"])
             elif action == "discover_tuners":

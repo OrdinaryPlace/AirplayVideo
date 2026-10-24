@@ -96,6 +96,10 @@ class StartupTests(unittest.TestCase):
             "ALL_PROXY": "socks5://unexpected.invalid:9999",
             "FIREWALL_OUTBOUND_SUBNETS": "0.0.0.0/0",
             "HTTP_CONTROL_SERVER_ADDRESS": "0.0.0.0:8000",
+            "PPROF_ENABLED": "on",
+            "PPROF_BLOCK_PROFILE_RATE": "99",
+            "PPROF_MUTEX_PROFILE_RATE": "99",
+            "PPROF_HTTP_SERVER_ADDRESS": "0.0.0.0:6060",
         })
 
     def test_missing_credentials_never_launch_child(self):
@@ -147,6 +151,30 @@ class StartupTests(unittest.TestCase):
             for name in ("openvpn-user", "openvpn-password", "wireguard-key", "wireguard-address"):
                 (private / name).write_text("synthetic-stale-value", encoding="utf-8")
         self.run_gateway(defaults(), prepare=prepare)
+
+    def test_real_gluetun_initialization_without_external_network(self):
+        with tempfile.TemporaryDirectory(prefix="surfshark-gateway-real-test-") as temporary:
+            data = Path(temporary).resolve()
+            options = defaults()
+            (data / "options.json").write_text(json.dumps(options), encoding="utf-8")
+            result = subprocess.run([
+                "docker", "run", "--rm", "--platform", "linux/amd64",
+                "--network", "none", "--cap-add", "NET_ADMIN",
+                "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m",
+                "--mount", f"type=bind,src={data},dst=/data",
+                "--mount", f"type=bind,src={ROOT / 'tests' / 'smoke-real-startup.sh'},"
+                           "dst=/opt/surfshark-gateway/test-real-startup.sh,readonly",
+                "--entrypoint", "/bin/sh", IMAGE,
+                "/opt/surfshark-gateway/test-real-startup.sh",
+            ], capture_output=True, text=True, timeout=30)
+            output = result.stdout + result.stderr
+            for field in ("openvpn_username", "openvpn_password"):
+                self.assertFalse(options[field] in output, "A synthetic credential reached smoke output")
+            self.assertEqual(result.returncode, 0, output)
+            self.assertEqual(json.loads(result.stdout), {
+                "real_initialization": True, "only_loopback": True,
+                "panic_or_config_error": False,
+            })
 
 
 if __name__ == "__main__":

@@ -207,7 +207,7 @@ function renderStep() {
       draft.browser.youtube_quality = $('youtubeQuality').value;
       draft.browser.http_proxy = $('browserProxy').value;
       if (draft.browser.http_proxy.trim() !== (state.setup.browser.http_proxy || '')) throw new Error('Save the VPN gateway before opening the browser.');
-      state = await api('api/setup/open_browser', {url:draft.browser.home_url});
+      state = await api('api/setup/open_browser', {url:draft.browser.home_url,expected_http_proxy:state.setup.browser.http_proxy || ''});
       renderPreview();
       $('previewSection').scrollIntoView({behavior:'smooth',block:'start'});
     }, $('setupBrowser'));
@@ -348,7 +348,7 @@ $('pairDialog').addEventListener('cancel',event=>{event.preventDefault();cancelP
 function requestSource(){
   if(mode==='hdhomerun')return {mode,channel:$('channelSelect').value};
   if(mode==='generated')return {mode,generated:readGenerated('generated')};
-  return {mode:'browser',browser_source:$('browserKind').value,page:$('pageSelect').value,url:$('sourceUrl').value.trim(),delivery:$('youtubeDelivery').value,native_resolution:$('nativeQuality').value};
+  return {mode:'browser',browser_source:$('browserKind').value,page:$('pageSelect').value,url:$('sourceUrl').value.trim(),delivery:$('youtubeDelivery').value,native_resolution:$('nativeQuality').value,expected_http_proxy:state.setup.browser.http_proxy || ''};
 }
 
 function renderChannels(){

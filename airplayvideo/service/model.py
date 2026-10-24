@@ -81,6 +81,14 @@ def validate_browser_proxy(value):
         raise UserError(message) from None
 
 
+def check_browser_connection(request, setup):
+    """Reject stale UI routes; legacy and MQTT callers use the saved setting."""
+    if "expected_http_proxy" in request:
+        expected = validate_browser_proxy(request["expected_http_proxy"])
+        check(expected == setup["browser"].get("http_proxy", ""),
+              "The browser connection changed in another window. Refresh, then try again.")
+
+
 def youtube_url(value):
     parsed = urlsplit(browser_url(value))
     host = (parsed.hostname or "").lower()

@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && chmod 1777 /tmp/.X11-unix \
  && chmod 755 /usr/share/google-chrome/extensions /opt/airplayvideo /opt/airplayvideo/installed
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    python3-pytest python3-pytest-asyncio python3-paho-mqtt python3-numpy \
+    python3-pytest python3-pytest-asyncio python3-paho-mqtt python3-numpy nodejs \
  && rm -rf /var/lib/apt/lists/*
 COPY service /opt/airplayvideo/service
 COPY companion /opt/airplayvideo/companion

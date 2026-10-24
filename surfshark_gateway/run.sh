@@ -85,6 +85,8 @@ snapshot=
 # Use a complete environment allowlist. In particular, neither Supervisor
 # token, inherited plaintext VPN credentials, proxy variables nor firewall
 # overrides reach Gluetun. Only credential file paths are passed to the child.
+# Gluetun v3.41.3 dereferences both profiling rates even when profiling is off;
+# its internal defaults omit them, so preserve explicit safe image defaults.
 exec env -i \
     PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     HOME=/root TZ=UTC \
@@ -99,6 +101,8 @@ exec env -i \
     HTTPPROXY_LOG=off HTTPPROXY_STEALTH=on \
     HTTP_CONTROL_SERVER_ADDRESS=127.0.0.1:8000 HTTP_CONTROL_SERVER_LOG=off \
     HEALTH_SERVER_ADDRESS=127.0.0.1:9999 HEALTH_SMALL_CHECK_TYPE=dns \
+    PPROF_ENABLED=off PPROF_BLOCK_PROFILE_RATE=0 PPROF_MUTEX_PROFILE_RATE=0 \
+    PPROF_HTTP_SERVER_ADDRESS=127.0.0.1:6060 \
     FIREWALL_ENABLED_DISABLING_IT_SHOOTS_YOU_IN_YOUR_FOOT=on \
     FIREWALL_INPUT_PORTS=8888 \
     DNS_SERVER=on DNS_KEEP_NAMESERVER=off \
