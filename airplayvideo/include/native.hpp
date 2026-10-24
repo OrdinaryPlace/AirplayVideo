@@ -53,6 +53,23 @@ Json native_control_setup(const NativeIdentity &, const std::string &receiver_id
 Json native_insert(const NativeIdentity &, const std::string &media_url);
 Bytes native_command(const Json &);
 
+// Diagnostics retain only these fixed categories, never private exception
+// text, receiver messages, headers or runtime identities. "ClosedOrReadFailed"
+// reflects Socket's existing combined EOF/recv-error check, not definite EOF.
+enum class NativeFailureOperation { Unknown, ReadEvent, DispatchEvent, BuildAck, WriteAck, Exchange, OpenEvents };
+enum class NativeFailureReason { Unknown, ClosedOrReadFailed, Timeout, SocketError, Authentication,
+                                 Framing, UnsupportedUrlAssistance, UnsupportedEventProtocol, InvalidEventSequence };
+struct NativeFailure {
+  NativeFailureOperation operation = NativeFailureOperation::Unknown;
+  NativeFailureReason reason = NativeFailureReason::Unknown;
+};
+NativeFailure native_classify_failure(NativeFailureOperation, std::string_view private_message) noexcept;
+Json native_failure_fields(const NativeFailure &);
+// One unchanged event read/dispatch/ack iteration. The socket-pair test seam
+// permits short read deadlines; production retains its 100/1000 ms defaults.
+// Idle silence and successfully acknowledged events return no failure.
+std::optional<NativeFailure> native_event_step(Channel &, int idle_timeout = 100, int message_timeout = 1000) noexcept;
+
 // Deterministic state-machine seam. A test transport supplies a virtual clock,
 // fake replies and event failures. One owner serializes all control requests.
 // Production close() must release event resources and shut down control IO.
@@ -64,6 +81,7 @@ public:
   virtual Message exchange(const NativeRequest &) = 0;
   virtual void open_events(uint16_t port) = 0;
   virtual bool healthy() const = 0;
+  virtual std::optional<NativeFailure> event_failure() const { return std::nullopt; }
   virtual Clock::time_point now() const = 0;
   virtual void wait(std::chrono::milliseconds) = 0;
   virtual void close() noexcept = 0;

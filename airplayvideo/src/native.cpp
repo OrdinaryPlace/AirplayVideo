@@ -42,9 +42,14 @@ void validate_identity(const NativeIdentity &id) {
   require(std::regex_match(id.sender_mac, mac) && id.clock_id && id.stream_id &&
               id.clock_port && id.rtcp_port, "Incomplete native session parameters");
 }
-void emit(const Note &note, const std::string &stage, int status, int64_t elapsed) noexcept {
+void emit(const Note &note, const std::string &stage, int status, int64_t elapsed,
+          std::optional<NativeFailure> failure = std::nullopt) noexcept {
   if (note) {
-    try { note("native_stage", {{"stage", stage}, {"status", status}, {"elapsed_ms", elapsed}}); }
+    try {
+      Json fields = {{"stage", stage}, {"status", status}, {"elapsed_ms", elapsed}};
+      if (failure && status == 0) fields.update(native_failure_fields(*failure));
+      note("native_stage", fields);
+    }
     catch (...) { /* Diagnostics cannot own transport lifetime. */ }
   }
 }
@@ -72,6 +77,7 @@ class Stopped final {};
 class EventPump {
   Channel channel_;
   std::atomic<bool> healthy_{true};
+  std::optional<NativeFailure> failure_;
   std::jthread thread_;
 public:
   EventPump(const std::string &address, uint16_t port, std::span<const uint8_t> secret)
@@ -79,25 +85,21 @@ public:
     channel_.encrypt(secret, PAIR_CHANNEL_EVENTS);
     thread_ = std::jthread([this](std::stop_token stop) {
       while (!stop.stop_requested()) {
-        try {
-          auto event = channel_.read_event(100, 1000);
-          if (!event || event->status) continue;
-          // Receiver-assisted web loading is a separate protocol. Do not
-          // acknowledge it as completed when this transport cannot serve it.
-          const auto unsupported = bytes("unhandledURLRequest");
-          require(std::search(event->body.begin(), event->body.end(),
-                              unsupported.begin(), unsupported.end()) == event->body.end(),
-                  "Receiver requires unsupported URL assistance");
-          channel_.write(event_response(*event));
-        } catch (...) {
-          if (!stop.stop_requested()) healthy_ = false;
+        if (auto failure = native_event_step(channel_)) {
+          if (!stop.stop_requested()) {
+            // Publish once before the release store. The snapshot is immutable
+            // afterward and only read after healthy() observes false.
+            failure_ = *failure;
+            healthy_.store(false, std::memory_order_release);
+          }
           break;
         }
       }
     });
   }
   ~EventPump() { thread_.request_stop(); channel_.shutdown(); if (thread_.joinable()) thread_.join(); }
-  bool healthy() const { return healthy_; }
+  bool healthy() const { return healthy_.load(std::memory_order_acquire); }
+  std::optional<NativeFailure> failure() const { return healthy() ? std::nullopt : failure_; }
 };
 class BoundPort {
   Socket socket_;
@@ -168,6 +170,7 @@ public:
     sodium_memzero(secret_.data(), secret_.size()); secret_.clear();
   }
   bool healthy() const override { return !events_ || events_->healthy(); }
+  std::optional<NativeFailure> event_failure() const override { return events_ ? events_->failure() : std::nullopt; }
   Clock::time_point now() const override { return Clock::now(); }
   void wait(std::chrono::milliseconds value) override { std::this_thread::sleep_for(value); }
   void close() noexcept override {
@@ -178,6 +181,71 @@ public:
   }
 };
 } // namespace
+
+NativeFailure native_classify_failure(NativeFailureOperation operation, std::string_view message) noexcept {
+  auto reason = NativeFailureReason::Unknown;
+  if (message == "Connection closed") reason = NativeFailureReason::ClosedOrReadFailed;
+  else if (message == "Network timeout" || message == "Network read timeout" ||
+           message == "Network write timeout" || message == "Message timeout" || message == "Request timeout" ||
+           message == "Encrypted message timeout") reason = NativeFailureReason::Timeout;
+  else if (message == "Network poll failed" || message == "Network socket error" ||
+           message == "Network write failed" || message == "Connection rejected" ||
+           message == "Receiver connection failed") reason = NativeFailureReason::SocketError;
+  else if (message == "Channel authentication failed") reason = NativeFailureReason::Authentication;
+  else if (message == "Invalid encrypted block length" || message == "Header too large" ||
+           message == "Malformed response header" || message == "Duplicate response header" ||
+           message == "Invalid body length" || message == "Unsupported response framing" ||
+           message == "Network read too large") reason = NativeFailureReason::Framing;
+  else if (message == "Receiver requires unsupported URL assistance") reason = NativeFailureReason::UnsupportedUrlAssistance;
+  else if (message == "Unsupported event protocol") reason = NativeFailureReason::UnsupportedEventProtocol;
+  else if (message == "Invalid event sequence") reason = NativeFailureReason::InvalidEventSequence;
+  return {operation, reason};
+}
+Json native_failure_fields(const NativeFailure &failure) {
+  const char *operation = "unknown", *reason = "unknown";
+  switch (failure.operation) {
+  case NativeFailureOperation::ReadEvent: operation = "read_event"; break;
+  case NativeFailureOperation::DispatchEvent: operation = "dispatch_event"; break;
+  case NativeFailureOperation::BuildAck: operation = "build_ack"; break;
+  case NativeFailureOperation::WriteAck: operation = "write_ack"; break;
+  case NativeFailureOperation::Exchange: operation = "exchange"; break;
+  case NativeFailureOperation::OpenEvents: operation = "open_events"; break;
+  default: break;
+  }
+  switch (failure.reason) {
+  case NativeFailureReason::ClosedOrReadFailed: reason = "closed_or_read_failed"; break;
+  case NativeFailureReason::Timeout: reason = "timeout"; break;
+  case NativeFailureReason::SocketError: reason = "socket_error"; break;
+  case NativeFailureReason::Authentication: reason = "authentication"; break;
+  case NativeFailureReason::Framing: reason = "framing"; break;
+  case NativeFailureReason::UnsupportedUrlAssistance: reason = "unsupported_url_assistance"; break;
+  case NativeFailureReason::UnsupportedEventProtocol: reason = "unsupported_event_protocol"; break;
+  case NativeFailureReason::InvalidEventSequence: reason = "invalid_event_sequence"; break;
+  default: break;
+  }
+  return {{"failure_operation", operation}, {"failure_reason", reason}};
+}
+std::optional<NativeFailure> native_event_step(Channel &channel, int idle_timeout, int message_timeout) noexcept {
+  auto operation = NativeFailureOperation::ReadEvent;
+  try {
+    auto event = channel.read_event(idle_timeout, message_timeout);
+    if (!event || event->status) return std::nullopt;
+    operation = NativeFailureOperation::DispatchEvent;
+    // Preserve the existing unsupported-assistance boundary and exact ACKs.
+    const auto unsupported = bytes("unhandledURLRequest");
+    require(std::search(event->body.begin(), event->body.end(), unsupported.begin(), unsupported.end()) == event->body.end(),
+            "Receiver requires unsupported URL assistance");
+    operation = NativeFailureOperation::BuildAck;
+    auto response = event_response(*event);
+    operation = NativeFailureOperation::WriteAck;
+    channel.write(response);
+    return std::nullopt;
+  } catch (const std::exception &error) {
+    return native_classify_failure(operation, error.what());
+  } catch (...) {
+    return NativeFailure{operation, NativeFailureReason::Unknown};
+  }
+}
 
 NativeRunOptions native_run_options(const Json &request) {
   require(request.is_object(), "Invalid native session configuration");
@@ -333,6 +401,15 @@ void native_session(NativeTransport &transport, const std::string &url,
   int cleanup_status = 200;
   std::string stage = "setup";
   int status = 0;
+  std::optional<NativeFailure> failure;
+  auto perform = [&](NativeFailureOperation operation, auto &&work) -> decltype(work()) {
+    try { return work(); }
+    catch (const std::exception &error) {
+      failure = native_classify_failure(operation, error.what()); throw;
+    } catch (...) {
+      failure = NativeFailure{operation, NativeFailureReason::Unknown}; throw;
+    }
+  };
   auto cleanup = [&] {
     if (cleaned) return cleanup_status;
     cleaned = true;
@@ -342,10 +419,16 @@ void native_session(NativeTransport &transport, const std::string &url,
     }
     if (setup) {
       int result = 0;
+      std::optional<NativeFailure> teardown_failure;
       try { auto value = request("teardown", "TEARDOWN", "rtsp://" + transport.identity().local_ip + "/" + std::to_string(transport.identity().stream_id));
         value.headers["Session"] = std::to_string(transport.identity().stream_id);
-        value.options.timeout_ms = 500; result = transport.exchange(value).status; } catch (...) {}
-      emit(note, "teardown", result, elapsed());
+        value.options.timeout_ms = 500; result = transport.exchange(value).status;
+      } catch (const std::exception &error) {
+        teardown_failure = native_classify_failure(NativeFailureOperation::Exchange, error.what());
+      } catch (...) {
+        teardown_failure = NativeFailure{NativeFailureOperation::Exchange, NativeFailureReason::Unknown};
+      }
+      emit(note, "teardown", result, elapsed(), teardown_failure);
       cleanup_status = result;
     }
     transport.close();
@@ -356,12 +439,13 @@ void native_session(NativeTransport &transport, const std::string &url,
     require(elapsed() < int64_t(seconds) * 1000, "Native trial deadline reached");
   };
   auto send = [&](NativeRequest value) {
-    check(); stage = value.stage; status = 0;
+    check(); stage = value.stage; status = 0; failure.reset();
     if (events_open && !transport.healthy()) {
       stage = "events";
+      failure = transport.event_failure().value_or(NativeFailure{NativeFailureOperation::ReadEvent, NativeFailureReason::Unknown});
       throw std::runtime_error("Native event channel failed");
     }
-    auto response = transport.exchange(value); status = response.status;
+    auto response = perform(NativeFailureOperation::Exchange, [&] { return transport.exchange(value); }); status = response.status;
     if (stage == "setup" && status == 200) setup = true;
     emit(note, stage, status, elapsed());
     require(status == 200, "Native receiver request rejected");
@@ -370,7 +454,8 @@ void native_session(NativeTransport &transport, const std::string &url,
   try {
     validate_native_url(url); validate_duration(seconds, purpose);
     const auto &id = transport.identity(); validate_identity(id);
-    check(); stage = "verify"; transport.verify(); emit(note, stage, 200, elapsed());
+    check(); stage = "verify";
+    perform(NativeFailureOperation::Exchange, [&] { transport.verify(); }); emit(note, stage, 200, elapsed());
     auto info_message = send(request("probe", "GET", "/info"));
     const auto receiver = native_receiver_ids(plist_decode(info_message.body));
     const std::string uri = "rtsp://" + id.local_ip + "/" + std::to_string(id.stream_id);
@@ -381,7 +466,9 @@ void native_session(NativeTransport &transport, const std::string &url,
             "Receiver event channel is unavailable");
     auto port = data["eventPort"].get<int64_t>();
     require(port > 0 && port <= 65535, "Receiver event channel is invalid");
-    check(); stage = "events"; status = 0; transport.open_events(uint16_t(port)); events_open = true; emit(note, stage, 200, elapsed());
+    check(); stage = "events"; status = 0;
+    perform(NativeFailureOperation::OpenEvents, [&] { transport.open_events(uint16_t(port)); });
+    events_open = true; emit(note, stage, 200, elapsed());
     send(request("record", "RECORD", uri));
     auto peers = native_peer_setup(id, receiver.peer_id);
     auto peer_request = request("peers", "SETPEERSX", uri, &peers);
@@ -404,7 +491,10 @@ void native_session(NativeTransport &transport, const std::string &url,
     auto next_feedback = transport.now();
     while (!stop && elapsed() < int64_t(seconds) * 1000) {
       stage = "events"; status = 0;
-      require(transport.healthy(), "Native event channel failed");
+      if (!transport.healthy()) {
+        failure = transport.event_failure().value_or(NativeFailure{NativeFailureOperation::ReadEvent, NativeFailureReason::Unknown});
+        throw std::runtime_error("Native event channel failed");
+      }
       if (transport.now() >= next_feedback) {
         send(request("feedback", "POST", "/feedback"));
         next_feedback = transport.now() + std::chrono::seconds(2);
@@ -419,7 +509,7 @@ void native_session(NativeTransport &transport, const std::string &url,
     cleanup(); emit(note, "finished", 0, elapsed());
   } catch (...) {
     if (stop) { cleanup(); emit(note, "finished", 0, elapsed()); return; }
-    emit(note, stage, status, elapsed()); cleanup();
+    emit(note, stage, status, elapsed(), failure); cleanup();
     throw std::runtime_error("Native playback failed at " + stage + " (status " + std::to_string(status) + ")");
   }
 }

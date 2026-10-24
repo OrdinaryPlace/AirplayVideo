@@ -17,7 +17,7 @@ import socket
 from time import monotonic
 
 from .model import UserError, identifier, local_address
-from .native_engine import NativeEnginePlayer
+from .native_engine import NativeEnginePlayer, safe_native_failure_fields
 from .native_hls_origin import NativeHLSOrigin
 from .native_plan import receiver_capabilities
 from .native_prepare import youtube_url, safe_probe_summary
@@ -392,6 +392,7 @@ class NativeSession:
             for key in ('status', 'elapsed_ms'):
                 if type(details.get(key)) is int and 0 <= details[key] <= 86400000:
                     fields[key] = details[key]
+            fields.update(safe_native_failure_fields(details))
             safe = {'event': name, 'details': fields}
             if fields.get('stage') == 'rate' and fields.get('status') == 200 and self._state == 'connecting':
                 self._receiver_ready.set()
