@@ -2,6 +2,7 @@
 
 Build only this small gateway image first; never starts a VPN or a HA app.
 """
+from contextlib import contextmanager
 import json
 import os
 from pathlib import Path
@@ -9,6 +10,7 @@ import shutil
 import subprocess
 import tempfile
 import unittest
+from uuid import uuid4
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,6 +29,31 @@ def defaults():
     }
 
 
+def restore_mount_ownership(mount, uid, gid):
+    """Return only a disposable fixture mount to its invoking owner."""
+    result = subprocess.run([
+        "docker", "run", "--rm", "--platform", "linux/amd64",
+        "--network", "none", "--read-only", "--user", "0:0",
+        "--mount", mount, "--entrypoint", "/bin/chown", IMAGE,
+        "-R", f"{uid}:{gid}", "/data",
+    ], capture_output=True, timeout=15)
+    if result.returncode:
+        raise RuntimeError("Unable to restore disposable gateway fixture ownership")
+
+
+@contextmanager
+def gateway_test_data(prefix):
+    with tempfile.TemporaryDirectory(prefix=prefix) as temporary:
+        data = Path(temporary).resolve()
+        try:
+            yield data
+        finally:
+            # Runtime assertions must see the real root-owned 0700/0600 modes.
+            # Linux hosts need ownership returned before tempfile can descend.
+            restore_mount_ownership(
+                f"type=bind,src={data},dst=/data", os.getuid(), os.getgid())
+
+
 class StartupTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -38,8 +65,7 @@ class StartupTests(unittest.TestCase):
 
     def run_gateway(self, options, prepare=None, inherited=None, expect_success=True,
                     network_probe=True):
-        with tempfile.TemporaryDirectory(prefix="surfshark-gateway-test-") as temporary:
-            data = Path(temporary).resolve()
+        with gateway_test_data("surfshark-gateway-test-") as data:
             (data / "options.json").write_text(json.dumps(options), encoding="utf-8")
             if prepare:
                 prepare(data)
@@ -153,8 +179,7 @@ class StartupTests(unittest.TestCase):
         self.run_gateway(defaults(), prepare=prepare)
 
     def test_real_gluetun_initialization_without_external_network(self):
-        with tempfile.TemporaryDirectory(prefix="surfshark-gateway-real-test-") as temporary:
-            data = Path(temporary).resolve()
+        with gateway_test_data("surfshark-gateway-real-test-") as data:
             options = defaults()
             (data / "options.json").write_text(json.dumps(options), encoding="utf-8")
             result = subprocess.run([
@@ -175,6 +200,41 @@ class StartupTests(unittest.TestCase):
                 "real_initialization": True, "external_network": False,
                 "panic_or_config_error": False,
             })
+
+    def test_linux_nonroot_cleanup_requires_and_receives_ownership(self):
+        # A Docker volume uses native Linux ownership even on Docker Desktop.
+        volume = "surfshark-gateway-cleanup-" + uuid4().hex
+        created = subprocess.run(["docker", "volume", "create", volume],
+                                 capture_output=True, timeout=15)
+        self.assertEqual(created.returncode, 0, "Unable to create disposable fixture volume")
+        mount = f"type=volume,src={volume},dst=/data"
+        command = ["docker", "run", "--rm", "--platform", "linux/amd64",
+                   "--network", "none", "--read-only", "--mount", mount]
+        try:
+            setup = subprocess.run(command + ["--entrypoint", "/bin/sh", IMAGE, "-c", """
+set -eu
+chown 1001:1001 /data
+chmod 700 /data
+mkdir /data/credentials
+printf fixture > /data/credentials/private
+chown -R 0:0 /data/credentials
+chmod 700 /data/credentials
+chmod 600 /data/credentials/private
+[ "$(stat -c '%u:%g:%a' /data/credentials)" = 0:0:700 ]
+"""], capture_output=True, timeout=15)
+            self.assertEqual(setup.returncode, 0, "Unable to prepare private Linux fixture")
+            remove = command + ["--user", "1001:1001", "--entrypoint", "/bin/rm",
+                                IMAGE, "-rf", "/data/credentials"]
+            denied = subprocess.run(remove, capture_output=True, timeout=15)
+            self.assertNotEqual(denied.returncode, 0,
+                                "Non-root deletion unexpectedly bypassed private directory modes")
+            restore_mount_ownership(mount, 1001, 1001)
+            allowed = subprocess.run(remove, capture_output=True, timeout=15)
+            self.assertEqual(allowed.returncode, 0, "Fixture ownership did not permit non-root cleanup")
+        finally:
+            removed = subprocess.run(["docker", "volume", "rm", volume],
+                                     capture_output=True, timeout=15)
+            self.assertEqual(removed.returncode, 0, "Unable to remove disposable fixture volume")
 
 
 if __name__ == "__main__":

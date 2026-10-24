@@ -147,6 +147,30 @@ through its local health listener without a panic or configuration error. The
 remaining image environment defaults were audited against this release's
 settings code; the two profiling rates were the missing pointer defaults.
 
+Live verification after the explicit profiling defaults and corrected private
+credential transfer found the gateway started with Protection enabled,
+`host_network: false`, and no published host ports. An HTTPS request through
+its internal proxy returned country `CA`, city `Montréal`, and provider
+`Datacamp` over OpenVPN UDP. Public addresses and credentials were not recorded.
+This confirms gateway transport only; browser leak behavior, Sportsnet playback,
+and physical TV picture/sound remain unverified.
+
+### 2026-10-24 — Return disposable test fixtures to the Linux runner
+
+The Ubuntu CI runner completed the gateway assertions but could not remove its
+temporary directory: the runtime correctly left root-owned mode-0700 credential
+directories, and Python's non-root cleanup could not descend into them. Both
+the synthetic fixture and real-binary smoke now return only their exact `/data`
+bind mount to the invoking UID/GID in a `finally` block, after all private-mode
+assertions. The ownership handoff uses a root container with no network and a
+read-only container filesystem; production permissions and code are unchanged.
+A native Linux Docker-volume regression first requires non-root deletion to
+fail on a root-owned private directory, then verifies deletion succeeds after
+the same ownership handoff. Each disposable volume is removed in `finally`.
+All 13 gateway tests passed locally in 12.575 seconds, including the Linux
+non-root ownership regression and real-binary initialization smoke. Python
+syntax and whitespace checks also passed; CI must verify the Ubuntu runner.
+
 For rollback, stop only this gateway and return the AirplayVideo browser to its
 previous connection after stopping its own trial. Preserve private app data
 and the existing Chrome profile. No host route, DNS, firewall, or Core change
