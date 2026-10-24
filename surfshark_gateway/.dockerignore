@@ -1,0 +1,4 @@
+tests
+DOCS.md
+__pycache__
+*.pyc

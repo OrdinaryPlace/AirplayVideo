@@ -208,6 +208,7 @@ class Application:
                         check(verified["id"] == tuner["id"], "A tuner identity changed; find the device again")
                 self.require_idle()
                 if (previous["video"]["resolution"] != settings["video"]["resolution"] or
+                        previous["browser"].get("http_proxy", "") != settings["browser"]["http_proxy"] or
                         previous["modes"]["browser"] and not settings["modes"]["browser"]):
                     await self.browser.close()
                 self.store.setup(settings)

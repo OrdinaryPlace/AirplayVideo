@@ -2,7 +2,7 @@ import copy
 import json
 import os
 import pytest
-from service.model import Store, UserError, atomic_json, default_setup, private_json, validate_setup, patch_setup, browser_url, youtube_url, local_address
+from service.model import Store, UserError, atomic_json, default_setup, private_json, validate_setup, patch_setup, browser_url, youtube_url, local_address, validate_browser_proxy
 from service.hdhomerun import parse_lineup
 from service.mqtt import discovery_documents
 
@@ -18,6 +18,152 @@ def test_setup_survives_restart_and_preserves_independent_usage(tmp_path):
     assert reopened.page(page["id"]) == page
     assert reopened.data["installation_id"] == store.data["installation_id"]
     assert (tmp_path / "settings.json").stat().st_mode & 0o777 == 0o600
+
+
+@pytest.mark.parametrize('value,expected', [('', ''), ('  ', ''),
+    ('HTTP://016C10D5-SURFSHARK-GATEWAY:8888/', 'http://016c10d5-surfshark-gateway:8888'),
+    ('http://192.168.250.10:8888', 'http://192.168.250.10:8888'),
+    ('http://127.0.0.1:1', 'http://127.0.0.1:1'),
+    ('http://[::1]:65535', 'http://[::1]:65535')])
+def test_browser_proxy_normalization(value, expected):
+    assert validate_browser_proxy(value) == expected
+
+
+@pytest.mark.parametrize('value', [None, 8888, 'socks5://gateway:8888',
+    'https://gateway:8888', 'http://gateway', 'http://:8888',
+    'http://gateway:0', 'http://gateway:65536', 'http://gateway:invalid',
+    'http://name:private-password@gateway:8888', 'http://gateway:8888/path',
+    'http://gateway:8888?token=private-token', 'http://gateway:8888#private-fragment',
+    'http://gateway:8888?', 'http://gateway:8888#', 'http://gateway:8888\n',
+    'http://bad host:8888', 'http://8.8.8.8:8888', 'http://[::]:8888'])
+def test_browser_proxy_invalid_edits_preserve_private_state(tmp_path, value):
+    store = Store(tmp_path)
+    before = store.path.read_bytes()
+    settings = default_setup()
+    settings['browser']['http_proxy'] = value
+    with pytest.raises(UserError) as error:
+        store.setup(settings)
+    assert str(error.value) == 'Use an HTTP browser proxy with a host and port, without credentials or a path'
+    assert store.path.read_bytes() == before
+    assert store.data['setup']['browser']['http_proxy'] == ''
+
+
+@pytest.mark.parametrize('complete', [False, True])
+def test_browser_proxy_upgrade_preserves_existing_preferences_and_identity(tmp_path, complete):
+    store = Store(tmp_path)
+    store.setup(default_setup())
+    store.save_page({'name': 'Keep me', 'url': 'https://example.com/'})
+    store.data['setup']['complete'] = complete
+    del store.data['setup']['browser']['http_proxy']
+    store.save()
+    before = copy.deepcopy(store.data)
+    reopened = Store(tmp_path)
+    assert reopened.data['setup']['browser']['http_proxy'] == ''
+    assert Store(tmp_path).data == reopened.data
+    del reopened.data['setup']['browser']['http_proxy']
+    assert reopened.data == before
+
+
+def test_browser_proxy_persists_and_old_setup_payload_remains_compatible(tmp_path):
+    store = Store(tmp_path)
+    settings = default_setup()
+    del settings['browser']['http_proxy']
+    store.setup(settings)
+    assert store.data['setup']['browser']['http_proxy'] == ''
+    settings['browser']['http_proxy'] = 'HTTP://016C10D5-SURFSHARK-GATEWAY:8888/'
+    store.setup(settings)
+    assert Store(tmp_path).data['setup']['browser']['http_proxy'] == 'http://016c10d5-surfshark-gateway:8888'
+
+
+@pytest.mark.parametrize('complete', [False, True])
+def test_saved_invalid_proxy_is_preserved_without_exposing_credentials(tmp_path, complete):
+    store = Store(tmp_path)
+    store.data['setup']['complete'] = complete
+    store.data['setup']['browser']['http_proxy'] = 'http://fixture-user:private-password@gateway:8888'
+    store.save()
+    before = store.path.read_bytes()
+    with pytest.raises(UserError) as error:
+        Store(tmp_path)
+    assert 'private-password' not in str(error.value)
+    assert 'fixture-user' not in str(error.value)
+    assert store.path.read_bytes() == before
+
+
+def browser_proxy_application(tmp_path):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, Mock
+    from service.main import Application
+    store = Store(tmp_path)
+    store.setup(default_setup())
+    store.save_page({'name': 'Keep me', 'url': 'https://example.com/'})
+    application = Application.__new__(Application)
+    application.store = store
+    application.configuration_lock = asyncio.Lock()
+    application.controller = SimpleNamespace(lock=asyncio.Lock(), stream=None, pending=None,
+        tearing_down=False, require_no_diagnostic=Mock(), video_encoder=Mock())
+    application.recordings = SimpleNamespace(current=None)
+    application.browser = SimpleNamespace(close=AsyncMock())
+    application.channels = SimpleNamespace(rows=[], refresh=AsyncMock())
+    application.ha = SimpleNamespace(close=AsyncMock(), start=AsyncMock(), refresh=Mock())
+    application.state = store.public
+    return application
+
+
+@pytest.mark.asyncio
+async def test_browser_proxy_edit_closes_browser_only_when_connection_changes(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    application = browser_proxy_application(tmp_path)
+    before = copy.deepcopy(application.store.data)
+    async def edit(value, expected):
+        request = SimpleNamespace(match_info={'action': 'update'}, json=AsyncMock(return_value={
+            'changes': {'browser': {'http_proxy': value}},
+            'expected': {'browser': {'http_proxy': expected}}}))
+        return await application.setup(request)
+    proxy = 'http://016c10d5-surfshark-gateway:8888'
+    await edit(proxy, '')
+    application.browser.close.assert_awaited_once()
+    assert Store(tmp_path).data['setup']['browser']['http_proxy'] == proxy
+    assert application.store.data['pages'] == before['pages']
+    assert application.store.data['installation_id'] == before['installation_id']
+    application.browser.close.reset_mock()
+    await edit(proxy, '')  # An identical retry leaves the prepared browser alone.
+    application.browser.close.assert_not_awaited()
+    persisted = application.store.path.read_bytes()
+    with pytest.raises(UserError, match='another window'):
+        await edit('', '')
+    with pytest.raises(UserError, match='HTTP browser proxy'):
+        await edit('http://user:private-password@gateway:8888', proxy)
+    assert application.store.path.read_bytes() == persisted
+    application.browser.close.assert_not_awaited()
+    await edit('', proxy)
+    application.browser.close.assert_awaited_once()
+    application.channels.refresh.assert_not_awaited()
+    application.ha.close.assert_not_awaited()
+    application.ha.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('busy', ['stream', 'pending', 'tearing_down', 'recording', 'diagnostic'])
+async def test_browser_proxy_edit_respects_all_idle_guards(tmp_path, busy):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    application = browser_proxy_application(tmp_path)
+    if busy == 'recording':
+        application.recordings.current = object()
+    elif busy == 'diagnostic':
+        application.controller.require_no_diagnostic.side_effect = UserError('Wait for the diagnostic')
+    else:
+        setattr(application.controller, busy, object())
+    before = application.store.path.read_bytes()
+    request = SimpleNamespace(match_info={'action': 'update'}, json=AsyncMock(return_value={
+        'changes': {'browser': {'http_proxy': 'http://016c10d5-surfshark-gateway:8888'}},
+        'expected': {'browser': {'http_proxy': ''}}}))
+    with pytest.raises(UserError):
+        await application.setup(request)
+    assert application.store.path.read_bytes() == before
+    application.browser.close.assert_not_awaited()
 
 
 @pytest.mark.parametrize("section,key,value", [("video","fps",25),("video","fps",True),("video","codec","hevc"),("video","bitrate_mbps",30),("video","encoder","command injection"),("audio","latency_ms",0),("browser","youtube_quality","4k")])
