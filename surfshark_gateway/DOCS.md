@@ -89,8 +89,9 @@ amd64 manifest: sha256:1baa76576dea1dfbafbd62bb635daf40fd87171f63273c2fdfe630418
 ```
 
 From the repository root, build only this small gateway image and run its
-startup boundary tests. They use synthetic credentials, replace Gluetun with
-a probe, drop network access, and do not connect a VPN or operate Home Assistant:
+startup tests. They use synthetic credentials and no external network. The
+boundary tests replace Gluetun with a probe; a separate test exercises the real
+binary. They do not connect a VPN or operate Home Assistant:
 
 ```sh
 docker build --platform linux/amd64 -t surfshark-gateway:test surfshark_gateway
@@ -133,12 +134,18 @@ values and check that inherited profiling overrides cannot replace them.
 Keep these explicit defaults when changing the environment allowlist. The
 synthetic startup probe replaces Gluetun and does not exercise its constructors.
 A separate smoke test now starts the real binary with synthetic credentials in
-a disposable `--network none` container. Its only interface is loopback, with
-TEST-NET-1 addresses and a default route added inside that namespace so Gluetun
-can initialize. The test requires a real local health response and rejects
-panic/configuration errors, then terminates the process. It cannot establish a
+a disposable `--network none` container. The fixture adds an unconnected dummy
+Ethernet interface with TEST-NET-1 addresses and a default route inside that
+namespace so Gluetun can initialize. The test requires a real local health
+response and rejects panic/configuration errors, then terminates the process. It cannot establish a
 VPN or reach an external host. A subsequent HA startup must still confirm the
 deployed result.
+
+After the correction, the small `linux/amd64` image rebuilt successfully and all
+12 startup tests passed in 8.438 seconds, including real-binary initialization
+through its local health listener without a panic or configuration error. The
+remaining image environment defaults were audited against this release's
+settings code; the two profiling rates were the missing pointer defaults.
 
 For rollback, stop only this gateway and return the AirplayVideo browser to its
 previous connection after stopping its own trial. Preserve private app data
@@ -149,6 +156,8 @@ needs to be undone.
 
 - [Official Gluetun v3.41.3 release](https://github.com/passteque/gluetun/releases/tag/v3.41.3)
 - [Pinned release Dockerfile and environment options](https://github.com/passteque/gluetun/blob/v3.41.3/Dockerfile)
+- [Profiling constructor and required rate pointers](https://github.com/passteque/gluetun/blob/v3.41.3/internal/pprof/server.go)
+- [Profiling settings with omitted rate defaults](https://github.com/passteque/gluetun/blob/v3.41.3/internal/pprof/settings.go)
 - [Surfshark manual credentials and protocol setup](https://github.com/qdm12/gluetun-wiki/blob/main/setup/providers/surfshark.md)
 - [Gluetun HTTP proxy options](https://github.com/qdm12/gluetun-wiki/blob/main/setup/options/http-proxy.md)
 - [Gluetun firewall behavior](https://github.com/qdm12/gluetun-wiki/blob/main/setup/options/firewall.md)

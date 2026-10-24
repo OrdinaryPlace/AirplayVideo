@@ -172,7 +172,7 @@ class StartupTests(unittest.TestCase):
                 self.assertFalse(options[field] in output, "A synthetic credential reached smoke output")
             self.assertEqual(result.returncode, 0, output)
             self.assertEqual(json.loads(result.stdout), {
-                "real_initialization": True, "only_loopback": True,
+                "real_initialization": True, "external_network": False,
                 "panic_or_config_error": False,
             })
 

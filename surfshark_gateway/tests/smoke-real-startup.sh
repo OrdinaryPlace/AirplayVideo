@@ -1,5 +1,5 @@
 #!/bin/sh
-# Real Gluetun constructor smoke; Docker supplies only loopback networking.
+# Real Gluetun constructor smoke; Docker supplies no external network link.
 # Credentials are synthetic. Never print child logs, settings, or responses.
 set -eu
 gateway_pid=
@@ -12,15 +12,17 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 1' HUP INT TERM
 
-set -- /sys/class/net/*
-[ "$#" -eq 1 ] && [ "${1##*/}" = lo ] || {
+active_interfaces=$(ip -o link show up | awk '{print $2}')
+[ "$active_interfaces" = lo: ] || {
     printf '%s\n' 'The real startup smoke requires only loopback networking.' >&2
     exit 1
 }
-# The program requires a default route before its constructors. TEST-NET-1
-# addresses on loopback satisfy that precondition without an external link.
-ip -4 address add 192.0.2.2/24 dev lo >/dev/null 2>&1
-ip -4 route add default via 192.0.2.1 dev lo >/dev/null 2>&1
+# The program requires Ethernet, a local subnet, and a default route before
+# its constructors. A dummy interface has no peer or external connection.
+ip link add gateway-smoke type dummy >/dev/null 2>&1
+ip -4 address add 192.0.2.2/24 dev gateway-smoke >/dev/null 2>&1
+ip link set gateway-smoke up >/dev/null 2>&1
+ip -4 route add default via 192.0.2.1 dev gateway-smoke >/dev/null 2>&1
 /opt/surfshark-gateway/run.sh >/tmp/gateway-real-startup.log 2>&1 &
 gateway_pid=$!
 
@@ -49,4 +51,4 @@ fi
     printf '%s\n' 'Real Gluetun did not reach its local health listener.' >&2
     exit 1
 }
-printf '%s\n' '{"real_initialization":true,"only_loopback":true,"panic_or_config_error":false}'
+printf '%s\n' '{"real_initialization":true,"external_network":false,"panic_or_config_error":false}'
