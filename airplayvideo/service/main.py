@@ -11,7 +11,7 @@ import time
 import uuid
 import aiohttp
 from aiohttp import web
-from .model import Store, VERSION, UserError, check, identifier, local_address, validate_setup, patch_setup, atomic_json
+from .model import Store, VERSION, UserError, check, identifier, local_address, validate_setup, patch_setup, atomic_json, check_browser_connection
 from .browser import Browser
 from .controller import PairingEngine, Controller
 from .hdhomerun import Channels, inspect as inspect_tuner, discover as discover_tuners
@@ -208,6 +208,7 @@ class Application:
                         check(verified["id"] == tuner["id"], "A tuner identity changed; find the device again")
                 self.require_idle()
                 if (previous["video"]["resolution"] != settings["video"]["resolution"] or
+                        previous["browser"].get("http_proxy", "") != settings["browser"]["http_proxy"] or
                         previous["modes"]["browser"] and not settings["modes"]["browser"]):
                     await self.browser.close()
                 self.store.setup(settings)
@@ -231,6 +232,7 @@ class Application:
             elif action == "open_browser":
                 # First-run sign-in needs no tuner, receiver or saved setup.
                 # Reopening the preview must preserve an in-progress login.
+                check_browser_connection(data, self.store.data["setup"])
                 if not self.browser.running:
                     await self.browser.navigate(data.get("url"), self.store.data["setup"])
             elif action == "discover_tuners":

@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.2.18"
+VERSION = "0.2.19"
 IDENTIFIER = re.compile(r"[a-f0-9]{32}\Z")
 
 
@@ -48,6 +48,45 @@ def browser_url(value):
     except ValueError as exc:
         raise UserError("Invalid page URL") from exc
     return value
+
+
+def validate_browser_proxy(value):
+    message = "Use an HTTP browser proxy with a host and port, without credentials or a path"
+    check(isinstance(value, str) and len(value) <= 1024 and
+          not any(ord(c) < 32 or ord(c) == 127 for c in value), message)
+    value = value.strip()
+    if not value:
+        return ""
+    check(not any(c.isspace() for c in value) and "?" not in value and "#" not in value, message)
+    try:
+        parsed = urlsplit(value)
+        check(parsed.scheme == "http" and parsed.hostname and
+              parsed.username is None and parsed.password is None and
+              parsed.path in {"", "/"} and parsed.port is not None and
+              1 <= parsed.port <= 65535, message)
+        host = parsed.hostname.lower()
+        try:
+            address = ipaddress.ip_address(host)
+        except ValueError:
+            # The administrator selects a trusted endpoint; do not resolve DNS here.
+            check(len(host) <= 253 and all(re.fullmatch(
+                r"[a-z0-9](?:[a-z0-9_-]{0,61}[a-z0-9])?", label)
+                for label in host.rstrip(".").split(".")), message)
+        else:
+            check((address.is_private or address.is_loopback) and
+                  not address.is_unspecified and not address.is_multicast, message)
+            host = f"[{address.compressed}]" if address.version == 6 else str(address)
+        return f"http://{host}:{parsed.port}"
+    except ValueError:
+        raise UserError(message) from None
+
+
+def check_browser_connection(request, setup):
+    """Reject stale UI routes; legacy and MQTT callers use the saved setting."""
+    if "expected_http_proxy" in request:
+        expected = validate_browser_proxy(request["expected_http_proxy"])
+        check(expected == setup["browser"].get("http_proxy", ""),
+              "The browser connection changed in another window. Refresh, then try again.")
 
 
 def youtube_url(value):
@@ -152,7 +191,7 @@ def default_setup():
         "complete": False,
         "modes": {"browser": True, "hdhomerun": False, "generated": True},
         "generated": generated_defaults(),
-        "browser": {"home_url": "https://www.youtube.com/", "youtube_quality": "1080p"},
+        "browser": {"home_url": "https://www.youtube.com/", "youtube_quality": "1080p", "http_proxy": ""},
         "hdhomerun": {"devices": []},
         "video": {"resolution": "1080p", "fps": 30, "codec": "h264", "encoder": "auto", "bitrate_mbps": 8, "rate_control": "auto", "max_bitrate_mbps": 16, "deinterlace": True},
         "audio": {"enabled": True, "latency_ms": 1500},
@@ -175,6 +214,7 @@ def validate_setup(value):
         result["browser"]["home_url"] = browser_url(value["browser"]["home_url"])
         check(value["browser"]["youtube_quality"] in {"1080p", "720p", "auto"}, "Invalid YouTube preference")
         result["browser"]["youtube_quality"] = value["browser"]["youtube_quality"]
+        result["browser"]["http_proxy"] = validate_browser_proxy(value["browser"].get("http_proxy", ""))
         devices = value["hdhomerun"]["devices"]
         check(isinstance(devices, list) and len(devices) <= 4, "Use at most four HDHomeRun devices")
         ids = set()
@@ -244,6 +284,12 @@ class Store:
                 migrated = "generated" not in self.data["setup"] or "generated" not in self.data["setup"]["modes"]
                 self.data["setup"].setdefault("generated", generated_defaults())
                 self.data["setup"]["modes"].setdefault("generated", True)
+                browser = self.data["setup"].setdefault("browser", {})
+                check(isinstance(browser, dict), "Saved browser settings need attention; existing data was preserved")
+                proxy = validate_browser_proxy(browser.get("http_proxy", ""))
+                if "http_proxy" not in browser or browser["http_proxy"] != proxy:
+                    browser["http_proxy"] = proxy
+                    migrated = True
                 video = self.data["setup"]["video"]
                 for key, value in {"rate_control": "auto", "max_bitrate_mbps": max(16, video["bitrate_mbps"])}.items():
                     if key not in video:

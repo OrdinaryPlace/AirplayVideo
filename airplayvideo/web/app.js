@@ -103,6 +103,7 @@ function collectStep(validate = true) {
   } else if (step === 1) {
     if ($('homeUrl')) draft.browser.home_url = $('homeUrl').value;
     if ($('youtubeQuality')) draft.browser.youtube_quality = $('youtubeQuality').value;
+    if ($('browserProxy')) draft.browser.http_proxy = $('browserProxy').value;
     if ($('defaultTitle')) draft.generated = readGenerated('default');
     if (validate && draft.modes.hdhomerun && !draft.hdhomerun.devices.length) throw new Error('Find or add your HDHomeRun first.');
   } else if (step === 3) {
@@ -195,7 +196,7 @@ function renderStep() {
       <label class="mode-card"><input id="enableGenerated" type="checkbox" ${checked(draft.modes.generated)}><div><h2>Generated video</h2><p>Send an animated title and tagline, with a clock, countdown, or neither. Set its length or supply custom text from an automation.</p></div></label>
     </div><p class="muted">Enable any combination. Playback uses one source at a time.</p>`;
   } else if (step === 1) {
-    $('stepContent').innerHTML = `${editing || draft.modes.browser ? `<section class="setup-section"><h2>Browser defaults</h2><label for="homeUrl">Home page</label><input id="homeUrl" type="url" required value="${escape(draft.browser.home_url)}"><label for="youtubeQuality">YouTube quality preference</label><select id="youtubeQuality"><option value="1080p" ${selected(draft.browser.youtube_quality,'1080p')}>1080p</option><option value="720p" ${selected(draft.browser.youtube_quality,'720p')}>720p</option><option value="auto" ${selected(draft.browser.youtube_quality,'auto')}>YouTube automatic</option></select><p class="muted">The browser keeps its own sign-ins and site data. Available video quality depends on the source.</p><button id="setupBrowser" type="button" class="primary">Open browser to sign in</button><p class="muted">Use the full screen preview and A+ to make sign-in fields easier to read. You can sign in before finishing Setup.</p></section>` : ''}
+    $('stepContent').innerHTML = `${editing || draft.modes.browser ? `<section class="setup-section"><h2>Browser defaults</h2><label for="homeUrl">Home page</label><input id="homeUrl" type="url" required value="${escape(draft.browser.home_url)}"><label for="youtubeQuality">YouTube quality preference</label><select id="youtubeQuality"><option value="1080p" ${selected(draft.browser.youtube_quality,'1080p')}>1080p</option><option value="720p" ${selected(draft.browser.youtube_quality,'720p')}>720p</option><option value="auto" ${selected(draft.browser.youtube_quality,'auto')}>YouTube automatic</option></select><p class="muted">The browser keeps its own sign-ins and site data. Available video quality depends on the source.</p><label for="browserProxy">VPN gateway · optional</label><input id="browserProxy" type="url" value="${escape(draft.browser.http_proxy || '')}" placeholder="http://vpn-gateway:8888"><p class="muted">Leave blank for a direct connection. A gateway routes every browser page through its VPN; AirPlay stays on your LAN. Disable browser VPN extensions when using a gateway. Saving a changed gateway closes the browser and preserves its sign-ins.</p><button id="setupBrowser" type="button" class="primary">Open browser to sign in</button><p class="muted">Use the full screen preview and A+ to make sign-in fields easier to read. You can sign in before finishing Setup.</p></section>` : ''}
       ${editing || draft.modes.hdhomerun ? `<section class="setup-section"><div class="card-header"><h2>HDHomeRun devices</h2><button id="findTuners" type="button">Find HDHomeRun</button></div><p class="muted">Discovery reads the channel list. It does not start a stream or run an antenna scan.</p><div id="configuredTuners" class="device-list"></div><div id="foundTuners" class="device-list"></div><details><summary>Enter a device address</summary><div class="inline-form"><div><label for="tunerAddress">HDHomeRun IPv4 address</label><input id="tunerAddress" placeholder="192.168.x.x" inputmode="decimal"></div><button id="probeTuner" type="button">Connect</button></div></details></section>` : ''}`;
     if (editing || draft.modes.generated) {
       $('stepContent').insertAdjacentHTML('beforeend',`<section class="setup-section"><h2>Generated video defaults</h2>${generatedFields('default',draft.generated)}<p class="muted">These are the starting values in Playback and for the Home Assistant Play generated video button. Automations can override any value.</p></section>`);
@@ -204,7 +205,9 @@ function renderStep() {
     if ($('setupBrowser')) $('setupBrowser').onclick = () => setupTask(async () => {
       draft.browser.home_url = $('homeUrl').value;
       draft.browser.youtube_quality = $('youtubeQuality').value;
-      state = await api('api/setup/open_browser', {url:draft.browser.home_url});
+      draft.browser.http_proxy = $('browserProxy').value;
+      if (draft.browser.http_proxy.trim() !== (state.setup.browser.http_proxy || '')) throw new Error('Save the VPN gateway before opening the browser.');
+      state = await api('api/setup/open_browser', {url:draft.browser.home_url,expected_http_proxy:state.setup.browser.http_proxy || ''});
       renderPreview();
       $('previewSection').scrollIntoView({behavior:'smooth',block:'start'});
     }, $('setupBrowser'));
@@ -345,7 +348,7 @@ $('pairDialog').addEventListener('cancel',event=>{event.preventDefault();cancelP
 function requestSource(){
   if(mode==='hdhomerun')return {mode,channel:$('channelSelect').value};
   if(mode==='generated')return {mode,generated:readGenerated('generated')};
-  return {mode:'browser',browser_source:$('browserKind').value,page:$('pageSelect').value,url:$('sourceUrl').value.trim(),delivery:$('youtubeDelivery').value,native_resolution:$('nativeQuality').value};
+  return {mode:'browser',browser_source:$('browserKind').value,page:$('pageSelect').value,url:$('sourceUrl').value.trim(),delivery:$('youtubeDelivery').value,native_resolution:$('nativeQuality').value,expected_http_proxy:state.setup.browser.http_proxy || ''};
 }
 
 function renderChannels(){

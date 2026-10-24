@@ -1,0 +1,38 @@
+name: Surfshark Gateway
+version: "0.1.0"
+slug: surfshark_gateway
+description: Private Surfshark HTTP proxy for the AirplayVideo browser
+url: https://github.com/OrdinaryPlace/AirplayVideo
+arch: [amd64]
+startup: services
+boot: manual
+init: false
+timeout: 30
+host_network: false
+apparmor: true
+privileged: [NET_ADMIN]
+devices: [/dev/net/tun]
+hassio_api: false
+homeassistant_api: false
+docker_api: false
+ingress: false
+# The proxy is reachable only on Supervisor's internal app network. Do not
+# publish 8888 or put this app in the host's network namespace.
+ports: {}
+stage: experimental
+options:
+  vpn_type: openvpn
+  server_city: Montreal
+  openvpn_protocol: udp
+  openvpn_username: ""
+  openvpn_password: ""
+  wireguard_private_key: ""
+  wireguard_address: ""
+schema:
+  vpn_type: list(openvpn|wireguard)
+  server_city: str
+  openvpn_protocol: list(udp|tcp)
+  openvpn_username: password
+  openvpn_password: password
+  wireguard_private_key: password
+  wireguard_address: str

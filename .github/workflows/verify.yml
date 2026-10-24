@@ -17,6 +17,8 @@ jobs:
         run: docker run --rm airplayvideo:test python3 -m pytest tests -q -p no:cacheprovider
       - name: Verify native browser controls, profile persistence, and coexistence
         run: docker run --rm --cap-add SYS_ADMIN --shm-size=256m -e PYTHONPATH=/opt/airplayvideo airplayvideo:test python3 tests/browser-network.py
+      - name: Verify browser proxy routing and unavailable-gateway behavior
+        run: docker run --rm --network none --cap-add SYS_ADMIN --shm-size=256m -e PYTHONPATH=/opt/airplayvideo airplayvideo:test python3 tests/browser-proxy.py
       - name: Check browser module syntax
         run: |
           node --input-type=module --check < airplayvideo/web/app.js
@@ -24,3 +26,12 @@ jobs:
           node --check airplayvideo/companion/youtube.js
       - name: Measure installed-style browser capture and packet timing
         run: docker run --rm --cap-add SYS_ADMIN --shm-size=256m -e PYTHONPATH=/opt/airplayvideo airplayvideo:test python3 tests/diagnostic-container.py
+  gateway:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Build pinned isolated gateway
+        run: docker build --platform linux/amd64 -t surfshark-gateway:test surfshark_gateway
+      - name: Check private credential and startup boundaries without network access
+        run: python3 -m unittest discover -s surfshark_gateway/tests -v
