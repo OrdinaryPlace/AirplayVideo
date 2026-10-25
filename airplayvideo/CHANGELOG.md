@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.20
+
+- Preserve Home Assistant's configured timezone in the browser instead of falling back to UTC. Keep the browser's private environment boundary in place.
+- Verify the timezone reported by ordinary sandboxed Chrome, alongside existing profile and native-control checks.
+
 ## 0.2.18
 
 - Keep copied AAC audio working in large 4K segments by probing the complete bounded local segment. Strict audio validation and startup deadlines remain in place.
