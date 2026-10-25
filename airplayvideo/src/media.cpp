@@ -4,6 +4,7 @@
 #include "frame_rate.hpp"
 #include "video_rate.hpp"
 #include "vaapi_rate.hpp"
+#include "frame_probe.hpp"
 #include <cstring>
 #include <bit>
 extern "C" {
@@ -48,6 +49,7 @@ class VideoEncoder {
   FrameRateGate frame_rate_;
   bool deinterlace_;
   std::function<void(std::shared_ptr<MediaPacket>)> output_;
+  std::shared_ptr<FrameProbe> probe_;
 
   void parameter_sets(std::span<const uint8_t> data, EncodedFrame &out) {
     std::vector<std::pair<size_t,size_t>> starts;
@@ -82,7 +84,10 @@ class VideoEncoder {
     out.avcc=avcc_;
   }
   void encode(AVFrame *input, int64_t us) {
-    if(!frame_rate_.accept(us)) return;
+    const bool accepted=frame_rate_.accept(us);
+    if(probe_)probe_->gate(accepted,frame_probe_now());
+    if(!accepted)return;
+    const auto conversion_start=probe_?frame_probe_now():0;
     auto converted=frame();
     auto *v=codec_.get();
     converted->format=device_ ? AV_PIX_FMT_NV12 : AV_PIX_FMT_YUV420P;
@@ -107,16 +112,32 @@ class VideoEncoder {
       dest[2]=converted->data[2]+y/2*converted->linesize[2]+x/2;
     }
     require(sws_scale(scale_,input->data,input->linesize,0,input->height,dest,converted->linesize)==h,"Incomplete video conversion");
+    if(probe_) {
+      const auto now=frame_probe_now();
+      probe_->timing(FrameProbe::Conversion,conversion_start,now);
+      if(probe_->converted(now)) {
+        const auto observation_start=frame_probe_now();
+        probe_->observe_luma(converted->data[0],width_,height_,converted->linesize[0],now);
+        probe_->timing(FrameProbe::Observation,observation_start,frame_probe_now());
+      }
+    }
     converted->pts=av_rescale_q(us,micros,v->time_base);
     converted->pict_type=input->pict_type;
     converted->color_range=AVCOL_RANGE_MPEG; converted->colorspace=AVCOL_SPC_BT709;
     converted->color_primaries=AVCOL_PRI_BT709; converted->color_trc=AVCOL_TRC_BT709;
+    int64_t encode_start=0;
     if(device_) {
+      const auto upload_start=probe_?frame_probe_now():0;
       auto gpu=frame(); check(av_hwframe_get_buffer(v->hw_frames_ctx,gpu.get(),0),"GPU frame");
       check(av_hwframe_transfer_data(gpu.get(),converted.get(),0),"GPU upload");
       check(av_frame_copy_props(gpu.get(),converted.get()),"GPU frame properties");
+      if(probe_)probe_->timing(FrameProbe::Upload,upload_start,frame_probe_now());
+      encode_start=probe_?frame_probe_now():0;
       check(avcodec_send_frame(v,gpu.get()),"Encode video");
-    } else check(avcodec_send_frame(v,converted.get()),"Encode video");
+    } else {
+      encode_start=probe_?frame_probe_now():0;
+      check(avcodec_send_frame(v,converted.get()),"Encode video");
+    }
     Packet packet(av_packet_alloc());
     for(;;) {
       int result=avcodec_receive_packet(v,packet.get());
@@ -130,12 +151,14 @@ class VideoEncoder {
       if(!out->video.payload.empty()) output_(std::move(out));
       av_packet_unref(packet.get());
     }
+    if(probe_)probe_->timing(FrameProbe::Encode,encode_start,frame_probe_now());
   }
 public:
-  VideoEncoder(const Json &o,std::function<void(std::shared_ptr<MediaPacket>)> output)
+  VideoEncoder(const Json &o,std::function<void(std::shared_ptr<MediaPacket>)> output,
+               std::shared_ptr<FrameProbe> probe = {})
       : fps_(o.at("fps")),width_(o.at("width")),height_(o.at("height")),
         frame_rate_(fps_,o.at("source").at("kind")=="browser"),
-        deinterlace_(o.value("deinterlace",true)),output_(std::move(output)) {
+        deinterlace_(o.value("deinterlace",true)),output_(std::move(output)),probe_(std::move(probe)) {
     std::string encoder=o.value("encoder","libopenh264");
     require(encoder=="libopenh264" || encoder=="h264_vaapi","Unsupported encoder");
     const auto *c=avcodec_find_encoder_by_name(encoder.c_str()); require(c,"Encoder unavailable");
@@ -255,6 +278,7 @@ struct Media::Impl {
   Media &owner;
   std::atomic<bool> &stop;
   Note note;
+  std::shared_ptr<FrameProbe> probe;
   std::atomic<bool> closed{false},failure{false},completed{false},joined{false};
   std::mutex mutex;
   std::vector<std::weak_ptr<Subscriber>> subscribers;
@@ -262,10 +286,12 @@ struct Media::Impl {
   uint64_t video_count=0,audio_count=0;
   bool ready=false;
   int64_t wall_epoch=av_gettime();
-  explicit Impl(Media &o,std::atomic<bool> &s,Note n):owner(o),stop(s),note(std::move(n)) {}
+  explicit Impl(Media &o,std::atomic<bool> &s,Note n,std::shared_ptr<FrameProbe> p)
+      :owner(o),stop(s),note(std::move(n)),probe(std::move(p)) {}
   static int interrupt(void *opaque) { auto *self=static_cast<Impl*>(opaque); return self->stop||self->closed; }
   void publish(std::shared_ptr<MediaPacket> p) {
     p->available_us=std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-owner.epoch).count();
+    if(probe&&!p->audio)probe->encoded(frame_probe_now());
     std::lock_guard lock(mutex);
     if(p->audio) ++audio_count; else ++video_count;
     if(!ready && video_count>0 && (!owner.config.value("audio",true)||audio_count>0)) {
@@ -384,7 +410,7 @@ struct Media::Impl {
       require(!network||!o.value("audio",true)||audio_index>=0,"Channel has no supported audio");
       auto deliver=[this](auto p){publish(std::move(p));};
       std::unique_ptr<VideoEncoder> video; std::unique_ptr<AudioConverter> audio;
-      if(video_index>=0) video=std::make_unique<VideoEncoder>(o,deliver);
+      if(video_index>=0) video=std::make_unique<VideoEncoder>(o,deliver,probe);
       if(audio_index>=0) audio=std::make_unique<AudioConverter>(deliver);
       int64_t origin=network ? input->start_time : 0;
       int64_t offset=network ? std::chrono::duration_cast<std::chrono::microseconds>(Clock::now()-owner.epoch).count() : 0;
@@ -422,7 +448,10 @@ struct Media::Impl {
             while(!interrupt(this)&&!ending.stop_requested()&&Clock::now()<due) std::this_thread::sleep_for(std::chrono::milliseconds(1));
           }
           if(interrupt(this)||ending.stop_requested()) break;
-          if(index==video_index) video->consume(f.get(),us);
+          if(index==video_index) {
+            if(probe)probe->capture(us,frame_probe_now());
+            video->consume(f.get(),us);
+          }
           else audio->consume(f.get(),us);
         }
       };
@@ -495,13 +524,13 @@ struct Media::Impl {
     for(auto &weak:subscribers) if(auto s=weak.lock()) s->close();
   }
 };
-Media::Media(Json c,std::atomic<bool> &s,Note n):config(std::move(c)),epoch_ntp(ntp_now()+(uint64_t(config.value("latency_ms",1500))*(uint64_t(1)<<32))/1000),epoch(Clock::now()),impl_(nullptr) {
+Media::Media(Json c,std::atomic<bool> &s,Note n,std::shared_ptr<FrameProbe> probe):config(std::move(c)),epoch_ntp(ntp_now()+(uint64_t(config.value("latency_ms",1500))*(uint64_t(1)<<32))/1000),epoch(Clock::now()),impl_(nullptr) {
   require(config.at("width")==1920||config.at("width")==1280,"Unsupported canvas");
   require((config.at("width")==1920&&config.at("height")==1080)||(config.at("width")==1280&&config.at("height")==720),"Unsupported canvas");
   require(config.at("fps")==30||config.at("fps")==60,"Unsupported frame rate");
   VideoRate::parse(config);
   require(config.value("latency_ms",1500)>=500&&config.value("latency_ms",1500)<=2000,"Invalid presentation lead");
-  impl_=std::make_unique<Impl>(*this,s,std::move(n));
+  impl_=std::make_unique<Impl>(*this,s,std::move(n),std::move(probe));
 }
 Media::~Media() { close(); impl_->workers.clear(); }
 void Media::start() {

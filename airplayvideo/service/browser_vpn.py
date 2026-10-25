@@ -40,6 +40,7 @@ class BrowserVPN:
 
     async def set_enabled_locked(self, request):
         """Change route while caller owns configuration_lock and controller.lock."""
+        self.controller.require_no_diagnostic()
         check(isinstance(request, dict) and type(request.get("enabled")) is bool, "Choose whether browser VPN is enabled")
         current = self.store.data["setup"]
         check(current["complete"], "Finish Setup first")

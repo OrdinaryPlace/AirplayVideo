@@ -15,6 +15,7 @@ from .model import Store, VERSION, UserError, check, identifier, local_address, 
 from .browser import Browser
 from .browser_vpn import BrowserVPN
 from .capitals import CapitalsLauncher
+from .frame_probe import FrameProbe
 from .controller import PairingEngine, Controller
 from .hdhomerun import Channels, inspect as inspect_tuner, discover as discover_tuners
 from .mqtt import HomeAssistant
@@ -62,6 +63,8 @@ class Application:
         self.controller.recordings = self.recordings
         self.diagnostics = Diagnostics(self.controller, session)
         self.controller.diagnostics = self.diagnostics
+        self.frame_probe = FrameProbe(self.controller)
+        self.controller.frame_probe = self.frame_probe
         self.ha = HomeAssistant(store, self.controller, self.channels, session)
         self.controller.changed = self.ha.publish_state
         self.tickets = {}
@@ -73,7 +76,7 @@ class Application:
         self.controller.capitals = self.ha.capitals = self.capitals
 
     def state(self):
-        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "browser_vpn": self.browser_vpn.state(), "capitals": self.capitals.state(), "recordings": self.recordings.state(), "diagnostics": self.diagnostics.state(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}
+        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "browser_vpn": self.browser_vpn.state(), "capitals": self.capitals.state(), "recordings": self.recordings.state(), "diagnostics": self.diagnostics.state(), "frame_probe": self.frame_probe.state(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}
 
     def require_idle(self):
         self.controller.require_no_diagnostic()
@@ -103,6 +106,7 @@ class Application:
 
     async def close(self):
         await self.capitals.close()
+        await self.frame_probe.close()
         await self.browser_vpn.close()
         for ws in list(self.preview_sockets):
             await ws.close()
@@ -142,6 +146,10 @@ class Application:
             await self.recordings.analysis.start(data.get("id"))
         elif action == "cancel_recording_analysis":
             await self.recordings.analysis.cancel(data.get("id"))
+        elif action == "measure_frame_stages":
+            await self.frame_probe.start()
+        elif action == "cancel_frame_stages":
+            await self.frame_probe.cancel()
         elif action == "remove_recording":
             self.recordings.remove(data.get("id"))
         elif action == "preview_generated":
@@ -156,7 +164,9 @@ class Application:
             check(not self.recordings.current, "Wait for the diagnostic recording to finish")
             await controller.close_browser()
         elif action == "browser":
-            await self.browser.control(data.get("action"), data.get("text"))
+            async with controller.lock:
+                controller.require_no_diagnostic()
+                await self.browser.control(data.get("action"), data.get("text"))
         elif action == "refresh_channels":
             controller.require_mode("hdhomerun")
             await self.channels.refresh()

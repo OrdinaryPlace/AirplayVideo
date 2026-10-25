@@ -4,6 +4,7 @@
 #include <deque>
 
 namespace lab {
+class FrameProbe;
 inline uint64_t ntp_delta(uint64_t us) {
   return (us / 1000000 << 32) + ((us % 1000000) << 32) / 1000000;
 }
@@ -34,7 +35,8 @@ public:
 private:
   std::unique_ptr<Impl> impl_;
 public:
-  Media(Json config, std::atomic<bool> &stop, Note note);
+  Media(Json config, std::atomic<bool> &stop, Note note,
+        std::shared_ptr<FrameProbe> probe = {});
   ~Media();
   std::shared_ptr<Subscriber> subscribe();
   void start();

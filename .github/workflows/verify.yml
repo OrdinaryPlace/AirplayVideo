@@ -19,6 +19,8 @@ jobs:
         run: docker run --rm --cap-add SYS_ADMIN --shm-size=256m -e PYTHONPATH=/opt/airplayvideo airplayvideo:test python3 tests/browser-network.py
       - name: Verify browser proxy routing and unavailable-gateway behavior
         run: docker run --rm --network none --cap-add SYS_ADMIN --shm-size=256m -e PYTHONPATH=/opt/airplayvideo airplayvideo:test python3 tests/browser-proxy.py
+      - name: Measure numeric frame stages on private synthetic X11 pixels
+        run: docker run --rm --network none --shm-size=256m airplayvideo:test python3 tests/frame-probe-container.py
       - name: Check browser module syntax
         run: |
           node --input-type=module --check < airplayvideo/web/app.js

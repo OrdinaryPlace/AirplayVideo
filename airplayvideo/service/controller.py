@@ -162,11 +162,13 @@ class Controller:
         self.retiring = {}
         self.recordings = None
         self.diagnostics = None
+        self.frame_probe = None
 
     def require_no_diagnostic(self):
         check(not self.diagnostics or not self.diagnostics.active, "Wait for the sync measurement to finish or cancel it")
         check(not self.recordings or not getattr(self.recordings, "analysis_active", False),
               "Wait for picture analysis to finish or cancel it")
+        check(not self.frame_probe or not self.frame_probe.active, "Wait for frame measurement to finish or cancel it")
 
     def require_browser_profile(self, source):
         """A profile switch restarts Chrome and must not disturb owned media."""
@@ -183,7 +185,8 @@ class Controller:
         browser_status = getattr(self.browser, "youtube_status", "")
         if not self.browser.running or not isinstance(browser_status, str) or browser_status not in BROWSER_VIDEO_STATUSES:
             browser_status = ""
-        return {"phase": phase, "source": self.source, "targets": sorted(self.targets), "receivers": self.receivers, "error": self.error, "metrics": self.metrics, "native": self.native_report, "browser_open": self.browser.running, "browser_status": browser_status}
+        return {"phase": phase, "source": self.source, "targets": sorted(self.targets), "receivers": self.receivers, "error": self.error, "metrics": self.metrics, "native": self.native_report, "browser_open": self.browser.running, "browser_status": browser_status,
+                "media_busy": bool(self.stream or self.pending or self.targets or self.pending_targets or self.tearing_down)}
 
     @property
     def tearing_down(self):
@@ -560,10 +563,13 @@ class Controller:
         self.notify()
 
     async def close_browser(self):
+        self.require_no_diagnostic()
         if self.source and self.source["kind"] == "browser":
             await self.stop()
-        await self.browser.close()
-        self.notify()
+        async with self.lock:
+            self.require_no_diagnostic()
+            await self.browser.close()
+            self.notify()
 
     async def close(self):
         await self.stop()

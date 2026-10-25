@@ -66,7 +66,9 @@ To measure full-screen motion capture without an account, tuner, or TV, run the
 bounded benchmark below. It creates a 1080p60 H.264 motion fixture, plays it in
 ordinary sandboxed Chrome, and records three ten-second 1080p30 trials through
 the production engine. Each trial reports actual capture timestamps, frame gaps,
-capture age, and the browser's decoded/dropped frame counters. Keep host load
+capture age, and the browser's playback/dropped-frame counters. The standard
+`totalVideoFrames` counter includes frames that would have displayed absent
+drops; do not interpret it as an exact decoder-output count. Keep host load
 comparable between versions; emulation results do not establish HA hardware
 performance. Encoded frame counts alone do not prove that every frame is fresh.
 
@@ -103,6 +105,23 @@ subprocess/output bounds, idle ownership, cancellation and persistence; native
 fixtures distinguish regular timestamps from repeated moving pictures.
 These estimates require interpretation during moving content and are not exact
 source-frame or physical-display measurements.
+
+For an already open browser, **Measure browser frame stages** compares the
+production capture path without connecting a receiver or retaining media. The
+probe warms up for two seconds and samples one common fifteen-second monotonic
+window. It reports raw X11 frame/PTS cadence, frame-gate accepts/rejections,
+pre-encode luma-region changes and exact repeats, converted frames, encoded
+outputs, and conversion/upload/encode/observation timing. Instrumentation is
+opt-in; normal playback retains the existing capture and timing behavior.
+
+Use moving content and keep resolution, requested frame rate, encoder, bitrate,
+audio buffer, browser profile and route fixed when comparing. The pre-encode
+sample avoids H.264 reconstruction noise, but visible-change thresholds still
+do not identify original source frames. Browser decoder/compositor counters and
+physical receiver presentation remain separate measurements. The interactive
+VNC preview is another transport branch and cannot establish the video's frame
+rate by eye. The probe exports numeric aggregates only, has bounded execution
+and cancellation, and preserves all retained recordings and browser permissions.
 
 For an isolated local UI test, create an empty Docker volume. Never
 mount production app data, an existing browser profile, or receiver pairings.
