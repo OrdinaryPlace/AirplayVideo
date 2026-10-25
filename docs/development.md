@@ -93,6 +93,17 @@ data. The installed app's existing diagnostic report also includes decoded
 frame counts, measured fps and longest frame gap under `capture.video` and
 `wire.video`; its flash reference measures throughput, not motion fidelity.
 
+Retained captures can also be analyzed inside the installed app with **Analyze
+picture cadence**. A bounded native helper uses the existing FFmpeg libraries
+to decode a completed local capture and compare several video-only regions at
+multiple motion thresholds. It returns frame-timestamp statistics, picture-change
+counts and held-picture durations, without media, thumbnails, fingerprints or
+per-frame arrays. Python tests cover authenticated actions, file identity,
+subprocess/output bounds, idle ownership, cancellation and persistence; native
+fixtures distinguish regular timestamps from repeated moving pictures.
+These estimates require interpretation during moving content and are not exact
+source-frame or physical-display measurements.
+
 For an isolated local UI test, create an empty Docker volume. Never
 mount production app data, an existing browser profile, or receiver pairings.
 Use a Linux volume rather than a macOS bind mount: the browser's private Unix

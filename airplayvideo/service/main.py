@@ -138,6 +138,10 @@ class Application:
             await controller.play(data)
         elif action == "record":
             await self.recordings.start(data)
+        elif action == "analyze_recording":
+            await self.recordings.analysis.start(data.get("id"))
+        elif action == "cancel_recording_analysis":
+            await self.recordings.analysis.cancel(data.get("id"))
         elif action == "remove_recording":
             self.recordings.remove(data.get("id"))
         elif action == "preview_generated":

@@ -89,6 +89,7 @@ COPY --from=build /usr/local/bin/ffmpeg /usr/local/bin/ffprobe /usr/local/bin/
 COPY --from=youtube-dependencies /opt/node/bin/node /usr/local/bin/node
 COPY --from=build /opt/app/build/airplayvideo-engine /usr/local/bin/
 COPY --from=build /opt/app/build/measure-sync /usr/local/bin/airplayvideo-measure-sync
+COPY --from=build /opt/app/build/analyze-picture /usr/local/bin/airplayvideo-analyze-picture
 COPY --from=build /opt/app/build/sync-content-tests /usr/local/bin/airplayvideo-sync-probe
 COPY --from=build /opt/sources/ffmpeg.tar.xz /opt/sources/openh264.tar.gz /opt/sources/ffmpeg-buildconf.txt /opt/dependency-sources/
 COPY --from=youtube-dependencies /opt/sources/ /opt/dependency-sources/youtube/
@@ -115,5 +116,5 @@ ENV PATH="/opt/airplayvideo/venv/bin:${PATH}"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN python3 tests/native-dependencies.py --write-report /opt/dependency-sources/native-capabilities.json
 EXPOSE 8099 18200-18215/udp
-LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.23"
+LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.24"
 CMD ["python3", "-m", "service.main"]

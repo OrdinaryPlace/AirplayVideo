@@ -178,8 +178,9 @@ class CapitalsLauncher:
             control = self.controller
             diagnostics = getattr(control, "diagnostics", None)
             if ((diagnostics and diagnostics.active) or (control.recordings and control.recordings.current)
+                    or (control.recordings and getattr(control.recordings, "analysis_active", False))
                     or control.tearing_down):
-                self.persist(error="Waiting for the recording, diagnostic, or playback teardown to finish")
+                self.persist(error="Waiting for the recording, diagnostic, picture analysis, or playback teardown to finish")
                 return
             targets = set(self.receivers(self.saved["receivers"]))
             control.require_mode("browser")

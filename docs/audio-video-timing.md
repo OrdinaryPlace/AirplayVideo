@@ -17,6 +17,25 @@ Recordings are private, explicit, and limited to 5–30 seconds through the API
 Remove control their lifetime. They are not uploaded anywhere. Settings and
 pairing files are never included. An app backup may include retained captures.
 
+## Check picture cadence inside the app
+
+With playback idle, choose **Analyze picture cadence** beside a completed
+recording. The app decodes that existing capture locally and displays numeric
+results; it does not need a media download or start a TV. Cancel stops the
+analysis. The recording, browser sign-ins and saved playback settings remain.
+
+The result separates encoded frame timestamps from observable picture changes
+in the left, center and right parts of the video. Several luma-change and
+changed-area thresholds show how sensitive the motion estimate is. A capture
+can contain 30 timestamped frames per second while holding the same picture
+across several frames.
+
+Use moving play to interpret the result. Static shots, small or dark moving
+objects, video compression and normal source-rate conversion can affect these
+estimates. They do not establish exact source frame rate, browser decoder frame
+rate or physical TV presentation. Only bounded numeric aggregates are returned;
+no images, thumbnails, content fingerprints or per-frame data are exported.
+
 ## Where buffering occurs
 
 | Stage | Behavior |

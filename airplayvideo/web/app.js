@@ -455,6 +455,24 @@ function renderUsage(){
   updateButtons();
 }
 
+function cadenceNumber(value,digits=1){
+  return typeof value==='number'&&Number.isFinite(value)&&value>=0?value.toFixed(digits):'—';
+}
+
+function pictureCadenceMarkup(report){
+  if(!report||report.version!==1)return '';
+  const regions=['center','left','right'].map(name=>{
+    const region=Array.isArray(report.regions)?report.regions.find(entry=>entry?.name===name):null;
+    const rows=Array.isArray(region?.thresholds)?region.thresholds.filter(row=>[1,2,4].includes(row?.luma_delta)&&[0.005,0.02].includes(row?.changed_fraction)&&typeof row.updates_per_second==='number'&&Number.isFinite(row.updates_per_second)&&row.updates_per_second>=0):[];
+    if(!rows.length)return '';
+    const low=Math.min(...rows.map(row=>row.updates_per_second)),high=Math.max(...rows.map(row=>row.updates_per_second));
+    const holds=rows.map(row=>row.longest_hold_ms).filter(value=>typeof value==='number'&&Number.isFinite(value)&&value>=0);
+    const range=cadenceNumber(low)+(low===high?'':'–'+cadenceNumber(high));
+    return `<div><dt>${{center:'Center',left:'Left',right:'Right'}[name]}</dt><dd><strong>${range}/s</strong><small>Longest hold ${holds.length?cadenceNumber(Math.max(...holds),0):'—'} ms</small></dd></div>`;
+  }).join('');
+  return `<section class="picture-cadence" aria-label="Saved picture cadence result"><dl class="cadence-metrics"><div><dt>Encoded capture cadence</dt><dd><strong>${cadenceNumber(report.encoded_fps)} fps</strong></dd></div><div><dt>Longest frame gap</dt><dd>${cadenceNumber(report.pts?.max_ms)} ms</dd></div><div><dt>Decoded sample</dt><dd>${cadenceNumber(report.video_frames,0)} frames · ${cadenceNumber(report.duration_seconds)} s</dd></div></dl><p class="muted tight">Observable picture changes · range across thresholds</p>${regions?`<dl class="picture-regions">${regions}</dl>`:'<p class="muted tight">Picture-change results unavailable.</p>'}<p class="muted tight">Static scenes and compression affect these estimates. Picture changes are not source frame rate or TV performance.</p></section>`;
+}
+
 function renderRecordings(){
   const diagnostic=state.diagnostics||{}, report=diagnostic.report;
   const native=report?.kind==='native';
@@ -473,10 +491,18 @@ function renderRecordings(){
   }
   stableMarkup($('syncResults'),results.join(''));
   const recordings=state.recordings||{items:[]};
-  $('recordCapture').disabled=busy||!!recordings.active;
+  const analysis=recordings.analysis||{},analyzing=analysis.status==='running';
+  const mediaBusy=!!state.diagnostics?.active||!!recordings.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase);
+  $('recordCapture').disabled=busy||!!recordings.active||analyzing;
   $('recordingStatus').textContent=recordings.active?'Recording… Playback can continue.':'';
-  stableMarkup($('recordingList'),recordings.items.map((item,index)=>`<p><strong>Sample ${recordings.items.length-index}</strong> · ${item.status==='complete'?`${item.seconds_requested} seconds · ${item.width}×${item.height}`:escape(item.error||'Incomplete capture')}<br>${['mkv','json','csv'].map((ext,i)=>`<a href="api/recordings/${encodeURIComponent(item.id)}/${ext}" download>${['Download video','Timing report','Packet timings'][i]}</a>`).join(' · ')} · <button type="button" class="text-button" data-remove-recording="${escape(item.id)}">Remove</button></p>`).join(''));
+  stableMarkup($('recordingList'),recordings.items.map((item,index)=>{
+    const current=analysis.id===item.id,active=current&&analyzing;
+    const status=current?(active?'Analyzing saved sample… No TVs are started.':analysis.status==='error'?analysis.error||'Picture analysis could not finish.':analysis.status==='cancelled'?'Picture analysis cancelled.':''):'';
+    return `<article class="recording-item"><p><strong>Sample ${recordings.items.length-index}</strong> · ${item.status==='complete'?`${escape(item.seconds_requested)} seconds · ${escape(item.width)}×${escape(item.height)}`:escape(item.error||'Incomplete capture')}</p><div class="recording-actions">${['mkv','json','csv'].map((ext,i)=>`<a href="api/recordings/${encodeURIComponent(item.id)}/${ext}" download>${['Download video','Timing report','Packet timings'][i]}</a>`).join('')}<button type="button" class="text-button" data-remove-recording="${escape(item.id)}" ${active||busy?'disabled':''}>Remove</button></div><div class="recording-actions">${item.status==='complete'?`<button type="button" data-analyze-recording="${escape(item.id)}" ${busy||analyzing||mediaBusy?'disabled':''}>Analyze picture cadence</button>`:''}${active?`<button type="button" data-cancel-recording-analysis="${escape(item.id)}">Cancel analysis</button>`:''}</div>${status?`<p role="status" class="muted tight">${escape(status)}</p>`:''}${pictureCadenceMarkup(item.picture_cadence)}</article>`;
+  }).join(''));
   for(const button of document.querySelectorAll('[data-remove-recording]'))button.onclick=()=>act('remove_recording',{id:button.dataset.removeRecording});
+  for(const button of document.querySelectorAll('[data-analyze-recording]'))button.onclick=()=>act('analyze_recording',{id:button.dataset.analyzeRecording});
+  for(const button of document.querySelectorAll('[data-cancel-recording-analysis]'))button.onclick=()=>act('cancel_recording_analysis',{id:button.dataset.cancelRecordingAnalysis},true);
 }
 
 function renderPreview(){
@@ -521,24 +547,28 @@ function browserKindChanged(){
 function updateButtons(){
   if(!state)return;
   const measuring=!!state.diagnostics?.active;
-  $('browserVpnEnabled').disabled=busy||measuring||!!state.recordings?.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase)||!state.setup.complete;
-  $('capitalsCheck').disabled=busy||measuring||!!state.recordings?.active||!chosenTVs.size||!state.setup.complete||!state.browser_vpn?.configured;
+  const analyzing=state.recordings?.analysis?.status==='running';
+  const analysisUnavailable=busy||measuring||analyzing||!!state.recordings?.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase);
+  for(const button of document.querySelectorAll('[data-analyze-recording]'))button.disabled=analysisUnavailable;
+  for(const button of document.querySelectorAll('[data-remove-recording]'))button.disabled=busy||(analyzing&&button.dataset.removeRecording===state.recordings.analysis.id);
+  $('browserVpnEnabled').disabled=busy||measuring||analyzing||!!state.recordings?.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase)||!state.setup.complete;
+  $('capitalsCheck').disabled=busy||measuring||analyzing||!!state.recordings?.active||!chosenTVs.size||!state.setup.complete||!state.browser_vpn?.configured;
   $('capitalsRefresh').disabled=busy;
   $('capitalsCancel').disabled=busy;
-  const unavailable=busy||measuring||!!state.recordings?.active||state.runtime.browser_open||!!state.runtime.targets.length||['preparing','connecting','stopping'].includes(state.runtime.phase)||!state.setup.complete;
+  const unavailable=busy||measuring||analyzing||!!state.recordings?.active||state.runtime.browser_open||!!state.runtime.targets.length||['preparing','connecting','stopping'].includes(state.runtime.phase)||!state.setup.complete;
   $('measureSync').disabled=unavailable;
   $('measureSyncTV').disabled=unavailable||!chosenTVs.size;
   $('testNativeVideo').disabled=unavailable||chosenTVs.size!==1;
   $('cancelSync').hidden=!measuring;
   const direct=mode==='browser'&&$('browserKind').value==='youtube'&&$('youtubeDelivery').value==='native';
   $('tvSelectionHelp').textContent=direct?'Choose one TV for direct video.':'The same source plays on every selected TV.';
-  $('recordCapture').disabled=busy||measuring||!!state.recordings?.active||state.runtime.source?.kind==='youtube';
-  $('play').disabled=busy||measuring||!chosenTVs.size||!state.setup.complete||(direct&&chosenTVs.size!==1);
+  $('recordCapture').disabled=busy||measuring||analyzing||!!state.recordings?.active||state.runtime.source?.kind==='youtube';
+  $('play').disabled=busy||measuring||analyzing||!chosenTVs.size||!state.setup.complete||(direct&&chosenTVs.size!==1);
   $('play').textContent=busy&&busyAction==='play'?'Starting…':'Play on selected TVs';
   const names = state.receivers.filter(receiver=>chosenTVs.has(receiver.id)).map(receiver=>receiver.name);
   $('selectionHint').textContent = direct&&names.length!==1?'Choose exactly one TV above.':names.length ? 'Play on: ' + names.join(', ') : 'Choose one or more TVs above.';
   automationExample();
-  $('openBrowser').disabled=busy||measuring;
+  $('openBrowser').disabled=busy||measuring||analyzing;
   $('openBrowser').textContent=busy&&busyAction==='open_browser'?'Opening browser…':'Open browser';
   $('closeBrowser').textContent=busy&&busyAction==='close_browser'?'Closing browser…':'Close browser';
   $('stopAll').disabled=!measuring&&!(busy&&busyAction==='play')&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
