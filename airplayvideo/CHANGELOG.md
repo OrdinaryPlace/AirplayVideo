@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.21
+
+- Correct the runtime version label and check that it matches the app manifest, image label and latest changelog entry.
+
 ## 0.2.20
 
 - Preserve Home Assistant's configured timezone in the browser instead of falling back to UTC. Keep the browser's private environment boundary in place.
