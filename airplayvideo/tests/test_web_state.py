@@ -180,3 +180,152 @@ state.browser_vpn.configured=false;
 renderBrowserVpn();
 assert.equal($('browserVpnControl').hidden, true);
 """)
+
+
+def run_recording_ui(script):
+    node = shutil.which('node')
+    if not node:
+        pytest.skip('Node is required for browser state checks')
+    functions = []
+    for name in ('cadenceNumber', 'pictureCadenceMarkup', 'stableMarkup', 'renderRecordings', 'updateButtons'):
+        match = re.search(rf'^function {name}\([^\n]*\)\s*\{{.*?^\}}', SOURCE, re.M | re.S)
+        assert match, name
+        functions.append(match.group())
+    harness = r"""
+const assert=require('node:assert/strict');
+const escape=value=>String(value??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const nodes=new Map();
+const $=id=>{
+  if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',innerHTML:'',hidden:false,dataset:{},disabled:false});
+  return nodes.get(id);
+};
+let buttons=[];
+const list=$('recordingList');
+Object.defineProperty(list,'innerHTML',{get(){return this.markup||'';},set(value){
+  this.markup=value;
+  buttons=[...value.matchAll(/<button\b([^>]*)>/g)].map(match=>{
+    const attrs=match[1],dataset={};
+    for(const attribute of attrs.matchAll(/data-([a-z-]+)="([^"]*)"/g)){
+      const key=attribute[1].replace(/-([a-z])/g,(_,c)=>c.toUpperCase());
+      dataset[key]=attribute[2];
+    }
+    return {dataset,disabled:/\bdisabled\b/.test(attrs)};
+  });
+}});
+const document={querySelectorAll(selector){
+  const key=selector.slice(6,-1).replace(/-([a-z])/g,(_,c)=>c.toUpperCase());
+  return buttons.filter(button=>key in button.dataset);
+}};
+let busy=false,busyAction='',draft=null,mode='browser',chosenTVs=new Set(),calls=[];
+let state={setup:{complete:true},runtime:{phase:'idle',targets:[],source:null,browser_open:true},
+  diagnostics:{active:false},receivers:[],browser_vpn:{configured:true},recordings:{active:null,items:[],analysis:{status:'idle',id:null,error:''}}};
+function act(...args){calls.push(args);}
+function automationExample(){}
+function settingsStatus(){}
+const sample={id:'0123456789abcdef0123456789abcdef',status:'complete',seconds_requested:15,width:1920,height:1080};
+const result={version:1,video_frames:450,duration_seconds:15,encoded_fps:30.0,
+  pts:{median_ms:33.3,p95_ms:34,max_ms:66.7,gaps_over_50ms:1},regions:[
+    {name:'center',thresholds:[{luma_delta:1,changed_fraction:0.005,updates:90,updates_per_second:6,longest_hold_ms:160},
+      {luma_delta:4,changed_fraction:0.02,updates:45,updates_per_second:3,longest_hold_ms:320}]},
+    {name:'left',thresholds:[{luma_delta:2,changed_fraction:0.02,updates:60,updates_per_second:4,longest_hold_ms:250}]},
+    {name:'right',thresholds:[{luma_delta:2,changed_fraction:0.02,updates:75,updates_per_second:5,longest_hold_ms:200}]}]};
+"""
+    result = subprocess.run([node], input=harness + '\n'.join(functions) + script,
+                            text=True, capture_output=True, timeout=10)
+    assert result.returncode == 0, result.stderr
+
+
+def test_sample_analysis_is_explicit_id_only_and_never_plays_a_tv():
+    run_recording_ui("""
+state.recordings.items=[sample];
+renderRecordings();
+const button=document.querySelectorAll('[data-analyze-recording]')[0];
+assert.equal(button.disabled,false);
+button.onclick();
+assert.deepEqual(calls,[['analyze_recording',{id:sample.id}]]);
+assert.match(list.innerHTML,/Download video/);
+assert.equal(list.innerHTML.includes('<video'),false);
+assert.equal(list.innerHTML.includes('autoplay'),false);
+busy=true;updateButtons();
+assert.equal(button.disabled,true);
+assert.equal(document.querySelectorAll('[data-remove-recording]')[0].disabled,true);
+busy=false;updateButtons();
+assert.equal(button.disabled,false);
+assert.equal(document.querySelectorAll('[data-remove-recording]')[0].disabled,false);
+""")
+
+
+def test_picture_numbers_distinguish_encoded_capture_from_visible_changes():
+    run_recording_ui(r"""
+state.recordings.items=[{...sample,picture_cadence:result}];renderRecordings();
+assert.match(list.innerHTML,/Encoded capture cadence/);
+assert.match(list.innerHTML,/30\.0 fps/);
+assert.match(list.innerHTML,/Observable picture changes/);
+assert.match(list.innerHTML,/3\.0–6\.0\/s/);
+assert.match(list.innerHTML,/Longest hold 320 ms/);
+assert.match(list.innerHTML,/66\.7 ms/);
+assert.match(list.innerHTML,/Static scenes and compression/);
+assert.match(list.innerHTML,/not source frame rate or TV performance/);
+""")
+
+
+def test_running_analysis_cancel_targets_only_the_active_sample():
+    run_recording_ui("""
+state.recordings.items=[sample,{...sample,id:'abcdef0123456789abcdef0123456789'}];
+state.recordings.analysis={id:sample.id,status:'running',error:''};renderRecordings();
+assert.equal(document.querySelectorAll('[data-analyze-recording]').every(button=>button.disabled),true);
+const cancel=document.querySelectorAll('[data-cancel-recording-analysis]');
+assert.equal(cancel.length,1);cancel[0].onclick();
+assert.deepEqual(calls,[['cancel_recording_analysis',{id:sample.id},true]]);
+assert.match(list.innerHTML,/No TVs are started/);
+assert.equal(document.querySelectorAll('[data-remove-recording]')[0].disabled,true);
+updateButtons();
+for(const id of ['play','recordCapture','openBrowser','browserVpnEnabled','capitalsCheck','measureSync'])assert.equal($(id).disabled,true,id);
+assert.equal($('cancelSync').hidden,true);
+""")
+
+
+def test_error_cancel_and_saved_result_survive_state_refresh_without_html_injection():
+    run_recording_ui(r"""
+state.recordings.items=[{...sample,picture_cadence:result}];
+state.recordings.analysis={id:sample.id,status:'error',error:'<img src=x onerror=secret>'};renderRecordings();
+assert.match(list.innerHTML,/&lt;img/);
+assert.equal(list.innerHTML.includes('<img'),false);
+assert.match(list.innerHTML,/30\.0 fps/);
+state.recordings.analysis.status='cancelled';renderRecordings();
+assert.match(list.innerHTML,/Picture analysis cancelled/);
+assert.equal(document.querySelectorAll('[data-cancel-recording-analysis]').length,0);
+assert.equal(document.querySelectorAll('[data-analyze-recording]')[0].disabled,false);
+assert.match(list.innerHTML,/30\.0 fps/);
+""")
+
+
+def test_invalid_numeric_and_unknown_region_fields_are_not_rendered():
+    run_recording_ui(r"""
+result.encoded_fps='https://private.invalid/token';result.video_frames=NaN;
+result.pts.max_ms=Infinity;result.duration_seconds=-1;
+result.regions.push({name:'<img private>',thresholds:[{luma_delta:1,changed_fraction:0.005,updates_per_second:999,longest_hold_ms:0}]});
+result.regions[0].thresholds.push({luma_delta:8,changed_fraction:0.5,updates_per_second:999,longest_hold_ms:0});
+const markup=pictureCadenceMarkup(result);
+for(const text of ['private','Infinity','NaN','999'])assert.equal(markup.includes(text),false,text);
+assert.match(markup,/— fps/);assert.match(markup,/3\.0–6\.0\/s/);
+assert.equal(pictureCadenceMarkup({...result,version:2}),'');
+""")
+
+
+@pytest.mark.parametrize('condition', ['state.runtime.targets=["tv"]',
+    'state.runtime.phase="connecting"', 'state.runtime.phase="stopping"',
+    'state.recordings.active={id:"other"}', 'state.diagnostics.active=true'])
+def test_analysis_waits_for_playback_recording_or_measurement(condition):
+    run_recording_ui('state.recordings.items=[sample];' + condition + ';renderRecordings();' + """
+assert.equal(document.querySelectorAll('[data-analyze-recording]')[0].disabled,true);
+assert.deepEqual(calls,[]);
+""")
+
+
+def test_incomplete_sample_has_no_analysis_action():
+    run_recording_ui("""
+state.recordings.items=[{...sample,status:'error',error:'Incomplete capture'}];renderRecordings();
+assert.equal(document.querySelectorAll('[data-analyze-recording]').length,0);
+assert.match(list.innerHTML,/Incomplete capture/);
+""")

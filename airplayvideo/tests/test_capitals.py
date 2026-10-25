@@ -109,8 +109,8 @@ async def test_live_game_replaces_only_selected_tvs_and_enables_saved_vpn(contex
     await x.launcher.check_once(generation)
     assert previous.closed and x.control.targets == set(TARGETS)
     assert x.control.source["url"] == live().watch_url and x.control.source["profile"] == "sportsnet"
-    assert x.control.stream.commands == [{"action": "add", "id": key, "slot": "abcd".index(key[0])}
-                                         for key in x.control.targets]
+    assert sorted(x.control.stream.commands, key=lambda command: command["id"]) == [
+        {"action": "add", "id": key, "slot": "abcd".index(key[0])} for key in sorted(x.control.targets)]
     assert all(command["id"] != D for stream in Stream.created for command in stream.commands)
     assert x.store.data["setup"]["browser"]["http_proxy_enabled"] is True
     assert x.store.data["setup"]["browser"]["http_proxy"] == "http://fixture-gateway:8888"
@@ -142,7 +142,7 @@ async def test_fourth_tv_blocks_every_side_effect_before_attempt_claim(context, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("busy", ["recording", "diagnostic", "teardown"])
+@pytest.mark.parametrize("busy", ["recording", "diagnostic", "picture_analysis", "teardown"])
 async def test_capture_or_measurement_defers_without_claim_or_interruption(context, busy):
     x = context
     generation = await arm(x)
@@ -150,6 +150,8 @@ async def test_capture_or_measurement_defers_without_claim_or_interruption(conte
         x.control.recordings.current = SimpleNamespace(owned=False)
     elif busy == "diagnostic":
         x.control.diagnostics = SimpleNamespace(active=True)
+    elif busy == "picture_analysis":
+        x.control.recordings.analysis_active = True
     else:
         waiting = asyncio.create_task(asyncio.Event().wait())
         x.control.retiring[object()] = waiting
@@ -158,6 +160,7 @@ async def test_capture_or_measurement_defers_without_claim_or_interruption(conte
     assert not x.store.data["capitals"]["last_attempted_game"]
     x.browser.close.assert_not_awaited()
     x.control.recordings.current, x.control.diagnostics = None, None
+    x.control.recordings.analysis_active = False
     if busy == "teardown":
         waiting.cancel()
         await asyncio.gather(waiting, return_exceptions=True)

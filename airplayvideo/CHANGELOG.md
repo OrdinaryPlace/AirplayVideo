@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.24
+
+- Analyze retained captures inside the app and report numeric frame timestamps
+  separately from observable picture changes in several video regions.
+- Compare multiple motion thresholds and held-picture durations without
+  exporting media, thumbnails or per-frame content. Static scenes and normal
+  source-rate conversion remain explicit limits of the measurement.
+- Keep analysis bounded and cancellable, require idle playback, and preserve
+  recordings, saved settings, browser profiles and receiver pairings.
+
 ## 0.2.23
 
 - Check public Sportsnet Capitals events on a Home Assistant game-start command.

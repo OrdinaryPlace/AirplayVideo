@@ -165,6 +165,8 @@ class Controller:
 
     def require_no_diagnostic(self):
         check(not self.diagnostics or not self.diagnostics.active, "Wait for the sync measurement to finish or cancel it")
+        check(not self.recordings or not getattr(self.recordings, "analysis_active", False),
+              "Wait for picture analysis to finish or cancel it")
 
     def require_browser_profile(self, source):
         """A profile switch restarts Chrome and must not disturb owned media."""

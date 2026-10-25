@@ -108,6 +108,8 @@ class Diagnostics:
             check(not c.stream and not c.pending, 'Stop playback before measuring sync')
             check(not c.tearing_down, 'Wait for playback to finish stopping')
             check(not c.recordings or not c.recordings.current, 'Wait for the recording to finish')
+            check(not c.recordings or not getattr(c.recordings, 'analysis_active', False),
+                  'Wait for picture analysis to finish or cancel it')
             check(not c.browser.running, 'Close the browser before measuring sync')
             check(c.store.data['setup']['complete'], 'Finish Setup first')
             wanted = request.get('receivers', [])

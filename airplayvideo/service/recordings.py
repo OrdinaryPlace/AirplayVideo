@@ -8,6 +8,7 @@ import uuid
 from .browser import child_environment
 from .controller import Stream
 from .model import UserError, check, identifier, atomic_json
+from .picture_cadence import PictureAnalysis
 
 
 class Recordings:
@@ -21,6 +22,11 @@ class Recordings:
         self.timer = None
         self.tasks = set()
         self.receiver_timing = {}
+        self.analysis = PictureAnalysis(self)
+
+    @property
+    def analysis_active(self):
+        return self.analysis.active
 
     def state(self):
         rows = []
@@ -32,7 +38,7 @@ class Recordings:
                     rows.append(data)
             except (OSError, ValueError, UserError):
                 continue
-        return {'active': self.current, 'items': rows}
+        return {'active': self.current, 'items': rows, 'analysis': self.analysis.state()}
 
     async def start(self, request):
         c = self.controller
@@ -115,6 +121,7 @@ class Recordings:
 
     def remove(self, capture_id):
         capture_id = identifier(capture_id)
+        check(not self.analysis_active or self.analysis.id != capture_id, 'Cancel picture analysis before removing this recording')
         check(not self.current or self.current['id'] != capture_id, 'Wait for recording to finish')
         for extension in ('mkv', 'csv', 'json'):
             path = self.root / (capture_id + '.' + extension)
@@ -122,6 +129,7 @@ class Recordings:
                 path.unlink()
 
     async def close(self):
+        await self.analysis.close()
         await self.finish()
         if self.tasks:
             await asyncio.gather(*self.tasks, return_exceptions=True)
