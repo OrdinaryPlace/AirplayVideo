@@ -3,7 +3,9 @@ from pathlib import Path
 import stat
 
 
-def chrome_gpu_arguments(directory=Path("/dev/dri")):
+def chrome_gpu_arguments(directory=Path("/dev/dri"), *, rendering="vulkan"):
+    if rendering not in {"vulkan", "opengl"}:
+        raise ValueError("Invalid browser rendering mode")
     # Browser.launch grants the mapped devices' existing groups to uid 1000.
     # Check that user's effective mode bits, rather than root's os.access result.
     try:
@@ -22,8 +24,14 @@ def chrome_gpu_arguments(directory=Path("/dev/dri")):
         permissions = (details.st_mode >> (6 if details.st_uid == 1000 else 3)) & 7
         if permissions & 6 != 6:
             continue
-        # Xvfb does not supply a hardware GL renderer. ANGLE's Vulkan path lets
-        # Chrome use the mapped VA-API decoder while retaining its GPU sandbox.
+        if rendering == "opengl":
+            # Keep the same device and sandbox while selecting Chromium's
+            # documented Linux GL decoding path for a controlled comparison.
+            return ["--use-gl=angle", "--use-angle=gl",
+                    "--enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL",
+                    "--disable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE",
+                    "--ignore-gpu-blocklist", "--render-node-override=" + str(device)]
+        # Preserve the installed Vulkan arguments and ordering by default.
         return ["--use-gl=angle", "--use-angle=vulkan",
                 "--enable-features=AcceleratedVideoDecoder,Vulkan,DefaultANGLEVulkan,VulkanFromANGLE",
                 "--ignore-gpu-blocklist", "--render-node-override=" + str(device)]

@@ -123,6 +123,23 @@ VNC preview is another transport branch and cannot establish the video's frame
 rate by eye. The probe exports numeric aggregates only, has bounded execution
 and cancellation, and preserves all retained recordings and browser permissions.
 
+Source defaults contains an advanced **Sportsnet graphics** comparison. Vulkan
+remains the default, including on upgrade; OpenGL requests Chromium's separate
+Linux GL decoding path for the Sportsnet profile only. Both use the same mapped
+render-node selection and existing sandbox. No usable mapped device retains the
+existing no-extra-arguments behavior, so a saved choice is not proof of the
+effective renderer or hardware decoding.
+
+For an A/B comparison, keep the same event, manually verified player quality,
+fullscreen state, route and capture settings. Measure moving content, change
+only the Sportsnet graphics setting while idle, reopen that event and verify
+player quality again, then repeat the stage probe. Return to the original
+choice to check reproducibility. Saving the setting closes an open Sportsnet
+desktop normally; it does not close an unrelated default-profile desktop.
+
+The selectors follow [ANGLE's backend options](https://github.com/google/angle/blob/main/doc/DebuggingTips.md)
+and [Chromium's Linux VA-API paths](https://github.com/chromium/chromium/blob/main/docs/gpu/vaapi.md).
+
 For an isolated local UI test, create an empty Docker volume. Never
 mount production app data, an existing browser profile, or receiver pairings.
 Use a Linux volume rather than a macOS bind mount: the browser's private Unix

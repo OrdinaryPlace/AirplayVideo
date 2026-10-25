@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.2.25"
+VERSION = "0.2.26"
 IDENTIFIER = re.compile(r"[a-f0-9]{32}\Z")
 
 
@@ -119,6 +119,12 @@ def browser_vpn_name(value):
     return value
 
 
+def validate_sportsnet_rendering(value):
+    check(isinstance(value, str) and value in {"vulkan", "opengl"},
+          "Choose Vulkan or OpenGL for Sportsnet graphics")
+    return value
+
+
 def youtube_url(value):
     parsed = urlsplit(browser_url(value))
     host = (parsed.hostname or "").lower()
@@ -221,7 +227,7 @@ def default_setup():
         "complete": False,
         "modes": {"browser": True, "hdhomerun": False, "generated": True},
         "generated": generated_defaults(),
-        "browser": {"home_url": "https://www.youtube.com/", "youtube_quality": "1080p", "http_proxy": "", "http_proxy_enabled": False, "vpn_name": "Browser VPN"},
+        "browser": {"home_url": "https://www.youtube.com/", "youtube_quality": "1080p", "http_proxy": "", "http_proxy_enabled": False, "vpn_name": "Browser VPN", "sportsnet_rendering": "vulkan"},
         "hdhomerun": {"devices": []},
         "video": {"resolution": "1080p", "fps": 30, "codec": "h264", "encoder": "auto", "bitrate_mbps": 8, "rate_control": "auto", "max_bitrate_mbps": 16, "deinterlace": True},
         "audio": {"enabled": True, "latency_ms": 1500},
@@ -249,6 +255,7 @@ def validate_setup(value):
         check(not enabled or result["browser"]["http_proxy"], "Set a VPN gateway before enabling browser VPN")
         result["browser"]["http_proxy_enabled"] = enabled
         result["browser"]["vpn_name"] = browser_vpn_name(value["browser"].get("vpn_name", "Browser VPN"))
+        result["browser"]["sportsnet_rendering"] = validate_sportsnet_rendering(value["browser"].get("sportsnet_rendering", "vulkan"))
         devices = value["hdhomerun"]["devices"]
         check(isinstance(devices, list) and len(devices) <= 4, "Use at most four HDHomeRun devices")
         ids = set()
@@ -333,6 +340,10 @@ class Store:
                 if browser.get("vpn_name") != name:
                     browser["vpn_name"] = name
                     migrated = True
+                if "sportsnet_rendering" not in browser:
+                    browser["sportsnet_rendering"] = "vulkan"
+                    migrated = True
+                validate_sportsnet_rendering(browser["sportsnet_rendering"])
                 video = self.data["setup"]["video"]
                 for key, value in {"rate_control": "auto", "max_bitrate_mbps": max(16, video["bitrate_mbps"])}.items():
                     if key not in video:

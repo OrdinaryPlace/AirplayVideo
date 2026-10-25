@@ -18,10 +18,10 @@ def node(name, mode, uid=0, failure=None):
 
 
 class BrowserGPUSelection(unittest.TestCase):
-    def arguments(self, *nodes):
+    def arguments(self, *nodes, rendering="vulkan"):
         directory = Mock(spec=Path)
         directory.iterdir.return_value = iter(nodes)
-        return chrome_gpu_arguments(directory)
+        return chrome_gpu_arguments(directory, rendering=rendering)
 
     def test_no_mapped_device_retains_ordinary_software_browser(self):
         self.assertEqual(self.arguments(), [])
@@ -56,6 +56,26 @@ class BrowserGPUSelection(unittest.TestCase):
     def test_browser_owned_device_uses_owner_permissions(self):
         arguments = self.arguments(node("renderD128", stat.S_IFCHR | 0o600, uid=1000))
         self.assertIn("--render-node-override=/dev/dri/renderD128", arguments)
+
+    def test_vulkan_default_retains_installed_arguments_exactly(self):
+        self.assertEqual(self.arguments(node("renderD128", stat.S_IFCHR | 0o660)), [
+            "--use-gl=angle", "--use-angle=vulkan",
+            "--enable-features=AcceleratedVideoDecoder,Vulkan,DefaultANGLEVulkan,VulkanFromANGLE",
+            "--ignore-gpu-blocklist", "--render-node-override=/dev/dri/renderD128"])
+
+    def test_opengl_changes_only_fixed_graphics_path_on_same_usable_device(self):
+        arguments = self.arguments(node("renderD128", stat.S_IFCHR | 0o660), rendering="opengl")
+        self.assertEqual(arguments, [
+            "--use-gl=angle", "--use-angle=gl",
+            "--enable-features=AcceleratedVideoDecoder,AcceleratedVideoDecodeLinuxGL",
+            "--disable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE",
+            "--ignore-gpu-blocklist", "--render-node-override=/dev/dri/renderD128"])
+        self.assertFalse(any("sandbox" in value or "debugging" in value or
+                             "automation" in value for value in arguments))
+        self.assertEqual(self.arguments(node("renderD128", stat.S_IFCHR | 0o600), rendering="opengl"), [])
+        self.assertEqual(self.arguments(rendering="opengl"), [])
+        with self.assertRaises(ValueError):
+            self.arguments(rendering="--disable-gpu-sandbox")
 
 
 if __name__ == "__main__":

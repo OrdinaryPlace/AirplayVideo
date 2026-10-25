@@ -95,3 +95,92 @@ async def test_concurrent_profile_switches_never_overlap_desktops(tmp_path):
     await asyncio.gather(browser.start(default_setup(), profile='sportsnet'),
                          browser.start(default_setup(), profile='default'))
     assert browser.profile == 'default' and active[0] == 1
+
+
+@pytest.mark.asyncio
+async def test_sportsnet_rendering_change_closes_before_restart_without_touching_profile_data(tmp_path):
+    browser = Browser(tmp_path, None)
+    browser._select_profile('sportsnet')
+    root = browser.root
+    root.mkdir()
+    retained = root / 'retained-profile-fixture'
+    retained.write_text('keep')
+    browser.running = True
+    steps = []
+    async def close(*, graceful=False):
+        assert graceful and browser.rendering == 'vulkan' and browser.root == root
+        steps.append('closed')
+        browser.running = False
+    async def start(setup):
+        assert not browser.running and browser.rendering == 'opengl' and browser.root == root
+        assert steps == ['closed']
+        browser.running = True
+    browser._close = AsyncMock(side_effect=close)
+    browser._start_once = AsyncMock(side_effect=start)
+    settings = default_setup()
+    settings['browser']['sportsnet_rendering'] = 'opengl'
+    await browser.start(settings)
+    assert retained.read_text() == 'keep'
+    assert browser.environment['HOME'] == str(root)
+    browser._start_once.side_effect = None
+    await browser.start(settings)
+    assert browser._close.await_count == 1  # Identical mode reuses its desktop.
+    settings['browser']['sportsnet_rendering'] = 'arbitrary-flags'
+    with pytest.raises(UserError, match='Sportsnet graphics'):
+        await browser.start(settings)
+    assert browser._close.await_count == 1 and browser.rendering == 'opengl'
+
+
+@pytest.mark.asyncio
+async def test_sportsnet_setting_does_not_restart_or_change_default_profile(tmp_path):
+    browser = Browser(tmp_path, None)
+    browser.running = True
+    browser._close = AsyncMock()
+    browser._start_once = AsyncMock()
+    original_environment = dict(browser.environment)
+    settings = default_setup()
+    settings['browser']['sportsnet_rendering'] = 'opengl'
+    await browser.start(settings, profile='default')
+    assert browser.rendering == 'vulkan' and browser.root == tmp_path / 'browser'
+    assert browser.environment == original_environment
+    browser._close.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('profile,setting,expected', [
+    ('default', 'vulkan', 'vulkan'), ('default', 'opengl', 'vulkan'),
+    ('sportsnet', 'vulkan', 'vulkan'), ('sportsnet', 'opengl', 'opengl'),
+])
+async def test_chrome_launch_uses_selected_profile_graphics_and_retains_route_and_sandbox(tmp_path, monkeypatch, profile, setting, expected):
+    from types import SimpleNamespace
+    from service import browser as browser_module
+    from service.browser_proxy import chrome_proxy_arguments
+    browser = Browser(tmp_path, None)
+    monkeypatch.setattr(browser_module.os, 'chown', lambda *args: None)
+    monkeypatch.setattr(browser_module, 'install_companion', lambda root: 'a' * 32)
+    probe = SimpleNamespace(wait=AsyncMock(return_value=0))
+    monkeypatch.setattr(browser_module.asyncio, 'create_subprocess_exec', AsyncMock(return_value=probe))
+    companion = SimpleNamespace(path=tmp_path/'controls.sock', start=AsyncMock(), wait_ready=AsyncMock())
+    monkeypatch.setattr(browser_module, 'Companion', lambda *args: companion)
+    chosen = []
+    def graphics(*, rendering):
+        chosen.append(rendering)
+        return ['--fixture-graphics=' + rendering]
+    monkeypatch.setattr(browser_module, 'chrome_gpu_arguments', graphics)
+    browser._private_file = lambda *args: None
+    browser.launch = AsyncMock(return_value=SimpleNamespace())
+    browser.start_display = AsyncMock()
+    browser.wait_port = AsyncMock()
+    settings = default_setup()
+    settings['browser'].update(sportsnet_rendering=setting, http_proxy='http://gateway:8888', http_proxy_enabled=True)
+    await browser.start(settings, profile=profile)
+    assert browser.running and chosen == [expected]
+    chrome = next(call.args for call in browser.launch.await_args_list if call.args[0] == 'google-chrome')
+    root = tmp_path / ('browser-sportsnet' if profile == 'sportsnet' else 'browser')
+    assert chrome == ('google-chrome', '--no-first-run', '--no-default-browser-check',
+        '--password-store=basic', '--disable-dev-shm-usage', '--autoplay-policy=no-user-gesture-required',
+        '--user-data-dir=' + str(root / 'profile'), '--window-size=1920,1080', '--start-fullscreen',
+        '--fixture-graphics=' + expected, *chrome_proxy_arguments('http://gateway:8888'), 'about:blank')
+    assert browser.environment['HOME'] == str(root)
+    assert not any('no-sandbox' in flag or 'disable-gpu-sandbox' in flag or
+                   'remote-debugging' in flag or 'user-agent' in flag for flag in chrome)

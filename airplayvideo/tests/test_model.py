@@ -105,7 +105,7 @@ def browser_proxy_application(tmp_path):
         targets=set(), pending_targets=set(), tearing_down=False, require_no_diagnostic=Mock(), video_encoder=Mock())
     application.recordings = SimpleNamespace(current=None)
     application.controller.recordings = application.recordings
-    application.browser = SimpleNamespace(close=AsyncMock())
+    application.browser = SimpleNamespace(close=AsyncMock(), running=True, profile='default')
     application.channels = SimpleNamespace(rows=[], refresh=AsyncMock())
     application.ha = SimpleNamespace(close=AsyncMock(), start=AsyncMock(), refresh=Mock())
     application.browser_vpn = BrowserVPN(store, application.browser, application.controller, application.configuration_lock)
@@ -163,6 +163,111 @@ async def test_browser_proxy_edit_respects_all_idle_guards(tmp_path, busy):
     request = SimpleNamespace(match_info={'action': 'update'}, json=AsyncMock(return_value={
         'changes': {'browser': {'http_proxy': 'http://016c10d5-surfshark-gateway:8888'}},
         'expected': {'browser': {'http_proxy': ''}}}))
+    with pytest.raises(UserError):
+        await application.setup(request)
+    assert application.store.path.read_bytes() == before
+    application.browser.close.assert_not_awaited()
+
+
+@pytest.mark.parametrize('complete', [False, True])
+def test_sportsnet_rendering_upgrade_adds_only_vulkan_default(tmp_path, complete):
+    store = Store(tmp_path)
+    store.setup(default_setup())
+    store.save_page({'name': 'Sportsnet', 'url': 'https://watch.sportsnet.ca/'})
+    store.data['setup']['complete'] = complete
+    store.data['setup']['browser'].update(http_proxy='http://gateway:8888', http_proxy_enabled=True)
+    del store.data['setup']['browser']['sportsnet_rendering']
+    store.save()
+    before = copy.deepcopy(store.data)
+    for root in ('browser', 'browser-sportsnet'):
+        (tmp_path / root).mkdir()
+        (tmp_path / root / 'retained-profile-fixture').write_text(root)
+    reopened = Store(tmp_path)
+    assert reopened.data['setup']['browser']['sportsnet_rendering'] == 'vulkan'
+    assert Store(tmp_path).data == reopened.data
+    del reopened.data['setup']['browser']['sportsnet_rendering']
+    assert reopened.data == before
+    for root in ('browser', 'browser-sportsnet'):
+        assert (tmp_path / root / 'retained-profile-fixture').read_text() == root
+
+
+@pytest.mark.parametrize('value', [None, True, 1, [], {}, 'OpenGL', 'software', '--disable-gpu-sandbox'])
+def test_invalid_sportsnet_rendering_preserves_saved_state(tmp_path, value):
+    store = Store(tmp_path)
+    before = store.path.read_bytes()
+    settings = default_setup()
+    settings['browser']['sportsnet_rendering'] = value
+    with pytest.raises(UserError, match='Sportsnet graphics'):
+        store.setup(settings)
+    assert store.path.read_bytes() == before
+    # Both incomplete and completed persisted configurations reject bad data
+    # without rewriting the original settings file.
+    for complete in (False, True):
+        store.data['setup']['complete'] = complete
+        store.data['setup']['browser']['sportsnet_rendering'] = value
+        store.save()
+        invalid = store.path.read_bytes()
+        with pytest.raises(UserError, match='Sportsnet graphics'):
+            Store(tmp_path)
+        assert store.path.read_bytes() == invalid
+
+
+def test_legacy_setup_payload_defaults_to_vulkan_and_opengl_persists(tmp_path):
+    store = Store(tmp_path)
+    settings = default_setup()
+    del settings['browser']['sportsnet_rendering']
+    store.setup(settings)
+    assert store.data['setup']['browser']['sportsnet_rendering'] == 'vulkan'
+    settings['browser']['sportsnet_rendering'] = 'opengl'
+    store.setup(settings)
+    assert Store(tmp_path).data['setup']['browser']['sportsnet_rendering'] == 'opengl'
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('profile,running,closes', [('sportsnet', True, True), ('default', True, False), ('sportsnet', False, False)])
+async def test_sportsnet_rendering_save_closes_only_its_open_desktop(tmp_path, profile, running, closes):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    application = browser_proxy_application(tmp_path)
+    application.browser.profile, application.browser.running = profile, running
+    before = copy.deepcopy(application.store.data)
+    async def edit(value, expected):
+        request = SimpleNamespace(match_info={'action': 'update'}, json=AsyncMock(return_value={
+            'changes': {'browser': {'sportsnet_rendering': value}},
+            'expected': {'browser': {'sportsnet_rendering': expected}}}))
+        await application.setup(request)
+    await edit('opengl', 'vulkan')
+    assert application.browser.close.await_count == int(closes)
+    expected = copy.deepcopy(before)
+    expected['setup']['browser']['sportsnet_rendering'] = 'opengl'
+    assert application.store.data == expected
+    await edit('opengl', 'vulkan')  # Identical retry does not close again.
+    assert application.browser.close.await_count == int(closes)
+    with pytest.raises(UserError, match='another window'):
+        await edit('vulkan', 'vulkan')
+    assert application.browser.close.await_count == int(closes)
+    application.channels.refresh.assert_not_awaited()
+    application.ha.close.assert_not_awaited()
+    application.ha.start.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('busy', ['stream', 'pending', 'targets', 'pending_targets', 'tearing_down', 'recording', 'diagnostic'])
+async def test_sportsnet_rendering_save_blocks_all_media_before_close_or_save(tmp_path, busy):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    application = browser_proxy_application(tmp_path)
+    application.browser.profile = 'sportsnet'
+    if busy == 'recording':
+        application.recordings.current = object()
+    elif busy == 'diagnostic':
+        application.controller.require_no_diagnostic.side_effect = UserError('Wait for the diagnostic')
+    else:
+        setattr(application.controller, busy, object())
+    before = application.store.path.read_bytes()
+    request = SimpleNamespace(match_info={'action': 'update'}, json=AsyncMock(return_value={
+        'changes': {'browser': {'sportsnet_rendering': 'opengl'}},
+        'expected': {'browser': {'sportsnet_rendering': 'vulkan'}}}))
     with pytest.raises(UserError):
         await application.setup(request)
     assert application.store.path.read_bytes() == before
