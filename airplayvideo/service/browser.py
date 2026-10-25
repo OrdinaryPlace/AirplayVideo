@@ -24,7 +24,7 @@ BROWSER_VIDEO_STATUSES = frozenset({
 
 def child_environment():
     # In particular, never give a webpage/browser the Supervisor or MQTT secrets.
-    return {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "LD_LIBRARY_PATH") if key in os.environ}
+    return {key: os.environ[key] for key in ("PATH", "LANG", "LC_ALL", "LD_LIBRARY_PATH", "TZ") if key in os.environ}
 
 
 def vnc_key(value):

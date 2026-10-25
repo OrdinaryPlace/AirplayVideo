@@ -17,6 +17,7 @@ from service.model import default_setup, UserError
 
 async def main():
     os.umask(0o077)
+    os.environ['TZ'] = 'America/New_York'
     reports = asyncio.Queue()
     latest_video = {}
     async def report(request):
@@ -31,7 +32,7 @@ async def main():
         <form id="form"><input id="field" type="password" autofocus style="position:fixed;left:20vw;top:20vh;width:60vw;height:50vh"><button>Submit</button></form>
         <script>
         const prior=localStorage.getItem('retained');localStorage.setItem('retained','yes');
-        const report=event=>fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:location.pathname,event,webdriver:navigator.webdriver,value:field.value,retained:prior,fullscreen_element:!!document.fullscreenElement})});
+        const report=event=>fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:location.pathname,event,webdriver:navigator.webdriver,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,value:field.value,retained:prior,fullscreen_element:!!document.fullscreenElement})});
         addEventListener('pageshow',()=>{field.focus();requestAnimationFrame(()=>requestAnimationFrame(()=>report('ready')))});
         field.addEventListener('input',()=>report('input'));
         form.addEventListener('submit',e=>{e.preventDefault();report('submitted')});
@@ -116,6 +117,8 @@ async def main():
             while True:
                 result = await reports.get()
                 assert result['webdriver'] is False, 'Chrome must be an ordinary browser'
+                if result['path'] != '/watch':
+                    assert result['timezone'] == 'America/New_York', 'Chrome lost the configured timezone'
                 assert result['event'] != 'submitted', 'Paste must never submit a form'
                 if result['path'] == path and result['event'] == event and (value is None or value == result['value']):
                     return result
