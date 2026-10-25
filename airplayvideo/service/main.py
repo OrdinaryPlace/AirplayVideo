@@ -234,8 +234,13 @@ class Application:
                 settings = (patch_setup(previous, data.get("changes"), data.get("expected"))
                             if action == "update" else validate_setup(data))
                 route_changed = effective_browser_proxy(previous) != effective_browser_proxy(settings)
+                rendering_changed = (previous["browser"].get("sportsnet_rendering", "vulkan") !=
+                                     settings["browser"]["sportsnet_rendering"])
                 if route_changed:
                     self.browser_vpn.require_idle()
+                if rendering_changed:
+                    check(not (self.controller.targets or self.controller.pending_targets),
+                          "Stop playback before changing Sportsnet graphics")
                 self.controller.video_encoder(settings)
                 for tuner in settings["hdhomerun"]["devices"]:
                     if not any(t["id"] == tuner["id"] and t["address"] == tuner["address"] for t in previous["hdhomerun"]["devices"]):
@@ -244,6 +249,7 @@ class Application:
                 self.require_idle()
                 if (previous["video"]["resolution"] != settings["video"]["resolution"] or
                         route_changed or
+                        rendering_changed and self.browser.running and self.browser.profile == "sportsnet" or
                         previous["modes"]["browser"] and not settings["modes"]["browser"]):
                     await self.browser.close()
                 self.store.setup(settings)

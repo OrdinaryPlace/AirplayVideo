@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.26
+
+- Add a reversible Vulkan/OpenGL graphics choice for the separate Sportsnet
+  browser profile under Source defaults. Existing installations retain Vulkan;
+  changing it while idle closes Sportsnet normally and preserves sign-in.
+- Retain the default browser's graphics path, VPN route, sandbox, output and
+  audio settings. Frame-stage measurements can compare rendering choices
+  without treating requested graphics flags as proof of hardware acceleration.
+
 ## 0.2.25
 
 - Measure an already open browser's capture stages without connecting a TV or

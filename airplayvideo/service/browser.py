@@ -9,7 +9,7 @@ import signal
 import struct
 import time
 from Cryptodome.Cipher import DES
-from .model import UserError, check, browser_url, browser_profile, effective_browser_proxy
+from .model import UserError, check, browser_url, browser_profile, effective_browser_proxy, validate_sportsnet_rendering
 from .network import unused_loopback_port
 from .companion import Companion, CompanionVersionMismatch, install as install_companion
 from .browser_gpu import chrome_gpu_arguments
@@ -49,6 +49,7 @@ class Browser:
         self.chrome_process = None
         self.youtube_task = None
         self.youtube_status = ""
+        self.rendering = "vulkan"
         self._select_profile("default")
 
     def _select_profile(self, profile):
@@ -139,13 +140,16 @@ class Browser:
         async with self.lock:
             requested = self.profile if profile is None else profile
             check(requested in {"default", "sportsnet"}, "Invalid browser profile")
-            if requested != self.profile:
+            rendering = (validate_sportsnet_rendering(setup["browser"].get("sportsnet_rendering", "vulkan"))
+                         if requested == "sportsnet" else "vulkan")
+            if requested != self.profile or rendering != self.rendering:
                 self.cancel_youtube()
                 async with self.control_lock:
                     # Close and flush the old Chrome/desktop before changing
                     # any paths used by its companion, display or audio.
                     await self._close_after_start_failure(graceful=True)
                     self._select_profile(requested)
+                    self.rendering = rendering
             for attempt in range(2):
                 try:
                     await self._start_once(setup)
@@ -197,7 +201,7 @@ class Browser:
             self.companion = Companion(self.root, identity)
             await self.companion.start()
             self.environment.update(AIRPLAYVIDEO_COMPANION_ID=identity, AIRPLAYVIDEO_COMPANION_SOCKET=str(self.companion.path))
-            self.chrome_process = await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--start-fullscreen", *chrome_gpu_arguments(), *chrome_proxy_arguments(effective_browser_proxy(setup)), "about:blank")
+            self.chrome_process = await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--start-fullscreen", *chrome_gpu_arguments(rendering=self.rendering), *chrome_proxy_arguments(effective_browser_proxy(setup)), "about:blank")
             await self.companion.wait_ready()
             self.running = True
             self.url = ""
