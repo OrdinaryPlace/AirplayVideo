@@ -103,7 +103,11 @@ function collectStep(validate = true) {
   } else if (step === 1) {
     if ($('homeUrl')) draft.browser.home_url = $('homeUrl').value;
     if ($('youtubeQuality')) draft.browser.youtube_quality = $('youtubeQuality').value;
-    if ($('browserProxy')) draft.browser.http_proxy = $('browserProxy').value;
+    if ($('browserProxy')) {
+      draft.browser.http_proxy = $('browserProxy').value;
+      if (!draft.browser.http_proxy.trim()) draft.browser.http_proxy_enabled = false;
+    }
+    if ($('vpnName')) draft.browser.vpn_name = $('vpnName').value;
     if ($('defaultTitle')) draft.generated = readGenerated('default');
     if (validate && draft.modes.hdhomerun && !draft.hdhomerun.devices.length) throw new Error('Find or add your HDHomeRun first.');
   } else if (step === 3) {
@@ -196,7 +200,7 @@ function renderStep() {
       <label class="mode-card"><input id="enableGenerated" type="checkbox" ${checked(draft.modes.generated)}><div><h2>Generated video</h2><p>Send an animated title and tagline, with a clock, countdown, or neither. Set its length or supply custom text from an automation.</p></div></label>
     </div><p class="muted">Enable any combination. Playback uses one source at a time.</p>`;
   } else if (step === 1) {
-    $('stepContent').innerHTML = `${editing || draft.modes.browser ? `<section class="setup-section"><h2>Browser defaults</h2><label for="homeUrl">Home page</label><input id="homeUrl" type="url" required value="${escape(draft.browser.home_url)}"><label for="youtubeQuality">YouTube quality preference</label><select id="youtubeQuality"><option value="1080p" ${selected(draft.browser.youtube_quality,'1080p')}>1080p</option><option value="720p" ${selected(draft.browser.youtube_quality,'720p')}>720p</option><option value="auto" ${selected(draft.browser.youtube_quality,'auto')}>YouTube automatic</option></select><p class="muted">The browser keeps its own sign-ins and site data. Sportsnet sign-ins are saved separately. Available video quality depends on the source.</p><label for="browserProxy">VPN gateway · optional</label><input id="browserProxy" type="url" value="${escape(draft.browser.http_proxy || '')}" placeholder="http://vpn-gateway:8888"><p class="muted">Leave blank for a direct connection. A gateway routes every browser page through its VPN; AirPlay stays on your LAN. Disable browser VPN extensions when using a gateway. Saving a changed gateway closes the browser and preserves its sign-ins.</p><button id="setupBrowser" type="button" class="primary">Open browser to sign in</button><p class="muted">Use the full screen preview and A+ to make sign-in fields easier to read. You can sign in before finishing Setup.</p></section>` : ''}
+    $('stepContent').innerHTML = `${editing || draft.modes.browser ? `<section class="setup-section"><h2>Browser defaults</h2><label for="homeUrl">Home page</label><input id="homeUrl" type="url" required value="${escape(draft.browser.home_url)}"><label for="youtubeQuality">YouTube quality preference</label><select id="youtubeQuality"><option value="1080p" ${selected(draft.browser.youtube_quality,'1080p')}>1080p</option><option value="720p" ${selected(draft.browser.youtube_quality,'720p')}>720p</option><option value="auto" ${selected(draft.browser.youtube_quality,'auto')}>YouTube automatic</option></select><p class="muted">The browser keeps its own sign-ins and site data. Sportsnet sign-ins are saved separately. Available video quality depends on the source.</p><label for="browserProxy">VPN gateway · optional</label><input id="browserProxy" type="url" value="${escape(draft.browser.http_proxy || '')}" placeholder="http://vpn-gateway:8888"><label for="vpnName">VPN control name</label><input id="vpnName" maxlength="64" value="${escape(draft.browser.vpn_name || 'Browser VPN')}"><p class="muted">The VPN switch in Playback and Home Assistant routes browser pages through this gateway when on, or directly when off. AirPlay stays on your LAN. Disable browser VPN extensions when using a gateway. Changing the connection closes the browser and preserves its sign-ins.</p><button id="setupBrowser" type="button" class="primary">Open browser to sign in</button><p class="muted">Use the full screen preview and A+ to make sign-in fields easier to read. You can sign in before finishing Setup.</p></section>` : ''}
       ${editing || draft.modes.hdhomerun ? `<section class="setup-section"><div class="card-header"><h2>HDHomeRun devices</h2><button id="findTuners" type="button">Find HDHomeRun</button></div><p class="muted">Discovery reads the channel list. It does not start a stream or run an antenna scan.</p><div id="configuredTuners" class="device-list"></div><div id="foundTuners" class="device-list"></div><details><summary>Enter a device address</summary><div class="inline-form"><div><label for="tunerAddress">HDHomeRun IPv4 address</label><input id="tunerAddress" placeholder="192.168.x.x" inputmode="decimal"></div><button id="probeTuner" type="button">Connect</button></div></details></section>` : ''}`;
     if (editing || draft.modes.generated) {
       $('stepContent').insertAdjacentHTML('beforeend',`<section class="setup-section"><h2>Generated video defaults</h2>${generatedFields('default',draft.generated)}<p class="muted">These are the starting values in Playback and for the Home Assistant Play generated video button. Automations can override any value.</p></section>`);
@@ -207,7 +211,7 @@ function renderStep() {
       draft.browser.youtube_quality = $('youtubeQuality').value;
       draft.browser.http_proxy = $('browserProxy').value;
       if (draft.browser.http_proxy.trim() !== (state.setup.browser.http_proxy || '')) throw new Error('Save the VPN gateway before opening the browser.');
-      state = await api('api/setup/open_browser', {url:draft.browser.home_url,expected_http_proxy:state.setup.browser.http_proxy || ''});
+      state = await api('api/setup/open_browser', {url:draft.browser.home_url,expected_http_proxy:state.setup.browser.http_proxy || '',expected_http_proxy_enabled:!!state.setup.browser.http_proxy_enabled});
       renderPreview();
       $('previewSection').scrollIntoView({behavior:'smooth',block:'start'});
     }, $('setupBrowser'));
@@ -348,7 +352,7 @@ $('pairDialog').addEventListener('cancel',event=>{event.preventDefault();cancelP
 function requestSource(){
   if(mode==='hdhomerun')return {mode,channel:$('channelSelect').value};
   if(mode==='generated')return {mode,generated:readGenerated('generated')};
-  return {mode:'browser',browser_source:$('browserKind').value,page:$('pageSelect').value,url:$('sourceUrl').value.trim(),delivery:$('youtubeDelivery').value,native_resolution:$('nativeQuality').value,expected_http_proxy:state.setup.browser.http_proxy || ''};
+  return {mode:'browser',browser_source:$('browserKind').value,page:$('pageSelect').value,url:$('sourceUrl').value.trim(),delivery:$('youtubeDelivery').value,native_resolution:$('nativeQuality').value,expected_http_proxy:state.setup.browser.http_proxy || '',expected_http_proxy_enabled:!!state.setup.browser.http_proxy_enabled};
 }
 
 function renderChannels(){
@@ -373,9 +377,34 @@ function renderBrowserStatus(){
   $('browserVideoStatus').hidden=!$('browserVideoStatus').textContent;
 }
 
+function renderBrowserVpn(){
+  const vpn=state.browser_vpn;
+  $('browserVpnControl').hidden=!vpn?.configured;
+  $('browserVpnName').textContent=vpn?.name || 'Browser VPN';
+  $('browserVpnEnabled').checked=!!vpn?.enabled;
+  $('browserVpnRoute').textContent=vpn?.enabled?'On':'Off';
+  $('browserVpnHelp').textContent=!vpn?.enabled?'Browser connects directly.':vpn.gateway_reachable===false?'Gateway unavailable; browser remains on the VPN route.':'Browser uses the VPN gateway.';
+}
+
+function renderCapitals(){
+  const caps=state.capitals || {}, catalog=caps.catalog || {};
+  const labels={idle:'Ready to check Sportsnet.',checking:'Checking for a live Capitals broadcast…',started:'Live Capitals playback requested.',expired:'No live Capitals broadcast was found during the check.',error:'The live-game check needs attention.'};
+  $('capitalsStatus').textContent=caps.error || labels[caps.status] || labels.idle;
+  const game=catalog.live_candidates?.[0] || catalog.upcoming?.[0];
+  let description=game?.title || '';
+  if(game?.start){
+    const date=new Date(game.start);
+    if(Number.isFinite(date.getTime())) description+=' · '+date.toLocaleString(undefined,{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
+  }
+  $('capitalsGame').textContent=description;
+  $('capitalsCancel').hidden=caps.status!=='checking';
+}
+
 function renderUsage(){
   if(!state)return;
   renderRecordings();
+  renderBrowserVpn();
+  renderCapitals();
   if(!state.setup.modes[mode])mode=Object.keys(state.setup.modes).find(key=>state.setup.modes[key]) || 'browser';
   stableMarkup($('modeSwitch'),Object.entries(state.setup.modes).filter(([,enabled])=>enabled).map(([kind])=>`<button class="${mode===kind?'selected':''}" data-mode="${kind}">${modeNames[kind]}</button>`).join(''));
   $('modeSwitch').hidden=Object.values(state.setup.modes).filter(Boolean).length<2;
@@ -492,6 +521,10 @@ function browserKindChanged(){
 function updateButtons(){
   if(!state)return;
   const measuring=!!state.diagnostics?.active;
+  $('browserVpnEnabled').disabled=busy||measuring||!!state.recordings?.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase)||!state.setup.complete;
+  $('capitalsCheck').disabled=busy||measuring||!!state.recordings?.active||!chosenTVs.size||!state.setup.complete||!state.browser_vpn?.configured;
+  $('capitalsRefresh').disabled=busy;
+  $('capitalsCancel').disabled=busy;
   const unavailable=busy||measuring||!!state.recordings?.active||state.runtime.browser_open||!!state.runtime.targets.length||['preparing','connecting','stopping'].includes(state.runtime.phase)||!state.setup.complete;
   $('measureSync').disabled=unavailable;
   $('measureSyncTV').disabled=unavailable||!chosenTVs.size;
@@ -557,6 +590,10 @@ $('measureSyncTV').onclick=()=>act('measure_sync',{receivers:[...chosenTVs]});
 $('testNativeVideo').onclick=()=>act('test_native_video',{receivers:[...chosenTVs]});
 $('cancelSync').onclick=()=>act('cancel_sync',{},true);
 $('openBrowser').onclick=()=>act('open_browser',requestSource());
+$('browserVpnEnabled').onchange=()=>act('browser_vpn',{enabled:$('browserVpnEnabled').checked,expected_http_proxy:state.setup.browser.http_proxy || '',expected_http_proxy_enabled:!!state.setup.browser.http_proxy_enabled});
+$('capitalsCheck').onclick=()=>act('capitals_live',{receivers:[...chosenTVs]});
+$('capitalsRefresh').onclick=()=>act('capitals_refresh');
+$('capitalsCancel').onclick=()=>act('capitals_cancel');
 $('closeBrowser').onclick=()=>act('close_browser');
 $('browserKind').onchange=browserKindChanged;
 $('youtubeDelivery').onchange=browserKindChanged;

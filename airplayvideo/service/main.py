@@ -11,8 +11,10 @@ import time
 import uuid
 import aiohttp
 from aiohttp import web
-from .model import Store, VERSION, UserError, check, identifier, local_address, validate_setup, patch_setup, atomic_json, check_browser_connection
+from .model import Store, VERSION, UserError, check, identifier, local_address, validate_setup, patch_setup, atomic_json, check_browser_connection, effective_browser_proxy
 from .browser import Browser
+from .browser_vpn import BrowserVPN
+from .capitals import CapitalsLauncher
 from .controller import PairingEngine, Controller
 from .hdhomerun import Channels, inspect as inspect_tuner, discover as discover_tuners
 from .mqtt import HomeAssistant
@@ -65,9 +67,13 @@ class Application:
         self.tickets = {}
         self.preview_sockets = set()
         self.configuration_lock = asyncio.Lock()
+        self.browser_vpn = BrowserVPN(store, self.browser, self.controller, self.configuration_lock, self.ha.publish_state)
+        self.ha.browser_vpn = self.browser_vpn
+        self.capitals = CapitalsLauncher(store, self.controller, self.browser_vpn, self.configuration_lock, self.ha.publish_state)
+        self.controller.capitals = self.ha.capitals = self.capitals
 
     def state(self):
-        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "recordings": self.recordings.state(), "diagnostics": self.diagnostics.state(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}
+        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "browser_vpn": self.browser_vpn.state(), "capitals": self.capitals.state(), "recordings": self.recordings.state(), "diagnostics": self.diagnostics.state(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}
 
     def require_idle(self):
         self.controller.require_no_diagnostic()
@@ -92,8 +98,12 @@ class Application:
         if self.store.data["setup"]["modes"]["hdhomerun"]:
             await self.channels.refresh()
         await self.ha.start()
+        self.browser_vpn.start()
+        self.capitals.start()
 
     async def close(self):
+        await self.capitals.close()
+        await self.browser_vpn.close()
         for ws in list(self.preview_sockets):
             await ws.close()
         await self.ha.close()
@@ -109,7 +119,15 @@ class Application:
         data = await request.json()
         action = request.match_info["action"]
         controller = self.controller
-        if action == "measure_sync":
+        if action == "browser_vpn":
+            await self.browser_vpn.set_enabled(data)
+        elif action == "capitals_live":
+            await self.capitals.kick(data)
+        elif action == "capitals_cancel":
+            await self.capitals.cancel()
+        elif action == "capitals_refresh":
+            await self.capitals.refresh()
+        elif action == "measure_sync":
             await self.diagnostics.start({**data, 'kind': 'sync'})
         elif action == "test_native_video":
             await self.diagnostics.start({**data, 'kind': 'native'})
@@ -201,6 +219,9 @@ class Application:
                 previous = self.store.data["setup"]
                 settings = (patch_setup(previous, data.get("changes"), data.get("expected"))
                             if action == "update" else validate_setup(data))
+                route_changed = effective_browser_proxy(previous) != effective_browser_proxy(settings)
+                if route_changed:
+                    self.browser_vpn.require_idle()
                 self.controller.video_encoder(settings)
                 for tuner in settings["hdhomerun"]["devices"]:
                     if not any(t["id"] == tuner["id"] and t["address"] == tuner["address"] for t in previous["hdhomerun"]["devices"]):
@@ -208,10 +229,11 @@ class Application:
                         check(verified["id"] == tuner["id"], "A tuner identity changed; find the device again")
                 self.require_idle()
                 if (previous["video"]["resolution"] != settings["video"]["resolution"] or
-                        previous["browser"].get("http_proxy", "") != settings["browser"]["http_proxy"] or
+                        route_changed or
                         previous["modes"]["browser"] and not settings["modes"]["browser"]):
                     await self.browser.close()
                 self.store.setup(settings)
+                self.browser_vpn.refresh()
                 if settings["modes"]["browser"] and not self.store.data["pages"]:
                     page = self.store.save_page({"name": "Home", "url": settings["browser"]["home_url"]})
                     for receiver in self.store.data["receivers"]:

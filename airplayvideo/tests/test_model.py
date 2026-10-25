@@ -94,6 +94,7 @@ def browser_proxy_application(tmp_path):
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, Mock
     from service.main import Application
+    from service.browser_vpn import BrowserVPN
     store = Store(tmp_path)
     store.setup(default_setup())
     store.save_page({'name': 'Keep me', 'url': 'https://example.com/'})
@@ -101,11 +102,13 @@ def browser_proxy_application(tmp_path):
     application.store = store
     application.configuration_lock = asyncio.Lock()
     application.controller = SimpleNamespace(lock=asyncio.Lock(), stream=None, pending=None,
-        tearing_down=False, require_no_diagnostic=Mock(), video_encoder=Mock())
+        targets=set(), pending_targets=set(), tearing_down=False, require_no_diagnostic=Mock(), video_encoder=Mock())
     application.recordings = SimpleNamespace(current=None)
+    application.controller.recordings = application.recordings
     application.browser = SimpleNamespace(close=AsyncMock())
     application.channels = SimpleNamespace(rows=[], refresh=AsyncMock())
     application.ha = SimpleNamespace(close=AsyncMock(), start=AsyncMock(), refresh=Mock())
+    application.browser_vpn = BrowserVPN(store, application.browser, application.controller, application.configuration_lock)
     application.state = store.public
     return application
 
@@ -118,8 +121,8 @@ async def test_browser_proxy_edit_closes_browser_only_when_connection_changes(tm
     before = copy.deepcopy(application.store.data)
     async def edit(value, expected):
         request = SimpleNamespace(match_info={'action': 'update'}, json=AsyncMock(return_value={
-            'changes': {'browser': {'http_proxy': value}},
-            'expected': {'browser': {'http_proxy': expected}}}))
+            'changes': {'browser': {'http_proxy': value, 'http_proxy_enabled': bool(value)}},
+            'expected': {'browser': {'http_proxy': expected, 'http_proxy_enabled': bool(expected)}}}))
         return await application.setup(request)
     proxy = 'http://016c10d5-surfshark-gateway:8888'
     await edit(proxy, '')

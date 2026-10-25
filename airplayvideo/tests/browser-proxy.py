@@ -129,6 +129,7 @@ async def main():
         await proxy.start()
         setup = default_setup()
         setup['browser']['http_proxy'] = f'http://127.0.0.1:{proxy.port}'
+        setup['browser']['http_proxy_enabled'] = True
         with tempfile.TemporaryDirectory() as directory:
             Path(directory).chmod(0o755)
             async with aiohttp.ClientSession() as session, contextlib.AsyncExitStack() as cleanup:

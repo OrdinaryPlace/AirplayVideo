@@ -32,6 +32,10 @@
           <div class="card-header"><h1>What to play</h1><span id="runtimeBadge" class="badge">Idle</span></div>
           <div id="modeSwitch" class="segmented" aria-label="Source mode"></div>
           <div id="browserSource">
+            <div id="browserVpnControl" class="vpn-control" hidden>
+              <div class="vpn-control-row"><label class="check-row"><input id="browserVpnEnabled" type="checkbox" role="switch" aria-describedby="browserVpnHelp"><span id="browserVpnName">Browser VPN</span></label><span id="browserVpnRoute" class="badge">Off</span></div>
+              <p id="browserVpnHelp" class="muted tight" role="status"></p>
+            </div>
             <label for="browserKind">Source</label><select id="browserKind"><option value="page">Saved page</option><option value="youtube">YouTube video</option><option value="watch_later">Watch Later</option><option value="url">Web address</option></select>
             <div id="savedPageFields"><div class="label-row"><label for="pageSelect">Page</label><button id="managePages" class="text-button">Manage pages</button></div><select id="pageSelect"></select></div>
             <div id="urlFields" hidden><label id="urlLabel" for="sourceUrl">Video link</label><input id="sourceUrl" type="url" autocomplete="off" placeholder="https://www.youtube.com/watch?v=…"></div>
@@ -41,6 +45,13 @@
               <div id="nativeQualityFields"><label for="nativeQuality">Video quality</label><select id="nativeQuality"><option value="best">Best available for the TV</option><option value="1080p">Up to 1080p</option><option value="720p">Up to 720p</option></select><p class="muted">Public videos play directly on one TV, from the beginning, at the source frame rate. Use Play and Stop here; seeking and long pauses are not supported yet.</p></div>
             </div>
             <button id="openBrowser" class="secondary">Open browser</button>
+            <details id="capitalsControl">
+              <summary>Live Capitals games</summary>
+              <p id="capitalsStatus" class="muted" role="status">Ready to check Sportsnet.</p>
+              <p id="capitalsGame" class="muted tight"></p>
+              <div class="play-actions"><button id="capitalsCheck">Check live game on selected TVs</button><button id="capitalsRefresh" class="text-button">Refresh games</button><button id="capitalsCancel" hidden>Stop checking</button></div>
+              <p class="muted">A live-game check waits up to 20 minutes, turns on the browser VPN, and switches the chosen TVs when Sportsnet reports a live Capitals broadcast. Scheduled games and replays are skipped.</p>
+            </details>
           </div>
           <div id="channelSource" hidden>
             <div class="label-row"><label for="channelSearch">Find a channel</label><button id="refreshChannels" class="text-button">Refresh</button></div>

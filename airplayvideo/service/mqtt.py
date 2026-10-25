@@ -26,6 +26,35 @@ def discovery_documents(store, channels):
         return json.dumps({"action": action, "receiver": receiver["id"], **values}, separators=(",", ":"))
 
     setup = store.data["setup"]
+    if setup["modes"]["browser"] and setup["browser"].get("http_proxy", ""):
+        device_id = "airplayvideo_" + installation + "_browser_vpn"
+        state = base + "/browser_vpn/state"
+        common = {"availability_topic": base + "/availability", "state_topic": state,
+                  "device": {"identifiers": [device_id], "name": "AirplayVideo browser",
+                             "manufacturer": "OrdinaryPlace", "model": "AirplayVideo", "sw_version": VERSION}}
+        documents[f"homeassistant/switch/{device_id}/routing/config"] = {
+            **common, "name": setup["browser"].get("vpn_name", "Browser VPN"),
+            "unique_id": device_id + "_routing", "icon": "mdi:vpn", "command_topic": base + "/command",
+            "payload_on": '{"action":"browser_vpn","enabled":true}',
+            "payload_off": '{"action":"browser_vpn","enabled":false}',
+            "state_on": "ON", "state_off": "OFF", "value_template": "{{ 'ON' if value_json.enabled else 'OFF' }}",
+            "json_attributes_topic": state,
+        }
+        capitals_id = "airplayvideo_" + installation + "_capitals"
+        capitals_state = base + "/capitals/state"
+        capitals_device = {"identifiers": [capitals_id], "name": "AirplayVideo Capitals",
+                           "manufacturer": "OrdinaryPlace", "model": "AirplayVideo", "sw_version": VERSION}
+        documents[f"homeassistant/sensor/{capitals_id}/status/config"] = {
+            "name": "Live game check", "unique_id": capitals_id + "_status", "icon": "mdi:hockey-puck",
+            "availability_topic": base + "/availability", "state_topic": capitals_state,
+            "value_template": "{{ value_json.status }}", "json_attributes_topic": capitals_state,
+            "device": capitals_device,
+        }
+        documents[f"homeassistant/button/{capitals_id}/cancel/config"] = {
+            "name": "Stop checking", "unique_id": capitals_id + "_cancel", "icon": "mdi:cancel",
+            "availability_topic": base + "/availability", "command_topic": base + "/command",
+            "payload_press": '{"action":"capitals_cancel"}', "device": capitals_device,
+        }
     for receiver in store.data["receivers"]:
         state = base + "/state/" + receiver["id"]
         common = {"command_topic": base + "/command"}
@@ -83,6 +112,8 @@ class HomeAssistant:
         self.pending = set()
         self.credentials_task = None
         self.closing = False
+        self.browser_vpn = None
+        self.capitals = None
 
     async def start(self):
         self.closing = False
@@ -145,6 +176,19 @@ class HomeAssistant:
 
     async def command(self, value):
         try:
+            if value.get("action") == "browser_vpn":
+                check(self.browser_vpn is not None, "Browser VPN controls are unavailable")
+                await self.browser_vpn.set_enabled(value)
+                self.publish_state()
+                return
+            if value.get("action") in {"capitals_live", "capitals_cancel"}:
+                check(self.capitals is not None, "Live game controls are unavailable")
+                if value["action"] == "capitals_live":
+                    await self.capitals.kick(value)
+                else:
+                    await self.capitals.cancel()
+                self.publish_state()
+                return
             if value.get("action") == "generated":
                 receivers = value.get("receivers", [value.get("receiver")])
                 # Explicit targets: an automation never adds an unrelated active TV.
@@ -210,6 +254,10 @@ class HomeAssistant:
         if not self.connected:
             return
         runtime = self.controller.status()
+        if self.browser_vpn is not None:
+            self.client.publish(self.base + "/browser_vpn/state", json.dumps(self.browser_vpn.state()), qos=1, retain=True)
+        if self.capitals is not None:
+            self.client.publish(self.base + "/capitals/state", json.dumps(self.capitals.state()), qos=1, retain=True)
         pages = {page["id"]: page["name"] for page in self.store.data["pages"]}
         channels = {row["id"]: row["label"] for row in self.channels.rows}
         for receiver in self.store.data["receivers"]:

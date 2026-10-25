@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, Mock
 import pytest
 
 from service.controller import Controller
+from service.browser_vpn import BrowserVPN
 from service.main import Application
 from service.model import Store, UserError, default_setup
 
@@ -25,6 +26,7 @@ def application(tmp_path):
     store = Store(tmp_path)
     settings = default_setup()
     settings["browser"]["http_proxy"] = PROXY
+    settings["browser"]["http_proxy_enabled"] = True
     store.setup(settings)
     store.save_page({"name": "Keep", "url": "https://example.invalid/"})
     store.data["receivers"] = [{"id": RECEIVER, "name": "Fixture TV", "slot": 0}]
@@ -36,7 +38,9 @@ def application(tmp_path):
     app.controller = Controller(store, None, browser, channels)
     app.configuration_lock = asyncio.Lock()
     app.recordings = SimpleNamespace(current=None)
+    app.controller.recordings = app.recordings
     app.ha = SimpleNamespace(close=AsyncMock(), start=AsyncMock(), refresh=Mock())
+    app.browser_vpn = BrowserVPN(store, browser, app.controller, app.configuration_lock)
     app.state = store.public
     return app
 
@@ -48,14 +52,34 @@ def request(action, fields):
 async def change_proxy(app, value):
     prior = app.store.data["setup"]["browser"]["http_proxy"]
     await app.setup(request("update", {
-        "changes": {"browser": {"http_proxy": value}},
-        "expected": {"browser": {"http_proxy": prior}},
+        "changes": {"browser": {"http_proxy": value, "http_proxy_enabled": bool(value)}},
+        "expected": {"browser": {"http_proxy": prior, "http_proxy_enabled": app.store.data["setup"]["browser"]["http_proxy_enabled"]}},
     }))
 
 
 def browser_request(expected=PROXY):
     return {"mode": "browser", "browser_source": "url", "url": "https://example.invalid/",
             "receivers": [RECEIVER], "expected_http_proxy": expected}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["setup", "preview", "play"])
+async def test_stale_enabled_choice_is_rejected_even_when_gateway_url_is_unchanged(application, operation):
+    app = application
+    await app.browser_vpn.set_enabled({"enabled": False})
+    value = browser_request() | {"expected_http_proxy_enabled": True}
+    before = copy.deepcopy(app.store.data)
+    if operation == "setup":
+        opening = app.setup(request("open_browser", value))
+    elif operation == "preview":
+        opening = app.controller.open_browser(value)
+    else:
+        opening = app.controller.play(value)
+    with pytest.raises(UserError, match="connection changed in another window"):
+        await opening
+    assert app.store.data == before
+    app.browser.navigate.assert_not_awaited()
+    assert app.controller.generation == 0 and not app.controller.targets
 
 
 @pytest.mark.asyncio
@@ -113,6 +137,7 @@ async def test_preview_compares_after_waiting_for_settings_lock(application):
         # An update already owning this shared lock changes the saved route.
         settings = copy.deepcopy(app.store.data["setup"])
         settings["browser"]["http_proxy"] = ""
+        settings["browser"]["http_proxy_enabled"] = False
         app.store.setup(settings)
     with pytest.raises(UserError, match="connection changed in another window"):
         await opening
@@ -141,7 +166,7 @@ async def test_native_youtube_ignores_browser_connection_expectation(application
     app.controller.play_native = AsyncMock()
     value = browser_request("http://private-user:private-password@invalid:8888") | {
         "browser_source": "youtube", "url": "https://www.youtube.com/watch?v=abcdefghijk",
-        "delivery": "native",
+        "delivery": "native", "expected_http_proxy_enabled": "invalid",
     }
     await app.controller.play(value)
     app.controller.play_native.assert_awaited_once()
@@ -168,7 +193,7 @@ async def test_ui_request_retains_its_snapshot_for_server_stale_window_check(app
     source = (Path(__file__).parents[1] / "web" / "app.js").read_text()
     function = re.search(r"^function requestSource\(\).*?^\}", source, re.M | re.S).group()
     harness = """
-const state={setup:{browser:{http_proxy:'http://fixture-surfshark-gateway:8888'}}};
+const state={setup:{browser:{http_proxy:'http://fixture-surfshark-gateway:8888',http_proxy_enabled:true}}};
 const mode='browser';
 const fields={browserKind:'url',pageSelect:'',sourceUrl:'https://example.invalid/',youtubeDelivery:'browser',nativeQuality:'best'};
 const $=id=>({value:fields[id]});
@@ -179,6 +204,7 @@ const $=id=>({value:fields[id]});
     import json
     value = json.loads(result.stdout)
     assert value["expected_http_proxy"] == PROXY
+    assert value["expected_http_proxy_enabled"] is True
     await change_proxy(application, "")
     with pytest.raises(UserError, match="connection changed in another window"):
         await application.controller.open_browser(value)

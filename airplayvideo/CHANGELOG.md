@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.2.23
+
+- Check public Sportsnet Capitals events on a Home Assistant game-start command.
+  Retry for up to 20 minutes, require a freshly verified live Capitals broadcast,
+  enable the browser VPN and launch only on explicitly selected TVs.
+- Preserve pending checks across app restarts, reject replays and ambiguous
+  matches, and deduplicate each game before issuing playback commands.
+
+- Add a named browser VPN switch to Playback and Home Assistant. Keep the saved
+  gateway while switching between its route and a direct browser connection.
+- Preserve the current route when upgrading. Route changes require idle playback,
+  close Chrome normally, and retain each browser profile and its sign-ins.
+- Reject stale route requests and retained MQTT commands. Gateway reachability is
+  reported separately from the selected route and never causes a direct fallback.
+
 ## 0.2.22
 
 - Keep Sportsnet sign-ins in a separate persistent browser profile while retaining the existing YouTube and other browser sessions.
