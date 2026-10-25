@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.22
+
+- Keep Sportsnet sign-ins in a separate persistent browser profile while retaining the existing YouTube and other browser sessions.
+- Switch profiles only while playback, recordings and measurements are idle; close the previous desktop before opening the requested profile.
+- Verify profile routing and capture guards, and extend the real Chrome fixture to check independent cookie/storage persistence and the retained companion identity.
+
 ## 0.2.21
 
 - Correct the runtime version label and check that it matches the app manifest, image label and latest changelog entry.

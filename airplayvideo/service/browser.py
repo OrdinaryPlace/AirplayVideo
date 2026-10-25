@@ -9,7 +9,7 @@ import signal
 import struct
 import time
 from Cryptodome.Cipher import DES
-from .model import UserError, check, browser_url
+from .model import UserError, check, browser_url, browser_profile
 from .network import unused_loopback_port
 from .companion import Companion, CompanionVersionMismatch, install as install_companion
 from .browser_gpu import chrome_gpu_arguments
@@ -34,7 +34,7 @@ def vnc_key(value):
 
 class Browser:
     def __init__(self, root, session):
-        self.root = Path(root) / "browser"
+        self.data_root = Path(root)
         self.session = session
         self.children = []
         self.running = False
@@ -49,6 +49,14 @@ class Browser:
         self.chrome_process = None
         self.youtube_task = None
         self.youtube_status = ""
+        self._select_profile("default")
+
+    def _select_profile(self, profile):
+        check(profile in {"default", "sportsnet"}, "Invalid browser profile")
+        # Fixed sibling roots preserve every existing default-profile path.
+        # Both roots retain the same parent-owned companion signing key.
+        self.profile = profile
+        self.root = self.data_root / ("browser-sportsnet" if profile == "sportsnet" else "browser")
         self.environment = child_environment()
         self.environment.update(LANG="C.UTF-8", LC_ALL="C.UTF-8", HOME=str(self.root), DISPLAY=":99.0", XAUTHORITY=str(self.root / "Xauthority"), XDG_RUNTIME_DIR=str(self.root / "runtime"), PULSE_SERVER="unix:" + str(self.root / "pulse.sock"), PULSE_COOKIE=str(self.root / "pulse-cookie"), PULSE_SINK="airplayvideo")
 
@@ -127,8 +135,17 @@ class Browser:
         finally:
             transport.close()
 
-    async def start(self, setup):
+    async def start(self, setup, profile=None):
         async with self.lock:
+            requested = self.profile if profile is None else profile
+            check(requested in {"default", "sportsnet"}, "Invalid browser profile")
+            if requested != self.profile:
+                self.cancel_youtube()
+                async with self.control_lock:
+                    # Close and flush the old Chrome/desktop before changing
+                    # any paths used by its companion, display or audio.
+                    await self._close_after_start_failure(graceful=True)
+                    self._select_profile(requested)
             for attempt in range(2):
                 try:
                     await self._start_once(setup)
@@ -266,7 +283,7 @@ class Browser:
 
     async def navigate(self, url, setup, youtube=False, watch_later=False):
         url = browser_url(url)
-        await self.start(setup)
+        await self.start(setup, profile=browser_profile(url))
         self.cancel_youtube()
         self.youtube_status = ""
         async with self.control_lock:

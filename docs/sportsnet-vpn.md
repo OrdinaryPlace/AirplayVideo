@@ -1,7 +1,7 @@
 # Sportsnet+ through a private VPN gateway
 
 AirplayVideo can open Sportsnet+ as a saved browser page. Its optional HTTP
-proxy setting lets the existing Chrome profile use a separate Surfshark VPN
+proxy setting lets Chrome use a separate Surfshark VPN
 gateway, while AirPlay discovery and delivery continue over the LAN.
 
 ```mermaid
@@ -45,6 +45,21 @@ networking. Changing the setting closes Chrome only while playback is idle.
 Save a page named **Sportsnet** for `https://watch.sportsnet.ca/`, open it through
 AirplayVideo, and sign in yourself. Use Sportsnet's own fullscreen player
 control; AirplayVideo's **Fullscreen video** helper is for YouTube.
+
+Sportsnet opens in its own persistent browser session. The original browser
+session, including YouTube sign-ins, stays in place. The app selects Sportsnet
+for initial addresses on exactly `sportsnet.ca`, `www.sportsnet.ca`,
+`watch.sportsnet.ca` and `account.sportsnet.ca`; normal sign-in redirects remain
+in that session. No cookies or site data are copied or cleared. Sign in again
+in the new Sportsnet session after upgrading; existing Sportsnet state in the
+original session is retained. The VPN gateway setting applies to both sessions.
+
+Only one browser desktop runs at a time. Stop playback and finish recordings or
+measurements before opening a page that switches sessions. The original private
+root remains `/data/browser`; Sportsnet uses `/data/browser-sportsnet`, with its
+own home, Chrome profile, display, audio and controls. Both use the existing
+parent-owned companion signing key. Setup's open preview preserves an already
+open sign-in instead of navigating it away.
 
 Check each Capitals game in the [NHL Game Finder](https://support.sportsnetplus.ca/hc/en-gb/articles/46381950833556-NHL-Game-Finder).
 Premium includes out-of-market hockey with regional restrictions; Wednesday

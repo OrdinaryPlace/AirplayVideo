@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.2.21"
+VERSION = "0.2.22"
 IDENTIFIER = re.compile(r"[a-f0-9]{32}\Z")
 
 
@@ -48,6 +48,14 @@ def browser_url(value):
     except ValueError as exc:
         raise UserError("Invalid page URL") from exc
     return value
+
+
+def browser_profile(value):
+    """Choose the private profile only for validated, exact Sportsnet hosts."""
+    host = urlsplit(browser_url(value)).hostname
+    return "sportsnet" if host in {
+        "sportsnet.ca", "www.sportsnet.ca", "watch.sportsnet.ca", "account.sportsnet.ca",
+    } else "default"
 
 
 def validate_browser_proxy(value):

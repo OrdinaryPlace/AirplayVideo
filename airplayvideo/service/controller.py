@@ -10,7 +10,7 @@ import uuid
 from urllib.parse import parse_qs, urlsplit
 import aiohttp
 from .browser import BROWSER_VIDEO_STATUSES, child_environment
-from .model import UserError, check, atomic_json, browser_url, youtube_url, identifier, validate_generated, check_browser_connection
+from .model import UserError, check, atomic_json, browser_url, browser_profile, youtube_url, identifier, validate_generated, check_browser_connection
 from .native_session import NativeSession
 
 
@@ -166,6 +166,16 @@ class Controller:
     def require_no_diagnostic(self):
         check(not self.diagnostics or not self.diagnostics.active, "Wait for the sync measurement to finish or cancel it")
 
+    def require_browser_profile(self, source):
+        """A profile switch restarts Chrome and must not disturb owned media."""
+        if source["kind"] != "browser" or source["profile"] == getattr(self.browser, "profile", "default"):
+            return
+        recording = self.recordings is not None and self.recordings.current is not None
+        diagnostic = self.diagnostics is not None and self.diagnostics.active
+        check(not (self.stream is not None or self.pending is not None or self.targets or
+                   self.pending_targets or self.tearing_down or recording or diagnostic),
+              "Stop playback and wait for recordings or measurements to finish before switching browser profiles")
+
     def status(self):
         phase = "stopping" if self.phase == "idle" and self.tearing_down else self.phase
         browser_status = getattr(self.browser, "youtube_status", "")
@@ -294,7 +304,8 @@ class Controller:
         # settings updates. Reject stale UI intent before any browser, stream,
         # receiver, or generation state can change. Native YouTube returns above.
         check_browser_connection(request, self.store.data["setup"])
-        return {"kind": "browser", "key": "browser", "label": label, "url": url, "page_id": request.get("page"), "browser_source": kind}, {"kind": "browser", "pulse": "airplayvideo.monitor"}
+        profile = browser_profile(url)
+        return {"kind": "browser", "key": "browser:" + profile, "profile": profile, "label": label, "url": url, "page_id": request.get("page"), "browser_source": kind}, {"kind": "browser", "pulse": "airplayvideo.monitor"}
 
     async def open_browser(self, request):
         async with self.lock:
@@ -302,6 +313,7 @@ class Controller:
             self.require_mode("browser")
             request = {**request, "mode": "browser", "delivery": "browser"}
             source, _ = self.requested_source(request)
+            self.require_browser_profile(source)
             prior_error, generation = self.error, self.generation
             inactive = not (self.stream or self.pending or self.targets or self.tearing_down)
             await self.browser.navigate(source["url"], self.store.data["setup"], source["browser_source"] == "youtube", source["browser_source"] == "watch_later")
@@ -327,6 +339,7 @@ class Controller:
             if add:
                 target |= self.targets
             source, input_config = self.requested_source(request)
+            self.require_browser_profile(source)
             if source["kind"] == "youtube":
                 check(len(target) == 1, "Direct YouTube video currently plays on one TV at a time")
                 check(self.store.data["setup"]["audio"]["enabled"],
@@ -352,10 +365,11 @@ class Controller:
                     # An explicit Play must open the requested source, including
                     # after a separate preview navigation or an uncertain ACK.
                     joining_current = add and same_source and source.get("url") == self.source.get("url")
-                    if not self.browser.running or (not joining_current and source.get("url") != getattr(self.browser, "url", "")):
+                    if (not self.browser.running or source["profile"] != getattr(self.browser, "profile", "default")
+                            or (not joining_current and source.get("url") != getattr(self.browser, "url", ""))):
                         await self.browser.navigate(source["url"], self.store.data["setup"], source["browser_source"] == "youtube", source["browser_source"] == "watch_later")
                     else:
-                        await self.browser.start(self.store.data["setup"])
+                        await self.browser.start(self.store.data["setup"], profile=source["profile"])
                     input_config["display"] = self.browser.environment["DISPLAY"]
                 check(generation == self.generation, "Playback was cancelled")
                 if not same_source:
