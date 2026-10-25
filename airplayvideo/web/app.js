@@ -403,6 +403,7 @@ function renderCapitals(){
 function renderUsage(){
   if(!state)return;
   renderRecordings();
+  renderFrameStages();
   renderBrowserVpn();
   renderCapitals();
   if(!state.setup.modes[mode])mode=Object.keys(state.setup.modes).find(key=>state.setup.modes[key]) || 'browser';
@@ -459,6 +460,48 @@ function cadenceNumber(value,digits=1){
   return typeof value==='number'&&Number.isFinite(value)&&value>=0?value.toFixed(digits):'—';
 }
 
+function frameStageBlockReason(){
+  const runtime=state.runtime||{};
+  if(!state.setup?.complete)return 'Finish Setup before measuring.';
+  const mediaBusy=typeof runtime.media_busy==='boolean'?runtime.media_busy:runtime.phase!=='idle'||runtime.source||runtime.stream||runtime.pending||runtime.targets?.length||runtime.pending_targets?.length;
+  if(mediaBusy||state.diagnostics?.active||state.recordings?.active||state.recordings?.analysis?.status==='running')return 'Stop playback, recordings and other measurements before measuring.';
+  if(!runtime.browser_open)return 'Open the browser on the content you want to measure first.';
+  return '';
+}
+
+function frameStagesMarkup(report){
+  if(!report||report.version!==1)return '';
+  const duration=typeof report.duration_seconds==='number'&&Number.isFinite(report.duration_seconds)&&report.duration_seconds>0?report.duration_seconds:null;
+  const accepted=typeof report.gate?.accepted==='number'&&Number.isFinite(report.gate.accepted)&&report.gate.accepted>=0?report.gate.accepted:null;
+  const acceptedFps=duration!==null&&accepted!==null?accepted/duration:null;
+  const regions=['center','left','right'].map(name=>{
+    const region=Array.isArray(report.raw_picture?.regions)?report.raw_picture.regions.find(entry=>entry?.name===name):null;
+    if(!region)return '';
+    const rows=Array.isArray(region.thresholds)?region.thresholds.filter(row=>[1,2,4].includes(row?.luma_delta)&&[0.005,0.02].includes(row?.changed_fraction)&&typeof row.updates_per_second==='number'&&Number.isFinite(row.updates_per_second)&&row.updates_per_second>=0):[];
+    const rates=rows.map(row=>row.updates_per_second),holds=rows.map(row=>row.longest_hold_ms).filter(value=>typeof value==='number'&&Number.isFinite(value)&&value>=0);
+    const low=rates.length?Math.min(...rates):null,high=rates.length?Math.max(...rates):null;
+    const range=rates.length?cadenceNumber(low)+(low===high?'':'–'+cadenceNumber(high)):'—';
+    return `<div><dt>${{center:'Center',left:'Left',right:'Right'}[name]}</dt><dd><strong>${cadenceNumber(region.exact_updates_per_second)}/s</strong> exact sampled changes<small>${cadenceNumber(region.exact_updates,0)} changes · longest hold ${cadenceNumber(region.longest_exact_hold_ms,0)} ms</small><small>Threshold range ${range}/s · longest hold ${holds.length?cadenceNumber(Math.max(...holds),0):'—'} ms</small></dd></div>`;
+  }).join('');
+  const timings=[['conversion','Conversion'],['upload','GPU upload'],['encode','Encode'],['observation','Picture observation']].map(([key,label])=>{
+    const timing=report.timings_ms?.[key];
+    const measured=typeof timing?.count==='number'&&Number.isFinite(timing.count)&&timing.count>0;
+    return `<tr><th scope="row">${label}</th><td>${cadenceNumber(measured?timing.mean:null,2)}</td><td>${cadenceNumber(measured?timing.p95:null,2)}</td><td>${cadenceNumber(measured?timing.max:null,2)}</td></tr>`;
+  }).join('');
+  return `<section class="picture-cadence frame-stage-result" aria-label="Last completed frame-stage measurement"><p class="muted tight">Last completed measurement · ${cadenceNumber(report.duration_seconds)} s after ${cadenceNumber(report.warmup_seconds)} s warmup · requested ${cadenceNumber(report.requested_fps,0)} fps</p><dl class="cadence-metrics frame-stage-metrics"><div><dt>Raw capture</dt><dd><strong>${cadenceNumber(report.capture?.fps)} fps</strong><small>${cadenceNumber(report.capture?.frames,0)} frames</small></dd></div><div><dt>Gate accepted</dt><dd><strong>${cadenceNumber(acceptedFps)} fps</strong><small>${cadenceNumber(report.gate?.accepted,0)} accepted · ${cadenceNumber(report.gate?.rejected,0)} rejected</small></dd></div><div><dt>Converted</dt><dd><strong>${cadenceNumber(report.converted?.fps)} fps</strong><small>${cadenceNumber(report.converted?.frames,0)} frames</small></dd></div><div><dt>Encoded output</dt><dd><strong>${cadenceNumber(report.encoded?.fps)} fps</strong><small>${cadenceNumber(report.encoded?.frames,0)} frames</small></dd></div></dl><p class="muted tight">Raw capture PTS gaps: p95 ${cadenceNumber(report.capture?.pts?.p95_ms)} ms · max ${cadenceNumber(report.capture?.pts?.max_ms)} ms · ${cadenceNumber(report.capture?.nonmonotonic_pts,0)} nonmonotonic</p><p class="muted tight">Pre-encode picture samples · accepted converted luma</p>${regions?`<dl class="frame-stage-regions">${regions}</dl>`:''}<table class="frame-stage-timings"><caption>Stage call times · milliseconds</caption><thead><tr><th scope="col">Stage</th><th scope="col">Mean</th><th scope="col">P95</th><th scope="col">Max</th></tr></thead><tbody>${timings}</tbody></table><p class="muted tight">Small count differences can occur at measurement-window edges. Encode timing includes packet handling, not hardware completion latency.</p><p class="muted tight">Raw sampled pixel changes are not source frame identities. Static scenes, sampling and thresholds affect rates. These results do not measure decoded video fps or TV presentation.</p></section>`;
+}
+
+function renderFrameStages(){
+  const probe=state.frame_probe||{},running=probe.status==='running';
+  const labels={running:'Measuring 15 seconds… No TVs are started and no recording is saved.',complete:'Measurement complete. Numeric results are below.',cancelled:'Frame-stage measurement cancelled.'};
+  $('frameStagesStatus').textContent=probe.status==='error'?(probe.error||'Frame-stage measurement could not finish.'):['running','complete','cancelled'].includes(probe.status)?labels[probe.status]:frameStageBlockReason();
+  $('measureFrameStages').disabled=busy||running||!!frameStageBlockReason();
+  $('cancelFrameStages').hidden=!running;
+  $('measureFrameStages').onclick=()=>act('measure_frame_stages');
+  $('cancelFrameStages').onclick=()=>act('cancel_frame_stages',{},true);
+  stableMarkup($('frameStagesResults'),frameStagesMarkup(probe.report));
+}
+
 function pictureCadenceMarkup(report){
   if(!report||report.version!==1)return '';
   const regions=['center','left','right'].map(name=>{
@@ -492,7 +535,7 @@ function renderRecordings(){
   stableMarkup($('syncResults'),results.join(''));
   const recordings=state.recordings||{items:[]};
   const analysis=recordings.analysis||{},analyzing=analysis.status==='running';
-  const mediaBusy=!!state.diagnostics?.active||!!recordings.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase);
+  const mediaBusy=state.frame_probe?.status==='running'||!!state.diagnostics?.active||!!recordings.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase);
   $('recordCapture').disabled=busy||!!recordings.active||analyzing;
   $('recordingStatus').textContent=recordings.active?'Recording… Playback can continue.':'';
   stableMarkup($('recordingList'),recordings.items.map((item,index)=>{
@@ -548,27 +591,31 @@ function updateButtons(){
   if(!state)return;
   const measuring=!!state.diagnostics?.active;
   const analyzing=state.recordings?.analysis?.status==='running';
-  const analysisUnavailable=busy||measuring||analyzing||!!state.recordings?.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase);
+  const probing=state.frame_probe?.status==='running';
+  $('measureFrameStages').disabled=busy||probing||!!frameStageBlockReason();
+  $('cancelFrameStages').hidden=!probing;
+  const analysisUnavailable=busy||measuring||analyzing||probing||!!state.recordings?.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase);
   for(const button of document.querySelectorAll('[data-analyze-recording]'))button.disabled=analysisUnavailable;
   for(const button of document.querySelectorAll('[data-remove-recording]'))button.disabled=busy||(analyzing&&button.dataset.removeRecording===state.recordings.analysis.id);
-  $('browserVpnEnabled').disabled=busy||measuring||analyzing||!!state.recordings?.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase)||!state.setup.complete;
-  $('capitalsCheck').disabled=busy||measuring||analyzing||!!state.recordings?.active||!chosenTVs.size||!state.setup.complete||!state.browser_vpn?.configured;
+  $('browserVpnEnabled').disabled=busy||measuring||analyzing||probing||!!state.recordings?.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase)||!state.setup.complete;
+  $('capitalsCheck').disabled=busy||measuring||analyzing||probing||!!state.recordings?.active||!chosenTVs.size||!state.setup.complete||!state.browser_vpn?.configured;
   $('capitalsRefresh').disabled=busy;
   $('capitalsCancel').disabled=busy;
-  const unavailable=busy||measuring||analyzing||!!state.recordings?.active||state.runtime.browser_open||!!state.runtime.targets.length||['preparing','connecting','stopping'].includes(state.runtime.phase)||!state.setup.complete;
+  const unavailable=busy||measuring||analyzing||probing||!!state.recordings?.active||state.runtime.browser_open||!!state.runtime.targets.length||['preparing','connecting','stopping'].includes(state.runtime.phase)||!state.setup.complete;
   $('measureSync').disabled=unavailable;
   $('measureSyncTV').disabled=unavailable||!chosenTVs.size;
   $('testNativeVideo').disabled=unavailable||chosenTVs.size!==1;
   $('cancelSync').hidden=!measuring;
   const direct=mode==='browser'&&$('browserKind').value==='youtube'&&$('youtubeDelivery').value==='native';
   $('tvSelectionHelp').textContent=direct?'Choose one TV for direct video.':'The same source plays on every selected TV.';
-  $('recordCapture').disabled=busy||measuring||analyzing||!!state.recordings?.active||state.runtime.source?.kind==='youtube';
-  $('play').disabled=busy||measuring||analyzing||!chosenTVs.size||!state.setup.complete||(direct&&chosenTVs.size!==1);
+  $('recordCapture').disabled=busy||measuring||analyzing||probing||!!state.recordings?.active||state.runtime.source?.kind==='youtube';
+  $('play').disabled=busy||measuring||analyzing||probing||!chosenTVs.size||!state.setup.complete||(direct&&chosenTVs.size!==1);
   $('play').textContent=busy&&busyAction==='play'?'Starting…':'Play on selected TVs';
   const names = state.receivers.filter(receiver=>chosenTVs.has(receiver.id)).map(receiver=>receiver.name);
   $('selectionHint').textContent = direct&&names.length!==1?'Choose exactly one TV above.':names.length ? 'Play on: ' + names.join(', ') : 'Choose one or more TVs above.';
   automationExample();
-  $('openBrowser').disabled=busy||measuring||analyzing;
+  $('openBrowser').disabled=busy||measuring||analyzing||probing;
+  $('closeBrowser').disabled=busy||probing;
   $('openBrowser').textContent=busy&&busyAction==='open_browser'?'Opening browser…':'Open browser';
   $('closeBrowser').textContent=busy&&busyAction==='close_browser'?'Closing browser…':'Close browser';
   $('stopAll').disabled=!measuring&&!(busy&&busyAction==='play')&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);

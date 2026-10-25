@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.25
+
+- Measure an already open browser's capture stages without connecting a TV or
+  saving another recording. Report raw capture cadence, frame-gate counts,
+  pre-encode picture changes, encoded output rate and conversion/upload/encode
+  timing over one bounded measurement window.
+- Keep picture-change estimates separate from browser decoder and physical TV
+  presentation rates. Preserve browser permissions, saved settings, profiles
+  and all retained recordings.
+
 ## 0.2.24
 
 - Analyze retained captures inside the app and report numeric frame timestamps

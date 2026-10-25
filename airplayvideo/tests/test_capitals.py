@@ -142,7 +142,7 @@ async def test_fourth_tv_blocks_every_side_effect_before_attempt_claim(context, 
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("busy", ["recording", "diagnostic", "picture_analysis", "teardown"])
+@pytest.mark.parametrize("busy", ["recording", "diagnostic", "picture_analysis", "frame_probe", "teardown"])
 async def test_capture_or_measurement_defers_without_claim_or_interruption(context, busy):
     x = context
     generation = await arm(x)
@@ -152,6 +152,8 @@ async def test_capture_or_measurement_defers_without_claim_or_interruption(conte
         x.control.diagnostics = SimpleNamespace(active=True)
     elif busy == "picture_analysis":
         x.control.recordings.analysis_active = True
+    elif busy == "frame_probe":
+        x.control.frame_probe = SimpleNamespace(active=True)
     else:
         waiting = asyncio.create_task(asyncio.Event().wait())
         x.control.retiring[object()] = waiting
@@ -161,6 +163,7 @@ async def test_capture_or_measurement_defers_without_claim_or_interruption(conte
     x.browser.close.assert_not_awaited()
     x.control.recordings.current, x.control.diagnostics = None, None
     x.control.recordings.analysis_active = False
+    x.control.frame_probe = None
     if busy == "teardown":
         waiting.cancel()
         await asyncio.gather(waiting, return_exceptions=True)

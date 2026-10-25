@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.2.24"
+VERSION = "0.2.25"
 IDENTIFIER = re.compile(r"[a-f0-9]{32}\Z")
 
 
