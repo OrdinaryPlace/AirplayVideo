@@ -31,8 +31,11 @@ async def main():
         return web.Response(content_type='text/html', text='''<!doctype html><title>Control fixture</title>
         <form id="form"><input id="field" type="password" autofocus style="position:fixed;left:20vw;top:20vh;width:60vw;height:50vh"><button>Submit</button></form>
         <script>
-        const prior=localStorage.getItem('retained');localStorage.setItem('retained','yes');
-        const report=event=>fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:location.pathname,event,webdriver:navigator.webdriver,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,value:field.value,retained:prior,fullscreen_element:!!document.fullscreenElement})});
+        const prior=localStorage.getItem('retained'),priorCookie=document.cookie;
+        const marker=new URLSearchParams(location.search).get('marker')||'yes';
+        // Profile switches close Chrome, so use an explicitly persistent cookie.
+        localStorage.setItem('retained',marker);document.cookie='fixture='+marker+'; Max-Age=3600; Path=/; SameSite=Lax';
+        const report=event=>fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({path:location.pathname,event,webdriver:navigator.webdriver,timezone:Intl.DateTimeFormat().resolvedOptions().timeZone,value:field.value,retained:prior,cookie:priorCookie,fullscreen_element:!!document.fullscreenElement})});
         addEventListener('pageshow',()=>{field.focus();requestAnimationFrame(()=>requestAnimationFrame(()=>report('ready')))});
         field.addEventListener('input',()=>report('input'));
         form.addEventListener('submit',e=>{e.preventDefault();report('submitted')});
@@ -195,6 +198,31 @@ async def main():
                     assert (await browsers[0].companion.call('ready'))['version'] == '1.0.4', 'Retained profile did not run the updated companion'
                     assert browsers[0].chrome_process.pid != previous_chrome.pid
                     assert (await browsers[1].companion.call('ready'))['version'] == '1.0.4', 'Updating one profile interrupted the other browser'
+                    # Adapt only the fixture URL's profile selection: no real
+                    # Sportsnet navigation, accounts or imported browser state.
+                    default_root = browsers[0].root
+                    previous_chrome = browsers[0].chrome_process
+                    with patch('service.browser.browser_profile', return_value='sportsnet'):
+                        await browsers[0].navigate(base + '/0/sportsnet-first?marker=sportsnet', default_setup())
+                    fresh = await expect('/0/sportsnet-first')
+                    assert fresh['retained'] is None, 'Sportsnet profile inherited default localStorage'
+                    assert fresh['cookie'] == '', 'Sportsnet profile inherited default cookies'
+                    assert previous_chrome.returncode is not None, 'Default Chrome remained open during profile switch'
+                    assert browsers[0].root == default_root.parent / 'browser-sportsnet'
+                    assert browsers[0].companion.identity == identity, 'Profile switch replaced the companion signing identity'
+                    await browsers[0].navigate(base + '/0/default-return', default_setup())
+                    restored = await expect('/0/default-return')
+                    assert restored['retained'] == 'yes', 'Default localStorage changed during Sportsnet use'
+                    assert restored['cookie'] == 'fixture=yes', 'Default persistent cookie changed during Sportsnet use'
+                    assert browsers[0].root == default_root
+                    with patch('service.browser.browser_profile', return_value='sportsnet'):
+                        await browsers[0].navigate(base + '/0/sportsnet-return?marker=sportsnet', default_setup())
+                    restored = await expect('/0/sportsnet-return')
+                    assert restored['retained'] == 'sportsnet', 'Sportsnet localStorage did not persist independently'
+                    assert restored['cookie'] == 'fixture=sportsnet', 'Sportsnet persistent cookie did not persist independently'
+                    await browsers[0].navigate(base + '/0/default-final', default_setup())
+                    assert (await expect('/0/default-final'))['retained'] == 'yes'
+                    print('PASS: persistent default and Sportsnet roots retain separate synthetic cookies/storage; shared companion identity; old desktop closes before switching', flush=True)
                     # Exercise fullscreen as the first navigation of a cold
                     # process, without any prerequisite mouse input.
                     await browsers[0].close()
