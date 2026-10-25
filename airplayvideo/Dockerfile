@@ -108,6 +108,7 @@ COPY companion /opt/airplayvideo/companion
 RUN chmod 755 /opt/airplayvideo/service/companion_host.py
 COPY web /opt/airplayvideo/web
 COPY tests /opt/airplayvideo/tests
+COPY config.yaml Dockerfile CHANGELOG.md /opt/airplayvideo/
 RUN ldconfig && dpkg-query -W > /opt/dependency-sources/debian-packages.txt
 WORKDIR /opt/airplayvideo
 ENV PATH="/opt/airplayvideo/venv/bin:${PATH}"
