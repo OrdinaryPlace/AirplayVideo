@@ -108,11 +108,12 @@ COPY companion /opt/airplayvideo/companion
 RUN chmod 755 /opt/airplayvideo/service/companion_host.py
 COPY web /opt/airplayvideo/web
 COPY tests /opt/airplayvideo/tests
+COPY config.yaml Dockerfile CHANGELOG.md /opt/airplayvideo/
 RUN ldconfig && dpkg-query -W > /opt/dependency-sources/debian-packages.txt
 WORKDIR /opt/airplayvideo
 ENV PATH="/opt/airplayvideo/venv/bin:${PATH}"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN python3 tests/native-dependencies.py --write-report /opt/dependency-sources/native-capabilities.json
 EXPOSE 8099 18200-18215/udp
-LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.20"
+LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.21"
 CMD ["python3", "-m", "service.main"]
