@@ -330,90 +330,99 @@ class Controller:
 
     async def play(self, request, add=False):
         async with self.lock:
-            self.require_no_diagnostic()
-            check(not self.recordings or not self.recordings.current or not self.recordings.owned,
-                  "Wait for the diagnostic recording to finish")
-            wanted = request.get("receivers", [])
-            check(isinstance(wanted, list) and 0 < len(wanted) <= 8, "Choose one or more TVs")
-            target = {self.store.receiver(r)["id"] for r in wanted}
-            if add:
-                target |= self.targets
-            source, input_config = self.requested_source(request)
-            self.require_browser_profile(source)
-            if source["kind"] == "youtube":
-                check(len(target) == 1, "Direct YouTube video currently plays on one TV at a time")
-                check(self.store.data["setup"]["audio"]["enabled"],
-                      "Direct video currently includes sound. Enable sound in Settings or choose Browser playback")
-                check(not self.recordings or not self.recordings.current,
-                      "Wait for the recording to finish before starting direct video")
-            self.generation += 1
-            generation = self.generation
-            self.error = ""
-            if source["kind"] == "youtube":
-                await self.play_native(source, target, generation)
-                return
-            same_source = self.stream and self.source and (self.source["kind"], self.source["key"]) == (source["kind"], source["key"])
-            pending = None
-            try:
-                if same_source:
-                    for receiver in self.targets - target:
-                        await self.stream.command({"action": "remove", "id": receiver})
-                        self.receivers.pop(receiver, None)
-                    self.targets &= target
-                if source["kind"] == "browser":
-                    # Joining the current browser shares its current navigation.
-                    # An explicit Play must open the requested source, including
-                    # after a separate preview navigation or an uncertain ACK.
-                    joining_current = add and same_source and source.get("url") == self.source.get("url")
-                    if (not self.browser.running or source["profile"] != getattr(self.browser, "profile", "default")
-                            or (not joining_current and source.get("url") != getattr(self.browser, "url", ""))):
-                        await self.browser.navigate(source["url"], self.store.data["setup"], source["browser_source"] == "youtube", source["browser_source"] == "watch_later")
-                    else:
-                        await self.browser.start(self.store.data["setup"], profile=source["profile"])
-                    input_config["display"] = self.browser.environment["DISPLAY"]
-                check(generation == self.generation, "Playback was cancelled")
-                if not same_source:
-                    self.phase = "preparing"
-                    self.notify()
-                    environment = dict(self.browser.environment) if source["kind"] == "browser" else child_environment()
-                    pending = Stream(self.store.root, self.source_config(input_config), environment, self.event)
-                    self.pending = pending
-                    self.pending_targets = target.copy()
-                    await pending.start()
-                    check(generation == self.generation and self.pending is pending, "Playback was cancelled")
-                    if self.stream:
-                        old, self.stream = self.stream, None
-                        self.targets.clear()
-                        self.receivers.clear()
-                        self.source = None
-                        self.metrics.clear()
-                        self.retire(old)
-                    await self.finish_teardown()
-                    check(generation == self.generation, "Playback was cancelled")
-                    self.stream, self.pending = pending, None
-                    self.pending_targets.clear()
+            await self.play_locked(request, add=add)
+
+    async def play_locked(self, request, add=False):
+        """Start while the caller owns lock; used by atomic route transitions."""
+        self.require_no_diagnostic()
+        check(not self.recordings or not self.recordings.current or not self.recordings.owned,
+              "Wait for the diagnostic recording to finish")
+        wanted = request.get("receivers", [])
+        check(isinstance(wanted, list) and 0 < len(wanted) <= 8, "Choose one or more TVs")
+        target = {self.store.receiver(r)["id"] for r in wanted}
+        if add:
+            target |= self.targets
+        source, input_config = self.requested_source(request)
+        self.require_browser_profile(source)
+        if source["kind"] == "youtube":
+            check(len(target) == 1, "Direct YouTube video currently plays on one TV at a time")
+            check(self.store.data["setup"]["audio"]["enabled"],
+                  "Direct video currently includes sound. Enable sound in Settings or choose Browser playback")
+            check(not self.recordings or not self.recordings.current,
+                  "Wait for the recording to finish before starting direct video")
+        self.generation += 1
+        generation = self.generation
+        self.error = ""
+        if source["kind"] == "youtube":
+            await self.play_native(source, target, generation)
+            return
+        same_source = self.stream and self.source and (self.source["kind"], self.source["key"]) == (source["kind"], source["key"])
+        pending = None
+        try:
+            if same_source:
+                active = self.stream
+                for receiver in self.targets - target:
+                    await active.command({"action": "remove", "id": receiver})
+                    check(generation == self.generation and self.stream is active, "Playback was cancelled")
+                    self.receivers.pop(receiver, None)
+                self.targets &= target
+            if source["kind"] == "browser":
+                # Joining the current browser shares its current navigation.
+                # An explicit Play must open the requested source, including
+                # after a separate preview navigation or an uncertain ACK.
+                joining_current = add and same_source and source.get("url") == self.source.get("url")
+                if (not self.browser.running or source["profile"] != getattr(self.browser, "profile", "default")
+                        or (not joining_current and source.get("url") != getattr(self.browser, "url", ""))):
+                    await self.browser.navigate(source["url"], self.store.data["setup"], source["browser_source"] == "youtube", source["browser_source"] == "watch_later")
+                else:
+                    await self.browser.start(self.store.data["setup"], profile=source["profile"])
+                input_config["display"] = self.browser.environment["DISPLAY"]
+            check(generation == self.generation, "Playback was cancelled")
+            if not same_source:
+                self.phase = "preparing"
+                self.notify()
+                environment = dict(self.browser.environment) if source["kind"] == "browser" else child_environment()
+                pending = Stream(self.store.root, self.source_config(input_config), environment, self.event)
+                self.pending = pending
+                self.pending_targets = target.copy()
+                await pending.start()
+                check(generation == self.generation and self.pending is pending, "Playback was cancelled")
+                if self.stream:
+                    old, self.stream = self.stream, None
                     self.targets.clear()
                     self.receivers.clear()
+                    self.source = None
                     self.metrics.clear()
-                self.source = source
-                self.phase = "connecting"
-                for receiver_id in target:
-                    receiver = self.store.receiver(receiver_id)
-                    if receiver_id not in self.targets or self.receivers.get(receiver_id, {}).get("state") == "error":
-                        self.targets.add(receiver_id)
-                        self.receivers[receiver_id] = {"state": "connecting"}
-                        await self.stream.command({"action": "add", "id": receiver_id, "slot": receiver["slot"]})
-                self.notify()
-            except BaseException:
-                if pending and pending is not self.stream:
-                    await pending.close()
-                    if self.pending is pending:
-                        self.pending = None
-                        self.pending_targets.clear()
-                if generation == self.generation:
-                    self.phase = "playing" if self.stream and self.targets else "idle"
-                self.notify()
-                raise
+                    self.retire(old)
+                await self.finish_teardown()
+                check(generation == self.generation, "Playback was cancelled")
+                self.stream, self.pending = pending, None
+                self.pending_targets.clear()
+                self.targets.clear()
+                self.receivers.clear()
+                self.metrics.clear()
+            self.source = source
+            self.phase = "connecting"
+            active = self.stream
+            for receiver_id in target:
+                check(generation == self.generation and self.stream is active, "Playback was cancelled")
+                receiver = self.store.receiver(receiver_id)
+                if receiver_id not in self.targets or self.receivers.get(receiver_id, {}).get("state") == "error":
+                    self.targets.add(receiver_id)
+                    self.receivers[receiver_id] = {"state": "connecting"}
+                    await active.command({"action": "add", "id": receiver_id, "slot": receiver["slot"]})
+                    check(generation == self.generation and self.stream is active, "Playback was cancelled")
+            self.notify()
+        except BaseException:
+            if pending and pending is not self.stream:
+                await pending.close()
+                if self.pending is pending:
+                    self.pending = None
+                    self.pending_targets.clear()
+            if generation == self.generation:
+                self.phase = "playing" if self.stream and self.targets else "idle"
+            self.notify()
+            raise
 
     def native_event(self, session, status):
         if session is not self.stream and session is not self.pending:

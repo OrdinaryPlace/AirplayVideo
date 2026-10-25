@@ -5,12 +5,13 @@
 [Native YouTube media experiment and current verification limits](docs/native-youtube-experiment.md).
 
 [Sportsnet+ and the optional isolated Surfshark gateway](docs/sportsnet-vpn.md).
+[Live Capitals game checks from Home Assistant](docs/capitals-live-events.md).
 
 Send browser pages, HDHomeRun channels, or generated videos to your Apple TVs from Home Assistant.
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.22.** This is an independent implementation in a new
+**Experimental, version 0.2.23.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 

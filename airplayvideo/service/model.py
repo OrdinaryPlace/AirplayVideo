@@ -12,7 +12,7 @@ from urllib.parse import urlsplit, urlunsplit, parse_qs, urlencode
 import uuid
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-VERSION = "0.2.22"
+VERSION = "0.2.23"
 IDENTIFIER = re.compile(r"[a-f0-9]{32}\Z")
 
 
@@ -95,6 +95,28 @@ def check_browser_connection(request, setup):
         expected = validate_browser_proxy(request["expected_http_proxy"])
         check(expected == setup["browser"].get("http_proxy", ""),
               "The browser connection changed in another window. Refresh, then try again.")
+    if "expected_http_proxy_enabled" in request:
+        expected = request["expected_http_proxy_enabled"]
+        check(type(expected) is bool, "Invalid browser VPN choice")
+        check(expected == browser_proxy_enabled(setup),
+              "The browser connection changed in another window. Refresh, then try again.")
+
+
+def browser_proxy_enabled(setup):
+    browser = setup["browser"]
+    value = browser.get("http_proxy_enabled", bool(browser.get("http_proxy", "")))
+    check(type(value) is bool, "Invalid browser VPN choice")
+    return value
+
+
+def effective_browser_proxy(setup):
+    return setup["browser"].get("http_proxy", "") if browser_proxy_enabled(setup) else ""
+
+
+def browser_vpn_name(value):
+    value = text(value, "VPN name", 64)
+    check("\x7f" not in value, "Invalid VPN name")
+    return value
 
 
 def youtube_url(value):
@@ -199,7 +221,7 @@ def default_setup():
         "complete": False,
         "modes": {"browser": True, "hdhomerun": False, "generated": True},
         "generated": generated_defaults(),
-        "browser": {"home_url": "https://www.youtube.com/", "youtube_quality": "1080p", "http_proxy": ""},
+        "browser": {"home_url": "https://www.youtube.com/", "youtube_quality": "1080p", "http_proxy": "", "http_proxy_enabled": False, "vpn_name": "Browser VPN"},
         "hdhomerun": {"devices": []},
         "video": {"resolution": "1080p", "fps": 30, "codec": "h264", "encoder": "auto", "bitrate_mbps": 8, "rate_control": "auto", "max_bitrate_mbps": 16, "deinterlace": True},
         "audio": {"enabled": True, "latency_ms": 1500},
@@ -223,6 +245,10 @@ def validate_setup(value):
         check(value["browser"]["youtube_quality"] in {"1080p", "720p", "auto"}, "Invalid YouTube preference")
         result["browser"]["youtube_quality"] = value["browser"]["youtube_quality"]
         result["browser"]["http_proxy"] = validate_browser_proxy(value["browser"].get("http_proxy", ""))
+        enabled = browser_proxy_enabled(value)
+        check(not enabled or result["browser"]["http_proxy"], "Set a VPN gateway before enabling browser VPN")
+        result["browser"]["http_proxy_enabled"] = enabled
+        result["browser"]["vpn_name"] = browser_vpn_name(value["browser"].get("vpn_name", "Browser VPN"))
         devices = value["hdhomerun"]["devices"]
         check(isinstance(devices, list) and len(devices) <= 4, "Use at most four HDHomeRun devices")
         ids = set()
@@ -297,6 +323,15 @@ class Store:
                 proxy = validate_browser_proxy(browser.get("http_proxy", ""))
                 if "http_proxy" not in browser or browser["http_proxy"] != proxy:
                     browser["http_proxy"] = proxy
+                    migrated = True
+                if "http_proxy_enabled" not in browser:
+                    browser["http_proxy_enabled"] = bool(proxy)
+                    migrated = True
+                check(type(browser["http_proxy_enabled"]) is bool and (not browser["http_proxy_enabled"] or proxy),
+                      "Saved browser VPN settings need attention; existing data was preserved")
+                name = browser_vpn_name(browser.get("vpn_name", "Browser VPN"))
+                if browser.get("vpn_name") != name:
+                    browser["vpn_name"] = name
                     migrated = True
                 video = self.data["setup"]["video"]
                 for key, value in {"rate_control": "auto", "max_bitrate_mbps": max(16, video["bitrate_mbps"])}.items():

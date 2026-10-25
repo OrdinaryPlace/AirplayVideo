@@ -16,7 +16,7 @@ def run_ui(script):
     if not node:
         pytest.skip('Node is required for browser state checks')
     functions = []
-    for name in ('message', 'renderRuntimeError', 'stableMarkup', 'renderBrowserStatus', 'browserKindChanged', 'renderUsage'):
+    for name in ('message', 'renderRuntimeError', 'stableMarkup', 'renderBrowserStatus', 'renderBrowserVpn', 'renderCapitals', 'browserKindChanged', 'renderUsage'):
         match = re.search(rf'^function {name}\([^\n]*\)\s*\{{.*?^\}}', SOURCE, re.M | re.S)
         assert match, name
         functions.append(match.group())
@@ -158,4 +158,25 @@ state.runtime.browser_status='Opened YouTube fullscreen';
 state.runtime.browser_open=false;
 renderBrowserStatus();
 assert.equal($('browserVideoStatus').hidden, true);
+""")
+
+
+def test_unreachable_vpn_never_looks_like_a_direct_connection():
+    run_ui("""
+state.browser_vpn={name:'Montréal VPN',configured:true,enabled:true,gateway_reachable:false};
+renderBrowserVpn();
+assert.equal($('browserVpnControl').hidden, false);
+assert.equal($('browserVpnName').textContent, 'Montréal VPN');
+assert.equal($('browserVpnEnabled').checked, true);
+assert.equal($('browserVpnRoute').textContent, 'On');
+assert.match($('browserVpnHelp').textContent, /unavailable/);
+assert.match($('browserVpnHelp').textContent, /remains on the VPN route/);
+state.browser_vpn.enabled=false;
+renderBrowserVpn();
+assert.equal($('browserVpnEnabled').checked, false);
+assert.equal($('browserVpnRoute').textContent, 'Off');
+assert.equal($('browserVpnHelp').textContent, 'Browser connects directly.');
+state.browser_vpn.configured=false;
+renderBrowserVpn();
+assert.equal($('browserVpnControl').hidden, true);
 """)

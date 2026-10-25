@@ -166,6 +166,44 @@ async def test_stop_cancels_source_warmup_without_orphan(setup):
     assert all(s.closed for s in Stream.created)
     assert control.stream is None and control.pending is None and not control.targets
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('stop_at', [1, 2])
+async def test_stop_during_add_ack_prevents_next_receiver_and_false_success(setup, monkeypatch, stop_at):
+    _, control = setup
+    original = Stream.command
+    additions = []
+    async def command(stream, data):
+        await original(stream, data)
+        if data['action'] == 'add':
+            additions.append(data['id'])
+            if len(additions) == stop_at:
+                await control.stop()
+    monkeypatch.setattr(Stream, 'command', command)
+    with pytest.raises(UserError, match='Playback was cancelled'):
+        await control.play(dict(mode='browser', browser_source='url', url='https://example.com/', receivers=[A, B]))
+    assert len(additions) == stop_at
+    assert control.stream is None and not control.targets and not control.receivers
+    assert control.source is None and control.phase == 'idle'
+    assert all(stream.closed for stream in Stream.created)
+
+
+@pytest.mark.asyncio
+async def test_stop_during_same_source_remove_ack_prevents_stale_mutation(setup, monkeypatch):
+    _, control = setup
+    value = dict(mode='browser', browser_source='url', url='https://example.com/', receivers=[A, B])
+    await control.play(value)
+    original = Stream.command
+    async def command(stream, data):
+        await original(stream, data)
+        if data['action'] == 'remove':
+            await control.stop()
+    monkeypatch.setattr(Stream, 'command', command)
+    with pytest.raises(UserError, match='Playback was cancelled'):
+        await control.play(value | {'receivers': [A]})
+    assert control.stream is None and not control.targets and not control.receivers
+    assert control.source is None and control.phase == 'idle'
+
 @pytest.mark.asyncio
 async def test_selection_does_not_reserve_a_tuner_and_retained_play_is_ignored(setup):
     store, control = setup
