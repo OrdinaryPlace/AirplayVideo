@@ -11,7 +11,7 @@ Send browser pages, HDHomeRun channels, or generated videos to your Apple TVs fr
 One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.26.** This is an independent implementation in a new
+**Experimental, version 0.2.27.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -87,6 +87,7 @@ Home Assistant creates an **AirplayVideo** device for every paired TV, with:
 - Saved-page shortcuts, Page selection, and Play selected page.
 - Play YouTube URL and Play Watch Later, when browser mode is enabled.
 - Play generated video using saved defaults, when generated mode is enabled.
+- Play current Capitals game on this TV, when the browser VPN is configured.
 - Channel selection and Play selected channel, when HDHomeRun mode is enabled.
 - Stop, connection status, current source, and diagnostic error.
 

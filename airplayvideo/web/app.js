@@ -404,7 +404,6 @@ function renderCapitals(){
     if(Number.isFinite(date.getTime())) description+=' · '+date.toLocaleString(undefined,{weekday:'short',month:'short',day:'numeric',hour:'numeric',minute:'2-digit'});
   }
   $('capitalsGame').textContent=description;
-  $('capitalsCancel').hidden=caps.status!=='checking';
 }
 
 function renderUsage(){
@@ -605,9 +604,14 @@ function updateButtons(){
   for(const button of document.querySelectorAll('[data-analyze-recording]'))button.disabled=analysisUnavailable;
   for(const button of document.querySelectorAll('[data-remove-recording]'))button.disabled=busy||(analyzing&&button.dataset.removeRecording===state.recordings.analysis.id);
   $('browserVpnEnabled').disabled=busy||measuring||analyzing||probing||!!state.recordings?.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase)||!state.setup.complete;
-  $('capitalsCheck').disabled=busy||measuring||analyzing||probing||!!state.recordings?.active||!chosenTVs.size||!state.setup.complete||!state.browser_vpn?.configured;
+  const capitalsUnavailable=busy||measuring||analyzing||probing||!!state.recordings?.active||!chosenTVs.size||!state.setup.complete||!state.setup.modes?.browser||!state.browser_vpn?.configured;
+  const capitalsStarting=busy&&busyAction==='capitals_play';
+  $('capitalsPlay').disabled=capitalsUnavailable;
+  $('capitalsPlay').textContent=capitalsStarting?'Starting…':'Play current game';
+  $('capitalsCheck').disabled=capitalsUnavailable;
   $('capitalsRefresh').disabled=busy;
-  $('capitalsCancel').disabled=busy;
+  $('capitalsCancel').hidden=state.capitals?.status!=='checking'&&!capitalsStarting;
+  $('capitalsCancel').disabled=busy&&busyAction!=='capitals_play';
   const unavailable=busy||measuring||analyzing||probing||!!state.recordings?.active||state.runtime.browser_open||!!state.runtime.targets.length||['preparing','connecting','stopping'].includes(state.runtime.phase)||!state.setup.complete;
   $('measureSync').disabled=unavailable;
   $('measureSyncTV').disabled=unavailable||!chosenTVs.size;
@@ -634,7 +638,7 @@ async function act(action,body={},interrupt=false){
   if(!interrupt){busy=true;busyAction=action;updateButtons();}
   try{
     state=await api(`api/actions/${action}`,body);
-    if(action==='play'){selectionDirty=false;chosenTVs=new Set(state.runtime.targets);}
+    if(action==='play'||action==='capitals_play'){selectionDirty=false;chosenTVs=new Set(state.runtime.targets);}
     if(action==='stop'){if(body.receiver)chosenTVs.delete(body.receiver);else chosenTVs.clear();selectionDirty=false;}
     renderUsage();
   }catch(error){message(error.message);await refresh().catch(()=>{});}
@@ -675,9 +679,10 @@ $('testNativeVideo').onclick=()=>act('test_native_video',{receivers:[...chosenTV
 $('cancelSync').onclick=()=>act('cancel_sync',{},true);
 $('openBrowser').onclick=()=>act('open_browser',requestSource());
 $('browserVpnEnabled').onchange=()=>act('browser_vpn',{enabled:$('browserVpnEnabled').checked,expected_http_proxy:state.setup.browser.http_proxy || '',expected_http_proxy_enabled:!!state.setup.browser.http_proxy_enabled});
+$('capitalsPlay').onclick=()=>act('capitals_play',{receivers:[...chosenTVs]});
 $('capitalsCheck').onclick=()=>act('capitals_live',{receivers:[...chosenTVs]});
 $('capitalsRefresh').onclick=()=>act('capitals_refresh');
-$('capitalsCancel').onclick=()=>act('capitals_cancel');
+$('capitalsCancel').onclick=()=>act('capitals_cancel',{},true);
 $('closeBrowser').onclick=()=>act('close_browser');
 $('browserKind').onchange=browserKindChanged;
 $('youtubeDelivery').onchange=browserKindChanged;

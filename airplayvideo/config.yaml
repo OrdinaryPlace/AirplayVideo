@@ -1,5 +1,5 @@
 name: AirplayVideo
-version: "0.2.26"
+version: "0.2.27"
 slug: airplayvideo
 description: Send browser pages, live TV or generated videos to your Apple TVs
 url: https://github.com/OrdinaryPlace/AirplayVideo
@@ -7,6 +7,7 @@ arch: [amd64]
 startup: application
 boot: manual
 init: true
+stdin: true
 host_network: true
 timeout: 30
 ingress: true

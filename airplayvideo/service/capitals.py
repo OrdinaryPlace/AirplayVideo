@@ -4,13 +4,14 @@ import asyncio
 import copy
 from datetime import datetime, timedelta, timezone
 
-from .model import UserError, check
+from .model import UserError, browser_proxy_enabled, check
 from .sportsnet import MAX_LIVE_AGE, SportsnetClient
 
 
 WINDOW_SECONDS = 20 * 60
 POLL_SECONDS = 30
 FRESH_SECONDS = 120
+MANUAL_SECONDS = 90
 
 
 def utcnow():
@@ -42,6 +43,10 @@ class CapitalsLauncher:
         self.client, self.now = client or SportsnetClient(), now
         self.task, self.generation, self.catalog, self.closing = None, 0, None, False
         self.command_lock = asyncio.Lock()
+        self.manual_lock = asyncio.Lock()
+        self.manual_epoch = 0
+        self.manual_requests = {}
+        self.manual_edges = {}
         defaults = {"status": "idle", "error": "", "deadline": None, "receivers": [],
                     "last_attempted_game": "", "last_started_game": "", "last_watch_url": ""}
         raw = store.data.get("capitals", {})
@@ -55,6 +60,8 @@ class CapitalsLauncher:
                 check(until <= self.now() + timedelta(seconds=WINDOW_SECONDS),
                       "Saved Capitals check needs attention")
                 self.saved["status"] = "checking" if until > self.now() else "expired"
+            elif self.saved["status"] == "checking":
+                self.saved.update(status="error", error="The manual live game launch was interrupted; press Play to try again")
         except UserError:
             # Preserve the original file; a new explicit kick can replace bad intent.
             self.saved = {**defaults, "status": "error", "error": "Saved Capitals check needs attention"}
@@ -112,9 +119,12 @@ class CapitalsLauncher:
               "Set a VPN gateway before checking the live game")
         async with self.command_lock:
             check(not self.closing, "Live game controls are shutting down")
+            # An automation redelivery must not supersede an explicit manual launch.
+            if any(not task.done() for task in self.manual_requests.values()):
+                return
             # QoS 1 delivery and repeated triggers must not extend the first window.
             if (self.saved["status"] == "checking" and targets == self.saved["receivers"]
-                    and deadline(self.saved["deadline"]) > self.now()):
+                    and self.saved["deadline"] and deadline(self.saved["deadline"]) > self.now()):
                 if self.task is None or self.task.done():
                     self.task = asyncio.create_task(self.run(self.generation))
                 return
@@ -125,9 +135,28 @@ class CapitalsLauncher:
             self.task = asyncio.create_task(self.run(self.generation))
 
     async def cancel(self):
+        # Invalidate queued manual intents before waiting for any lifecycle lock.
+        self.manual_epoch += 1
         async with self.command_lock:
             check(not self.closing, "Live game controls are shutting down")
             await self.stop_worker()
+            await self.stop_manual()
+            self.persist(status="idle", error="", deadline=None)
+
+    async def stop_pending(self, receiver_id=None):
+        """Stop cancels matching intent; the caller owns actual receiver Stop."""
+        if receiver_id is not None:
+            receiver_id = self.store.receiver(receiver_id)["id"]
+        manual = any(not task.done() and (receiver_id is None or receiver_id in key[0])
+                     for key, task in self.manual_requests.items())
+        automatic = (self.saved["status"] == "checking" and self.saved["deadline"]
+                     and (receiver_id is None or receiver_id in self.saved["receivers"]))
+        if not (manual or automatic):
+            return
+        self.manual_epoch += 1
+        async with self.command_lock:
+            await self.stop_worker()
+            await self.stop_manual()
             self.persist(status="idle", error="", deadline=None)
 
     def start(self):
@@ -138,8 +167,145 @@ class CapitalsLauncher:
     async def close(self):
         # Shutdown cancels work without discarding an unexpired, explicit kick.
         self.closing = True
+        self.manual_epoch += 1
         async with self.command_lock:
             await self.stop_worker()
+            await self.stop_manual()
+
+    async def stop_manual(self):
+        tasks = list(self.manual_requests.values())
+        for task in tasks:
+            task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def manual_current(self, epoch, generation):
+        check(not self.closing and epoch == self.manual_epoch, "Live game playback was cancelled")
+        # Only completed, verified manual operations can advance queued intents.
+        # A user Stop or another source change is never absorbed as a new baseline.
+        while generation != self.controller.generation and generation in self.manual_edges:
+            generation = self.manual_edges[generation]
+        check(generation == self.controller.generation, "Playback was cancelled")
+        return generation
+
+    async def play_current(self, request):
+        """One explicit launch, including retries; never clear automatic history."""
+        check(isinstance(request, dict), "Choose the TVs for the live game")
+        targets = self.receivers(request.get("receivers"))
+        join = request.get("join", False)
+        check(type(join) is bool, "Choose whether to join the current live game")
+        epoch, generation = self.manual_epoch, self.controller.generation
+        check(not self.closing, "Live game controls are shutting down")
+        key = (tuple(targets), join, epoch, generation,
+               tuple(repr(request.get(field)) for field in ("expected_http_proxy", "expected_http_proxy_enabled")))
+        # Register before the first await so a targeted Stop can see even an
+        # intent still waiting for command_lock, before any TV is attached.
+        task = self.manual_requests.get(key)
+        if task is None or task.done():
+            task = asyncio.create_task(self.play_manual(request, targets, join, epoch, generation))
+            self.manual_requests[key] = task
+            def finished(completed):
+                if self.manual_requests.get(key) is completed:
+                    self.manual_requests.pop(key, None)
+                if not self.manual_requests:
+                    self.manual_edges.clear()
+                if not completed.cancelled():
+                    completed.exception()  # Also observe failure if the caller disconnected.
+            task.add_done_callback(finished)
+        try:
+            await task
+        except asyncio.CancelledError:
+            if asyncio.current_task().cancelling():
+                raise
+            raise UserError("Live game playback was cancelled") from None
+
+    async def play_manual(self, request, targets, join, epoch, generation):
+        try:
+            async with asyncio.timeout(MANUAL_SECONDS), self.manual_lock:
+                generation = self.manual_current(epoch, generation)
+                async with self.command_lock:
+                    self.manual_current(epoch, generation)
+                    await self.stop_worker()
+                    self.manual_current(epoch, generation)
+                    self.persist(status="checking", error="", deadline=None, receivers=targets)
+                catalog = await self.refresh()
+                self.manual_current(epoch, generation)
+                check(catalog.status != "error", catalog.error or "The live game check could not finish")
+                candidates = catalog.live_candidates
+                check(len(candidates) == 1, "Sportsnet lists more than one live Capitals game" if len(candidates) > 1
+                      else "Sportsnet does not currently list a live Capitals game")
+                event = candidates[0]
+                async with self.configuration_lock, self.controller.lock:
+                    self.manual_current(epoch, generation)
+                    control = self.controller
+                    control.require_no_diagnostic()
+                    check(not (control.recordings and control.recordings.current), "Wait for the recording to finish")
+                    check(not control.tearing_down, "Wait for playback to finish stopping")
+                    control.require_mode("browser")
+                    setup = self.store.data["setup"]
+                    check(setup["complete"], "Finish Setup first")
+                    check(setup["browser"].get("http_proxy"), "Set a VPN gateway before playing the live game")
+                    check(self.fresh(catalog, event), "The live game check is stale; no TVs were changed")
+                    play = {"mode": "browser", "browser_source": "url", "url": event.watch_url, "receivers": targets}
+                    for key in ("expected_http_proxy", "expected_http_proxy_enabled"):
+                        if key in request:
+                            play[key] = request[key]
+                    _, input_config = control.requested_source(play)
+                    control.source_config(input_config)
+                    active = control.targets | control.pending_targets
+                    browser = control.browser
+                    same = bool(control.stream and not control.pending and control.source
+                                and control.source.get("kind") == "browser"
+                                and control.source.get("url") == event.watch_url
+                                and control.source.get("profile") == "sportsnet"
+                                and browser.running and browser.profile == "sportsnet"
+                                and browser.url == event.watch_url and browser_proxy_enabled(setup))
+                    check(active <= set(targets) or join and same,
+                          "Another TV is using AirplayVideo; no TVs were changed")
+                    # Connected/connecting targets already own the requested stream.
+                    # An error target remains eligible for Controller's explicit retry.
+                    attached = all(target in control.targets and
+                                   control.receivers.get(target, {}).get("state") in {"connecting", "streaming"}
+                                   for target in targets)
+                    self.persist(last_attempted_game=event.game_key, error="")
+                    if same and attached and (join or control.targets == set(targets)):
+                        self.persist(status="started", deadline=None, last_started_game=event.game_key,
+                                     last_watch_url=event.watch_url)
+                        return
+                    owned_generations = {generation}
+                    if not same and (control.stream or control.pending or active):
+                        await control.stop()
+                        check(control.generation == generation + 1, "Playback was cancelled")
+                        generation += 1
+                        owned_generations.add(generation)
+                    self.manual_current(epoch, generation)
+                    check(self.fresh(catalog, event), "The live game check expired before playback could start")
+                    await self.browser_vpn.set_enabled_locked({"enabled": True})
+                    self.manual_current(epoch, generation)
+                    check(self.fresh(catalog, event), "The live game check expired before playback could start")
+                    expected_targets = (control.targets | set(targets)) if join and same else set(targets)
+                    await control.play_locked(play, add=join and same)
+                    check(control.generation == generation + 1, "Playback was cancelled")
+                    generation += 1
+                    self.manual_current(epoch, generation)
+                    check(control.stream is not None and control.targets == expected_targets, "Playback was cancelled")
+                    for previous in owned_generations:
+                        self.manual_edges[previous] = generation
+                    self.persist(status="started", deadline=None, error="", last_started_game=event.game_key,
+                                 last_watch_url=event.watch_url)
+        except asyncio.CancelledError:
+            if not self.closing and epoch == self.manual_epoch:
+                self.persist(status="idle", deadline=None, error="")
+            raise
+        except Exception as exc:
+            error = str(exc) if isinstance(exc, UserError) else "The live game could not start; press Play to try again"
+            if not self.closing and epoch == self.manual_epoch:
+                try:
+                    self.persist(status="error", deadline=None, error=error)
+                except Exception:
+                    error = "The live game status could not be saved; check the app before trying again"
+                    self.saved = {**self.saved, "status": "error", "deadline": None, "error": error}
+            raise UserError(error) from None
 
     async def refresh(self):
         check(not self.closing, "Live game controls are shutting down")
