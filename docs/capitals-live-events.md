@@ -30,6 +30,85 @@ kick cannot repeatedly recast it. An unexpired explicit check can resume after
 an app restart. **Cancel pending check** stops the check; it does not stop
 playback already requested. Normal playback controls remain available.
 
+## Play the current game now
+
+Each paired TV's Home Assistant device has **Play current Capitals game** when
+browser mode and a VPN gateway are configured. Press the buttons for the TVs
+you want to watch. These controls look up a fresh live game and open its exact
+Sportsnet watch page; they do not open the saved Sportsnet homepage. The app
+also has **Play current game** for its selected TVs.
+
+This is one immediate check. If no single eligible live game is available,
+the app reports the result without starting a TV or waiting for a future game.
+An explicit manual request can retry a game that an automatic check already
+attempted. It does not erase the automatic attempt history or weaken the
+automatic routine's duplicate protection.
+
+Per-TV buttons can join the same exact game already playing through this app
+without navigating or restarting other viewers. They reject a request that
+would change an unrequested TV's different content. A repeat for an already
+connected target is a no-op; a failed target can be retried. Stop and cancel
+take precedence over pending work. Cancel does not stop playback that was
+already requested; use the TV's Stop control to end that playback.
+
+For a single explicit multi-TV request, publish to the app's displayed command
+topic with paired receiver IDs. Use **QoS 0** and **retain: false** for manual
+playback commands, as the native buttons do:
+
+```yaml
+action: mqtt.publish
+data:
+  topic: airplayvideo/INSTALLATION_ID/command
+  qos: 0
+  retain: false
+  payload: >-
+    {"action":"capitals_play","receivers":["UPSTAIRS_RECEIVER_ID","BASEMENT_RECEIVER_ID"]}
+```
+
+The optional `"join":true` permits adding these TVs to an existing session of
+the same exact game, preserving its other viewers. It never authorizes changing
+their content. Commands are not an exactly-once messaging protocol: publishing
+another manual command after a stop or failure is a new retry request. Do not
+use retained commands or at-least-once delivery to automate manual retries.
+
+These controls retain the saved Sportsnet graphics, VPN gateway, profile and
+output settings. They do not force a player quality or certify live-edge
+selection, account entitlement, physical picture or sound. The connection
+sensors and Last error identify each TV's sender status separately from the
+Capitals launch status.
+
+### Home Assistant Supervisor action
+
+An authenticated Home Assistant Supervisor app-input action is also supported.
+This uses the existing Supervisor authorization and opens no network listener.
+Use the installed app slug and the same explicit paired TV IDs:
+
+```yaml
+action: hassio.app_stdin
+data:
+  app: YOUR_AIRPLAYVIDEO_APP_SLUG
+  input:
+    action: capitals_play
+    request_id: manual-game-1
+    receivers:
+      - UPSTAIRS_RECEIVER_ID
+      - BASEMENT_RECEIVER_ID
+    join: true
+```
+
+The only accepted input actions are `capitals_play` and read-only `status`.
+Use a fresh `request_id` to correlate a request with its bounded
+`AIRPLAYVIDEO_CONTROL` log response; it is not a duplicate-suppression key.
+Status returns connection enums and target IDs, without account/browser data,
+URLs or raw errors. An `ok` response means the app handled the command, not
+that a physical TV displayed the game. Existing per-TV HA sensors remain the
+normal source for connection and error details.
+
+This follows Home Assistant's documented
+[app-input action](https://contributors.home-assistant.io/apps/guides/communication/#send-input-to-your-app)
+and authenticated
+[Supervisor stdin endpoint](https://contributors.home-assistant.io/apps/supervisor-api/apps/#post-addonsappstdin).
+
 These are source behavior and acceptance criteria for the new helper. Its
 tests do not establish a successful natural game-start trigger, account
 entitlement, player live-edge selection, physical picture or audible sound.

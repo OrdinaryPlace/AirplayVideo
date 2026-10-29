@@ -65,6 +65,11 @@ def discovery_documents(store, channels):
         if setup["modes"].get("generated"):
             entity("button", receiver, "generated", "Play generated video", icon="mdi:card-text", payload_press=command("generated", receiver), **common)
         if setup["modes"]["browser"]:
+            if setup["browser"].get("http_proxy", ""):
+                payload = json.dumps({"action": "capitals_play", "receivers": [receiver["id"]],
+                                      "join": True}, separators=(",", ":"))
+                entity("button", receiver, "capitals_play", "Play current Capitals game",
+                       icon="mdi:hockey-puck", payload_press=payload, qos=0, retain=False, **common)
             pages = store.data["pages"]
             for page in pages:
                 entity("button", receiver, "page_" + page["id"], "Show " + page["name"], icon="mdi:web", payload_press=command("page", receiver, page=page["id"]), **common)
@@ -181,10 +186,12 @@ class HomeAssistant:
                 await self.browser_vpn.set_enabled(value)
                 self.publish_state()
                 return
-            if value.get("action") in {"capitals_live", "capitals_cancel"}:
+            if value.get("action") in {"capitals_live", "capitals_play", "capitals_cancel"}:
                 check(self.capitals is not None, "Live game controls are unavailable")
                 if value["action"] == "capitals_live":
                     await self.capitals.kick(value)
+                elif value["action"] == "capitals_play":
+                    await self.capitals.play_current(value)
                 else:
                     await self.capitals.cancel()
                 self.publish_state()
@@ -200,6 +207,8 @@ class HomeAssistant:
             receiver_id = receiver["id"]
             action = value.get("action")
             if action == "stop":
+                if self.capitals is not None:
+                    await self.capitals.stop_pending(receiver_id)
                 await self.controller.stop(receiver_id)
             elif action == "select_page":
                 self.controller.require_mode("browser")

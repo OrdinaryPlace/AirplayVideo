@@ -15,6 +15,7 @@ from .model import Store, VERSION, UserError, check, identifier, local_address, 
 from .browser import Browser
 from .browser_vpn import BrowserVPN
 from .capitals import CapitalsLauncher
+from .supervisor_control import SupervisorControl
 from .frame_probe import FrameProbe
 from .controller import PairingEngine, Controller
 from .hdhomerun import Channels, inspect as inspect_tuner, discover as discover_tuners
@@ -74,6 +75,7 @@ class Application:
         self.ha.browser_vpn = self.browser_vpn
         self.capitals = CapitalsLauncher(store, self.controller, self.browser_vpn, self.configuration_lock, self.ha.publish_state)
         self.controller.capitals = self.ha.capitals = self.capitals
+        self.supervisor_control = SupervisorControl(self.controller, self.capitals)
 
     def state(self):
         return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "browser_vpn": self.browser_vpn.state(), "capitals": self.capitals.state(), "recordings": self.recordings.state(), "diagnostics": self.diagnostics.state(), "frame_probe": self.frame_probe.state(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}
@@ -103,8 +105,11 @@ class Application:
         await self.ha.start()
         self.browser_vpn.start()
         self.capitals.start()
+        await self.supervisor_control.start(enabled=os.environ.get("AIRPLAYVIDEO_STANDALONE") != "1")
 
     async def close(self):
+        if control := getattr(self, "supervisor_control", None):
+            await control.close()
         await self.capitals.close()
         await self.frame_probe.close()
         await self.browser_vpn.close()
@@ -127,6 +132,8 @@ class Application:
             await self.browser_vpn.set_enabled(data)
         elif action == "capitals_live":
             await self.capitals.kick(data)
+        elif action == "capitals_play":
+            await self.capitals.play_current(data)
         elif action == "capitals_cancel":
             await self.capitals.cancel()
         elif action == "capitals_refresh":
@@ -157,6 +164,8 @@ class Application:
             settings = validate_generated(data.get("generated", {}), self.store.data["setup"]["generated"])
             return web.json_response(await self.pairing.call("/generated/preview", settings))
         elif action == "stop":
+            if capitals := getattr(self, "capitals", None):
+                await capitals.stop_pending(data.get("receiver"))
             await controller.stop(data.get("receiver"))
         elif action == "open_browser":
             await controller.open_browser(data)

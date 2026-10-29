@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.2.27
+
+- Add Play current Capitals game to each paired TV's Home Assistant controls
+  and Play current game for the selected TVs in the app. A fresh, single live
+  Capitals broadcast is required; a manual request can retry an earlier
+  attempted game without resetting automatic launch history.
+- Keep the automatic bounded game check and its duplicate protection. Manual
+  per-TV controls can join the same game without restarting other viewers;
+  changing an unrequested TV's content is rejected. Preserve saved Sportsnet
+  graphics, VPN, sign-in and output settings.
+- Support Home Assistant's authenticated app-input action for current-game
+  requests and safe connection-status readback, without a browser or new
+  network listener.
+
 ## 0.2.26
 
 - Add a reversible Vulkan/OpenGL graphics choice for the separate Sportsnet
