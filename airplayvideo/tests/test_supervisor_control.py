@@ -117,7 +117,7 @@ async def test_split_object_with_bool_and_escaped_strings_dispatches_exact_expli
     {"action": "status", "password": PRIVATE}, {"action": "status", "request_id": "bad\n" + PRIVATE},
     {"action": "status", "request_id": "x" * 65}, {"action": "status", "receivers": [A]},
 ])
-async def test_only_two_actions_and_valid_bounded_schema_are_accepted(pipe_control, payload):
+async def test_invalid_action_schemas_are_rejected(pipe_control, payload):
     x = pipe_control
     await x.send(payload)
     await until(lambda: len(x.output) == 1)

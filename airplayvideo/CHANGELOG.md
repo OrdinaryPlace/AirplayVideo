@@ -6,7 +6,10 @@
   browser graphics evidence, output configuration and numeric frame counters.
   Keep requested OpenGL separate from observed GPU-resource access and
   receiver/source counters separate from visible-picture cadence.
-- Preserve playback commands, browser permissions, profiles, graphics choices,
+- Expose the existing scoped Stop and idle-only browser frame measurement
+  through authenticated app input. The measurement returns validated numeric
+  aggregates and never stops or restarts a TV automatically.
+- Preserve existing playback commands, browser permissions, profiles, graphics choices,
   VPN route and output settings. Export only fixed enums, booleans and bounded
   numeric measurements; never browser arguments, page content or account data.
 
