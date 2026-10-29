@@ -104,6 +104,23 @@ URLs or raw errors. An `ok` response means the app handled the command, not
 that a physical TV displayed the game. Existing per-TV HA sensors remain the
 normal source for connection and error details.
 
+Since 0.2.28, successful status responses also include a bounded graphics and
+video projection. `video.sportsnet_rendering` is the saved choice;
+`browser_graphics.launch_rendering` and `gpu_flags_applied` describe the exact
+arguments selected for the current Chrome launch. They do not certify a video
+decoder or effective hardware renderer. A mapped render-node basename and,
+where readable, an owned GPU process with an open render device provide
+separate evidence. Process restrictions, nested sandbox namespaces, incomplete
+observations and unsupported hosts produce `null` rather than a claim of no GPU.
+
+`video.stream_encoder` and `stream_fps` come from the current owned native
+stream. Saved output settings are reported separately. `metrics` contains
+only source encoded-frame and current receiver delivery counters, with a
+monotonic sample time. Compare two samples with the same generation and stable
+streaming targets over at least fifteen seconds. Discard intervals crossing
+Stop, restart, source replacement or a receiver join. These counters do not
+count fresh source pictures or certify frame rate on a physical TV.
+
 This follows Home Assistant's documented
 [app-input action](https://contributors.home-assistant.io/apps/guides/communication/#send-input-to-your-app)
 and authenticated

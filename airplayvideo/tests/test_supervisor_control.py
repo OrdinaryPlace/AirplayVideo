@@ -72,8 +72,13 @@ async def test_real_pipe_status_without_newline_or_eof_returns_only_fresh_safe_f
     await x.send(b'{"action":"status","request_id":"first"}')
     await until(lambda: len(x.output) == 1)
     first = x.records()[0]
+    telemetry = {key: first.pop(key) for key in ("monotonic_ms", "video", "browser_graphics", "metrics")}
     assert first == {"request_id": "first", "result": "ok", "generation": 7,
                      "targets": [A], "receivers": {A: "streaming"}, "capitals_status": "started"}
+    assert type(telemetry["monotonic_ms"]) is int
+    assert all(value is None for value in telemetry["video"].values())
+    assert all(value is None for value in telemetry["browser_graphics"].values())
+    assert telemetry["metrics"] == {"source": {}, "receivers": {}}
     x.controller.generation = 8
     x.runtime["targets"] = [B]
     x.runtime["receivers"] = {B: {"state": "error", "message": PRIVATE}}

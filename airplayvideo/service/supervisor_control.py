@@ -11,6 +11,7 @@ import sys
 import time
 
 from .model import UserError
+from .controller import Stream
 
 
 MAX_INPUT = 8192
@@ -22,6 +23,17 @@ IDENTIFIER = re.compile(r"[a-f0-9]{32}\Z")
 REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,64}\Z")
 CONNECTIONS = frozenset({"idle", "preparing", "connecting", "streaming", "playing", "stopped", "error"})
 CAPITALS_STATUSES = frozenset({"idle", "checking", "started", "expired", "error"})
+ENCODERS = frozenset({"libopenh264", "h264_vaapi"})
+RENDER_NODE = re.compile(r"renderD[0-9]{1,6}\Z")
+MAX_NUMBER = 2**63 - 1
+
+
+def integer(value, minimum=0, maximum=MAX_NUMBER):
+    return value if type(value) is int and minimum <= value <= maximum else None
+
+
+def choice(value, allowed):
+    return value if isinstance(value, str) and value in allowed else None
 
 
 def pairs(values):
@@ -61,12 +73,80 @@ class SupervisorControl:
         candidate = value.get("request_id") if isinstance(value, dict) else None
         return candidate if isinstance(candidate, str) and REQUEST_ID.fullmatch(candidate) else None
 
-    def emit(self, result, request_id=None):
+    def telemetry(self, runtime, targets):
+        # These are coarse encoded/delivery counters, never picture or TV fps.
+        result = {"monotonic_ms": time.monotonic_ns() // 1_000_000,
+                  "video": {key: None for key in (
+                      "configured_encoder", "resolution", "fps", "rate_control", "bitrate_mbps",
+                      "max_bitrate_mbps", "stream_encoder", "stream_fps", "sportsnet_rendering")},
+                  "browser_graphics": {key: None for key in (
+                      "chrome_alive", "active_profile", "launch_rendering", "gpu_flags_applied",
+                      "render_node", "gpu_process_count", "gpu_render_device_open")},
+                  "metrics": {"source": {}, "receivers": {}}}
+        live_stream = False
+        try:
+            setup = self.controller.store.data.get("setup", {})
+            saved = setup.get("video", {}) if isinstance(setup, dict) else {}
+            browser = setup.get("browser", {}) if isinstance(setup, dict) else {}
+            if isinstance(saved, dict):
+                result["video"].update(
+                    configured_encoder=choice(saved.get("encoder"), ENCODERS | {"auto"}),
+                    resolution=choice(saved.get("resolution"), {"1080p", "720p"}),
+                    fps=integer(saved.get("fps"), 30, 60) if saved.get("fps") in (30, 60) else None,
+                    rate_control=choice(saved.get("rate_control"), {"auto", "vbr"}),
+                    bitrate_mbps=integer(saved.get("bitrate_mbps"), 2, 20),
+                    max_bitrate_mbps=integer(saved.get("max_bitrate_mbps"), 2, 40))
+            if isinstance(browser, dict):
+                result["video"]["sportsnet_rendering"] = choice(browser.get("sportsnet_rendering"), {"vulkan", "opengl"})
+        except Exception:
+            pass
+        try:
+            stream = self.controller.stream
+            if (isinstance(stream, Stream) and stream.process is not None and
+                    stream.process.returncode is None and not stream.stopping and isinstance(stream.config, dict)):
+                live_stream = True
+                result["video"]["stream_encoder"] = choice(stream.config.get("encoder"), ENCODERS)
+                fps = stream.config.get("fps")
+                result["video"]["stream_fps"] = integer(fps, 30, 60) if fps in (30, 60) else None
+        except Exception:
+            pass
+        try:
+            graphics = self.controller.browser.graphics_status()
+            if isinstance(graphics, dict):
+                for key in ("chrome_alive", "gpu_flags_applied", "gpu_render_device_open"):
+                    value = graphics.get(key)
+                    result["browser_graphics"][key] = value if type(value) is bool else None
+                result["browser_graphics"]["active_profile"] = choice(graphics.get("active_profile"), {"default", "sportsnet"})
+                result["browser_graphics"]["launch_rendering"] = choice(graphics.get("launch_rendering"), {"vulkan", "opengl"})
+                result["browser_graphics"]["gpu_process_count"] = integer(graphics.get("gpu_process_count"), 0, 128)
+                node = graphics.get("render_node")
+                result["browser_graphics"]["render_node"] = node if isinstance(node, str) and RENDER_NODE.fullmatch(node) else None
+        except Exception:
+            pass
+        if live_stream and isinstance(runtime, dict):
+            metrics = runtime.get("metrics")
+            source_frames = integer(metrics.get("video_frames")) if isinstance(metrics, dict) else None
+            if source_frames is not None:
+                result["metrics"]["source"]["video_frames"] = source_frames
+            receivers = runtime.get("receivers")
+            if isinstance(receivers, dict):
+                for target in targets:
+                    detail, projected = receivers.get(target), {}
+                    if isinstance(detail, dict):
+                        for key in ("video_frames", "wire_bytes", "video_age_us", "audio_age_us", "video_queue_us", "audio_queue_us"):
+                            value = integer(detail.get(key), 0 if key in {"video_frames", "wire_bytes"} else -MAX_NUMBER)
+                            if value is not None:
+                                projected[key] = value
+                    result["metrics"]["receivers"][target] = projected
+        return result
+
+    def emit(self, result, request_id=None, *, telemetry=False):
         # Build a new object from fixed keys/enums; never serialize public state,
         # launch requests, exception text, source details, labels or authentication.
         snapshot = {"result": result, "generation": 0, "targets": [], "receivers": {}, "capitals_status": "unknown"}
         if request_id is not None:
             snapshot["request_id"] = request_id
+        runtime = {}
         try:
             generation = self.controller.generation
             if type(generation) is int and 0 <= generation <= 2**63 - 1:
@@ -88,6 +168,8 @@ class SupervisorControl:
         except Exception:
             # A damaged runtime snapshot cannot expose an exception or raw data.
             pass
+        if telemetry:
+            snapshot.update(self.telemetry(runtime, snapshot["targets"]))
         with contextlib.suppress(Exception):
             self.output(PREFIX + json.dumps(snapshot, separators=(",", ":"), allow_nan=False))
 
@@ -114,7 +196,7 @@ class SupervisorControl:
             return
         if value["action"] == "status":
             # Status does not wait behind public catalog fetches or play locks.
-            self.emit("ok", request_id)
+            self.emit("ok", request_id, telemetry=True)
             return
         if self.closing or len(self.requests) >= MAX_REQUESTS:
             self.emit("busy", request_id)
