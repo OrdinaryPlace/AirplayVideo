@@ -14,6 +14,7 @@ from .network import unused_loopback_port
 from .companion import Companion, CompanionVersionMismatch, install as install_companion
 from .browser_gpu import chrome_gpu_arguments
 from .browser_proxy import chrome_proxy_arguments
+from .rendering_status import capture_identity, gpu_process_status, launch_status, owner_current
 
 BROWSER_VIDEO_STATUSES = frozenset({
     "Opened YouTube fullscreen",
@@ -50,7 +51,24 @@ class Browser:
         self.youtube_task = None
         self.youtube_status = ""
         self.rendering = "vulkan"
+        self._graphics_launch = None
+        self._chrome_identity = None
         self._select_profile("default")
+
+    def graphics_status(self):
+        process = self.chrome_process
+        pid = getattr(process, "pid", None)
+        alive = (process is not None and type(pid) is int and 0 < pid <= 2**31 - 1
+                 and process.returncode is None)
+        if alive and owner_current(self._chrome_identity) is False:
+            alive = False
+        result = {"chrome_alive": alive, "active_profile": None, "launch_rendering": None,
+                  "gpu_flags_applied": None, "render_node": None,
+                  "gpu_process_count": None, "gpu_render_device_open": None}
+        if alive and self._graphics_launch is not None:
+            result.update(self._graphics_launch)
+            result.update(gpu_process_status(self._chrome_identity))
+        return result
 
     def _select_profile(self, profile):
         check(profile in {"default", "sportsnet"}, "Invalid browser profile")
@@ -201,7 +219,10 @@ class Browser:
             self.companion = Companion(self.root, identity)
             await self.companion.start()
             self.environment.update(AIRPLAYVIDEO_COMPANION_ID=identity, AIRPLAYVIDEO_COMPANION_SOCKET=str(self.companion.path))
-            self.chrome_process = await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--start-fullscreen", *chrome_gpu_arguments(rendering=self.rendering), *chrome_proxy_arguments(effective_browser_proxy(setup)), "about:blank")
+            gpu_arguments = chrome_gpu_arguments(rendering=self.rendering)
+            self.chrome_process = await self.launch("google-chrome", "--no-first-run", "--no-default-browser-check", "--password-store=basic", "--disable-dev-shm-usage", "--autoplay-policy=no-user-gesture-required", "--user-data-dir=" + str(self.root / "profile"), f"--window-size={width},{height}", "--start-fullscreen", *gpu_arguments, *chrome_proxy_arguments(effective_browser_proxy(setup)), "about:blank")
+            self._graphics_launch = launch_status(self.profile, self.rendering, gpu_arguments)
+            self._chrome_identity = capture_identity(getattr(self.chrome_process, "pid", None))
             await self.companion.wait_ready()
             self.running = True
             self.url = ""
@@ -429,6 +450,8 @@ class Browser:
             raise
 
     async def _close(self, *, graceful=False):
+        self._graphics_launch = None
+        self._chrome_identity = None
         self.cancel_youtube()
         self.youtube_status = ""
         if (self.running or graceful) and self.companion:

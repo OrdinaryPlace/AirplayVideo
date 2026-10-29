@@ -96,13 +96,46 @@ data:
     join: true
 ```
 
-The only accepted input actions are `capitals_play` and read-only `status`.
+The input actions are `capitals_play` and read-only `status`, plus the scoped
+`stop` and idle-only `measure_frame_stages` operations introduced in 0.2.28.
 Use a fresh `request_id` to correlate a request with its bounded
 `AIRPLAYVIDEO_CONTROL` log response; it is not a duplicate-suppression key.
-Status returns connection enums and target IDs, without account/browser data,
-URLs or raw errors. An `ok` response means the app handled the command, not
+Status returns connection enums and target IDs, without account data, page
+content, URLs or raw errors. An `ok` response means the app handled the command, not
 that a physical TV displayed the game. Existing per-TV HA sensors remain the
 normal source for connection and error details.
+
+Since 0.2.28, successful status responses also include a bounded graphics and
+video projection. `video.sportsnet_rendering` is the saved choice;
+`browser_graphics.launch_rendering` and `gpu_flags_applied` describe the exact
+arguments selected for the current Chrome launch. They do not certify a video
+decoder or effective hardware renderer. A mapped render-node basename and,
+where readable, an owned GPU process with an open render device provide
+separate evidence. Process restrictions, nested sandbox namespaces, incomplete
+observations and unsupported hosts produce `null` rather than a claim of no GPU.
+
+`video.stream_encoder` and `stream_fps` come from the current owned native
+stream. Saved output settings are reported separately. `metrics` contains
+only source encoded-frame and current receiver delivery counters, with a
+monotonic sample time. Compare two samples with the same generation and stable
+streaming targets over at least fifteen seconds. Discard intervals crossing
+Stop, restart, source replacement or a receiver join. These counters do not
+count fresh source pictures or certify frame rate on a physical TV.
+
+For a controlled picture-freshness measurement, first send
+`{"action":"stop","receiver":"PAIRED_RECEIVER_ID","request_id":"stop-1"}`.
+Stop requires one explicit paired receiver and also cancels its pending game
+launch. Check that status has no remaining media targets before requesting
+`{"action":"measure_frame_stages","request_id":"frames-1"}`. It uses the
+existing two-second warmup and fifteen-second browser measurement, preserving
+the current page and profile and returning only a strictly validated numeric
+report. It refuses active playback and conflicting diagnostics; it never stops
+other TVs or resumes playback itself. Cancellation and timeout reap only its
+owned measurement. Request a new explicit game launch when ready to resume.
+
+The picture-change samples can identify repeated content before H.264 but are
+not original frame identities. The test is off-TV, so content changes and the
+different host load limit comparison with a running AirPlay session.
 
 This follows Home Assistant's documented
 [app-input action](https://contributors.home-assistant.io/apps/guides/communication/#send-input-to-your-app)

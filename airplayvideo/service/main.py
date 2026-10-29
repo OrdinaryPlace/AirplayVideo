@@ -75,7 +75,7 @@ class Application:
         self.ha.browser_vpn = self.browser_vpn
         self.capitals = CapitalsLauncher(store, self.controller, self.browser_vpn, self.configuration_lock, self.ha.publish_state)
         self.controller.capitals = self.ha.capitals = self.capitals
-        self.supervisor_control = SupervisorControl(self.controller, self.capitals)
+        self.supervisor_control = SupervisorControl(self.controller, self.capitals, frame_probe=self.frame_probe)
 
     def state(self):
         return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "browser_vpn": self.browser_vpn.state(), "capitals": self.capitals.state(), "recordings": self.recordings.state(), "diagnostics": self.diagnostics.state(), "frame_probe": self.frame_probe.state(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}

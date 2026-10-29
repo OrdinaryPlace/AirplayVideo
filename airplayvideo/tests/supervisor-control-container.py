@@ -35,9 +35,26 @@ async def main():
             try:
                 await application.start()
                 await asyncio.wait_for(received.wait(), 20)
-                assert snapshots == [{"request_id": "container-smoke", "result": "ok",
-                                      "generation": 0, "targets": [], "receivers": {},
-                                      "capitals_status": "idle"}], snapshots
+                assert len(snapshots) == 1, snapshots
+                snapshot = snapshots[0]
+                base = {"request_id": "container-smoke", "result": "ok", "generation": 0,
+                        "targets": [], "receivers": {}, "capitals_status": "idle"}
+                assert set(snapshot) == set(base) | {"monotonic_ms", "video", "browser_graphics", "metrics"}
+                assert {key: snapshot[key] for key in base} == base
+                assert type(snapshot["monotonic_ms"]) is int and snapshot["monotonic_ms"] >= 0
+                assert snapshot["video"] == {
+                    "configured_encoder": settings["video"]["encoder"],
+                    "resolution": settings["video"]["resolution"], "fps": settings["video"]["fps"],
+                    "rate_control": settings["video"]["rate_control"],
+                    "bitrate_mbps": settings["video"]["bitrate_mbps"],
+                    "max_bitrate_mbps": settings["video"]["max_bitrate_mbps"],
+                    "stream_encoder": None, "stream_fps": None,
+                    "sportsnet_rendering": settings["browser"]["sportsnet_rendering"]}
+                assert snapshot["browser_graphics"] == {
+                    "chrome_alive": False, "active_profile": None, "launch_rendering": None,
+                    "gpu_flags_applied": None, "render_node": None,
+                    "gpu_process_count": None, "gpu_render_device_open": None}
+                assert snapshot["metrics"] == {"source": {}, "receivers": {}}
                 assert not application.browser.running
                 assert not application.controller.targets
                 assert not application.controller.stream
