@@ -32,7 +32,7 @@ async def main():
         # account-free result crosses into test reporting or assertion output.
         assert set(value) <= {'stage', 'event', 'trusted', 'filled', 'submitted', 'webdriver'}
         assert value.get('stage') in {'email', 'password', 'verification', 'home', 'watch'}
-        assert value.get('event') in {'ready', 'click', 'select', 'advance', 'unexpected-submit'}
+        assert value.get('event') in {'ready', 'click', 'arrow-down', 'tab', 'select', 'advance', 'unexpected-submit'}
         assert value.get('webdriver') is False
         for key in ('trusted', 'filled', 'submitted'):
             assert key not in value or type(value[key]) is bool
@@ -45,21 +45,29 @@ async def main():
         if stage not in {'email', 'password', 'verification', 'home', 'watch'}:
             raise web.HTTPNotFound()
         if stage in {'email', 'password'}:
-            field = ('<input id="credential" type="email" autocomplete="username" aria-label="Email">'
+            # Chrome may restore values across multi-step forms that reuse an
+            # identifier. Each synthetic scenario has its own field/form name;
+            # password also uses a separate origin below. This fixture requires
+            # the native selection path, not an already-filled fast path.
+            variant = stage + ('-suggestion' if saved else '-missing')
+            identity = 'fixture-' + variant + '-field'
+            field = ('<input data-fixture-field id="' + identity + '" name="' + identity + '" type="email" autocomplete="username" aria-label="Email">'
                      if stage == 'email' else
-                     '<input id="credential" type="password" autocomplete="current-password" aria-label="Password">')
+                     '<input data-fixture-field id="' + identity + '" name="' + identity + '" type="password" autocomplete="current-password" aria-label="Password">')
             label = 'Continue' if stage == 'email' else 'Sign in'
-            content = '<h1>Sign in</h1><form id="login">' + field + '<button>' + label + '</button></form><div id="suggestion" hidden>Saved login fixture</div>'
+            content = '<h1>Sign in</h1><form id="fixture-' + variant + '-form" name="fixture-' + variant + '-form">' + field + '<button>' + label + '</button></form><div id="suggestion" hidden>Saved login fixture</div>'
         elif stage == 'verification':
             content = '<h1>Enter verification code</h1><input type="text" autocomplete="one-time-code"><button>Continue</button>'
         elif stage == 'home':
             content = '<nav class="account-nav--signed-in"><button class="account-nav__profile" aria-label="Account">Account</button></nav><h1>Signed-in fixture</h1>'
         else:
             content = '<nav class="account-nav--signed-in"><button class="account-nav__profile" aria-label="Account">Account</button></nav><video autoplay muted></video><canvas hidden width="32" height="32"></canvas>'
-        next_url = (origins['account'] + '/password' if stage == 'email'
+        next_url = (origins['auth'] + '/password' if stage == 'email'
                     else origins['watch'] + '/home')
         script = r'''
         const stage=STAGE, saved=SAVED, next=NEXT;
+        const credential=document.querySelector('[data-fixture-field]');
+        const login=document.querySelector('form'),suggestion=document.querySelector('#suggestion');
         const report=(event,extra={})=>fetch('/report',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({stage,event,webdriver:navigator.webdriver,...extra})});
         let clicked=false,selected=false,shownAt=0;
         if(stage==='email'||stage==='password'){
@@ -69,6 +77,8 @@ async def main():
             report('click',{trusted:event.isTrusted,filled:credential.value.length>0});
           });
           credential.addEventListener('keydown',event=>{
+            if(event.key==='ArrowDown')report('arrow-down',{trusted:event.isTrusted,filled:credential.value.length>0});
+            if(event.key==='Tab')report('tab',{trusted:event.isTrusted,filled:credential.value.length>0});
             if(event.key==='ArrowDown'&&event.isTrusted&&clicked&&saved)selected=true;
             if(event.key==='Tab'&&event.isTrusted&&selected&&performance.now()-shownAt>=500){
               // Synthetic suggestion UI: the real native click and keys are
@@ -91,7 +101,7 @@ async def main():
           const paint=()=>{context.fillStyle=++frame%2?'#338855':'#884433';context.fillRect(0,0,32,32);requestAnimationFrame(paint)};
           paint();video.srcObject=canvas.captureStream(12);video.play();
         }
-        requestAnimationFrame(()=>requestAnimationFrame(()=>report('ready')));
+        requestAnimationFrame(()=>requestAnimationFrame(()=>report('ready',{filled:!!credential&&credential.value.length>0})));
         '''
         script = script.replace('STAGE', json.dumps(stage)).replace('SAVED', json.dumps(saved)).replace('NEXT', json.dumps(next_url))
         return web.Response(content_type='text/html', text='''<!doctype html><meta charset="utf-8"><title>Synthetic sign-in fixture</title>
@@ -123,11 +133,34 @@ async def main():
         with patch('service.browser.browser_profile', return_value='sportsnet'):
             await browser.navigate(origins[origin] + path, default_setup())
 
-    async def trusted_selection(stage):
+    def diagnostic(point, result=None):
+        # Fixed enum/boolean/count projection only: never field contents, URLs,
+        # screenshots, browser errors or arbitrary request data.
+        events = {}
+        for row in reports:
+            key = row['stage'] + ':' + row['event']
+            detail = events.setdefault(key, {'count': 0, 'trusted': False, 'filled': False})
+            detail['count'] += 1
+            detail['trusted'] |= row.get('trusted') is True
+            detail['filled'] |= row.get('filled') is True
+        stages = {'email', 'password', 'verification', 'signed_in', 'playing', 'unknown', 'loading', 'other', 'error', 'permission', 'signin_choice'}
+        state = None if result is None else {
+            'stage': result.get('stage') if result.get('stage') in stages else 'unknown',
+            'filled': result.get('filled') is True,
+            'has_rect': isinstance(result.get('rect'), dict),
+        }
+        print('Synthetic sign-in evidence: ' + json.dumps({'point': point, 'state': state, 'events': events}, sort_keys=True), flush=True)
+
+    async def trusted_selection(stage, result):
+        diagnostic(stage + '_after_autofill', result)
         async def wait():
             while not any(row['stage'] == stage and row['event'] == 'select' and row['trusted'] for row in reports):
                 await asyncio.sleep(0.05)
-        await asyncio.wait_for(wait(), 5)
+        try:
+            await asyncio.wait_for(wait(), 5)
+        except TimeoutError:
+            diagnostic(stage + '_selection_missing', result)
+            raise
 
     try:
         with tempfile.TemporaryDirectory() as directory, ExitStack() as resources:
@@ -158,19 +191,23 @@ async def main():
                 browser = Browser(root / 'data', session)
                 try:
                     await navigate(browser, 'account', '/email')
-                    await state_is(browser, 'email', filled=False)
+                    initial = await state_is(browser, 'email', filled=False)
+                    diagnostic('email_before_autofill', initial)
                     argv = Path(f'/proc/{browser.chrome_process.pid}/cmdline').read_bytes().split(b'\0')
                     assert not any(arg.startswith((b'--remote-debugging', b'--enable-automation', b'--no-sandbox', b'--headless')) for arg in argv)
                     assert not (browser.root / 'profile/DevToolsActivePort').exists()
                     result = await browser.sportsnet_autofill('email')
+                    diagnostic('email_autofill_returned', result)
                     assert result['stage'] == 'email' and result['filled']
-                    await trusted_selection('email')
+                    await trusted_selection('email', result)
                     assert not any(row['event'] in {'advance', 'unexpected-submit'} for row in reports), 'Autofill submitted a form'
                     await browser.sportsnet_step('email')
-                    await state_is(browser, 'password', filled=False)
+                    initial = await state_is(browser, 'password', filled=False)
+                    diagnostic('password_before_autofill', initial)
                     result = await browser.sportsnet_autofill('password')
+                    diagnostic('password_autofill_returned', result)
                     assert result['stage'] == 'password' and result['filled']
-                    await trusted_selection('password')
+                    await trusted_selection('password', result)
                     await browser.sportsnet_step('password')
                     await state_is(browser, 'signed_in')
                     assert sum(row['event'] == 'advance' for row in reports) == 2
