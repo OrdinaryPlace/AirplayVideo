@@ -301,6 +301,83 @@ async def test_manual_sign_in_reports_missing_permission_without_attempting_logi
 
 
 @pytest.mark.asyncio
+async def test_permission_opt_in_keeps_same_episode_eligible_for_first_automatic_login(context, monkeypatch):
+    monkeypatch.setattr(module, 'AUTO_COOLDOWN', 0)
+    x = context(page('permission'))
+    owner = x.auth.context()
+    await x.auth.request()
+    await x.auth.operation
+    assert x.auth.status == 'permission_required' and x.auth.attempted is None
+    assert not x.browser.autofills and not x.browser.steps
+    # Granting the optional host permissions need not navigate or replace the
+    # companion. A permission-only probe must not consume this login episode.
+    x.browser.pages = [page('email')]
+    x.browser.saved = False
+    assert x.auth.context() == owner
+    x.auth.start()
+    try:
+        for _ in range(100):
+            if x.auth.status == 'saved_login_required' and x.auth.operation.done():
+                break
+            await asyncio.sleep(0)
+        else:
+            raise AssertionError('The first authorized login was suppressed after opt-in')
+        assert x.browser.autofills == [('email', TARGET)]
+        assert not x.browser.steps and not x.browser.navigations
+        assert x.auth.context() == owner
+    finally:
+        await x.auth.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('after', ['wrong_page', 'loading'])
+async def test_failed_resume_after_owned_navigation_finishes_with_terminal_status(context, monkeypatch, after):
+    monkeypatch.setattr(module, 'ATTEMPT_SECONDS', 0.01)
+    x = context(page('signed_in'), page('signed_in' if after == 'wrong_page' else 'loading'))
+    before = x.auth.context()
+    await x.auth.request()
+    await x.auth.operation
+    assert x.browser.navigations == [TARGET]
+    assert x.auth.context() == (before[0], before[1] + 1, before[2])
+    assert x.auth.status == 'failed' and not x.auth.busy
+    assert not x.browser.steps and not x.browser.autofills
+    await x.auth.close()
+
+
+@pytest.mark.asyncio
+async def test_stop_during_prepare_initial_probe_prevents_adopting_new_generation(context):
+    x = context(page('email', filled=True))
+    before = x.control.generation
+    x.browser.on_read = lambda _value: setattr(x.control, 'generation', x.control.generation + 1)
+    async with x.control.lock:
+        with pytest.raises(UserError, match='cancelled'):
+            await x.auth.prepare(TARGET)
+    assert x.control.generation == before + 1
+    assert len(x.browser.reads) == 1 and x.auth.attempted is None
+    assert not x.browser.autofills and not x.browser.steps and not x.browser.navigations
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize('source', [
+    {'kind': 'generated'}, {'kind': 'youtube'}, {'kind': 'hdhomerun'},
+    {'kind': 'browser', 'profile': 'default'},
+])
+async def test_monitor_ignores_unrelated_active_source_with_sportsnet_browser_left_open(context, source):
+    x = context(page('email'))
+    x.control.source = source
+    assert x.browser.running and x.browser.profile == 'sportsnet'
+    x.auth.start()
+    try:
+        for _ in range(30):
+            await asyncio.sleep(0)
+        assert x.auth.status == 'unavailable' and x.auth.state()['available'] is False
+        assert not x.browser.reads and not x.browser.autofills and not x.browser.steps
+        assert x.auth.operation is None
+    finally:
+        await x.auth.close()
+
+
+@pytest.mark.asyncio
 async def test_stop_latches_passive_detection_until_new_explicit_navigation(context, monkeypatch):
     monkeypatch.setattr(module, 'AUTO_COOLDOWN', 0)
     x = context(page('email'))
