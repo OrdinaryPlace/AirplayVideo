@@ -11,6 +11,7 @@ import pytest
 
 from service.model import Store, default_setup
 from service.mqtt import HomeAssistant, discovery_documents, sportsnet_auth_state
+from test_capitals_controls import run_ui as run_playback_ui
 
 
 WEB = Path(__file__).resolve().parents[1] / "web"
@@ -162,4 +163,27 @@ assert.equal(sportsnetAuthPresentation(state.sportsnet_auth).disabled,false);
 assert.deepEqual(calls,[]);
 $('sportsnetSignIn').onclick();assert.deepEqual(calls,['sportsnet_enable']);
 assert.equal(expanded,0);
+""")
+
+
+def test_manual_sign_in_response_leaves_stop_available_without_a_tv_or_playback_phase():
+    run_playback_ui("""
+state.runtime.phase='idle';state.runtime.targets=[];
+state.sportsnet_auth={status:'sign_in_required',available:true,busy:false};
+updateButtons();assert.equal($('stopAll').disabled,true);
+api=async(path,body)=>{
+  calls.push({path,body:structuredClone(body)});
+  return {...state,sportsnet_auth:{status:'signing_in',available:true,busy:true}};
+};
+// The HTTP request ends before the background login attempt. Rendering must
+// use its returned auth state after the ordinary action-busy flag clears.
+await act('sportsnet_sign_in');
+assert.equal(busy,false);assert.equal(busyAction,'');
+assert.equal(state.runtime.phase,'idle');assert.deepEqual(state.runtime.targets,[]);
+assert.equal(state.sportsnet_auth.busy,true);
+assert.equal($('stopAll').disabled,false);
+assert.equal($('sportsnetSignIn').disabled,true);
+assert.deepEqual(calls,[{path:'api/actions/sportsnet_sign_in',body:{}}]);
+state.sportsnet_auth={status:'saved_login_required',available:true,busy:false};
+updateButtons();assert.equal($('stopAll').disabled,true);
 """)

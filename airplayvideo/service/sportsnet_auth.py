@@ -59,7 +59,12 @@ class SportsnetAuth:
 
     def state(self):
         return {"status": self.status if self.status in STATUSES else "failed",
-                "busy": bool(self.busy), "available": self.available and self.status != "unavailable"}
+                "busy": bool(self.busy), "available": self.available and self.source_current()
+                and self.status != "unavailable"}
+
+    def source_current(self):
+        source = self.controller.source
+        return not source or source.get("kind") == "browser" and source.get("profile") == "sportsnet"
 
     def set_status(self, status):
         check(status in STATUSES, "Invalid Sportsnet sign-in state")
@@ -96,6 +101,7 @@ class SportsnetAuth:
     async def request(self):
         """UI/MQTT starts one bounded task; repeated presses share that task."""
         self.require_ready()
+        check(self.source_current(), "Sportsnet is not the current browser source")
         if self.operation is not None and not self.operation.done() or self.busy:
             return
         owner, target = self.context(), self.target()
@@ -144,6 +150,7 @@ class SportsnetAuth:
 
     async def enable(self):
         self.require_ready()
+        check(self.source_current(), "Sportsnet is not the current browser source")
         async with self.controller.lock:
             owner = self.context()
             await self.browser.sportsnet_enable(guard=lambda: self.current(owner))
@@ -262,8 +269,7 @@ class SportsnetAuth:
                     if not self.available:
                         self.set_status("unavailable")
                     elif not self.busy and not (self.operation and not self.operation.done()) and not self.controller.lock.locked():
-                        source = self.controller.source
-                        if source and (source.get("kind") != "browser" or source.get("profile") != "sportsnet"):
+                        if not self.source_current():
                             self.set_status("unavailable")
                             await asyncio.sleep(POLL_SECONDS)
                             continue
@@ -307,6 +313,15 @@ class SportsnetAuth:
         self.stopped_navigation = self.context()[1:]
         self.attempted = self.context()
         self.last_success = False
+
+    def cancel_browser(self):
+        # Close browser must not wait behind a sign-in episode holding the
+        # controller lock. Invalidate only browser work, preserving a different
+        # source that may still be using the encoder during new-page preparation.
+        self.browser.navigation_generation += 1
+        self.playback_stopped()
+        if self.operation is not None and not self.operation.done():
+            self.operation.cancel()
 
     async def close(self):
         self.closing = True

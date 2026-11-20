@@ -414,6 +414,16 @@ async def test_recording_or_unavailable_browser_blocks_manual_request(context):
     assert not x.browser.reads and not x.browser.steps
 
 
+@pytest.mark.asyncio
+async def test_manual_sign_in_does_not_operate_a_leftover_browser_for_another_source(context):
+    x = context(page('email'))
+    x.control.source = {'kind': 'generated'}
+    assert x.auth.state()['available'] is False
+    with pytest.raises(UserError, match='current browser source'):
+        await x.auth.request()
+    assert not x.browser.reads and not x.browser.steps
+
+
 @pytest.mark.parametrize('value', [
     'http://watch.sportsnet.ca/watch/Test_1',
     'https://watch.sportsnet.ca.evil.invalid/watch/Test_1',

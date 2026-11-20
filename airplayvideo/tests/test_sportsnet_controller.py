@@ -1,12 +1,14 @@
 """Scoped Stop wins while Sportsnet auth is preparing before stream creation."""
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import Mock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
 from service.model import UserError
 from test_capitals import A, B, Stream, context, live
+from test_sportsnet_auth import Browser as AuthBrowser, page
+from service.sportsnet_auth import SportsnetAuth
 
 
 @pytest.mark.asyncio
@@ -67,4 +69,37 @@ async def test_unrelated_receiver_stop_does_not_cancel_authorized_auth_preparati
     finally:
         release.set()
         await asyncio.gather(playing, return_exceptions=True)
+        await x.control.close()
+
+
+@pytest.mark.asyncio
+async def test_close_browser_cancels_manual_login_before_waiting_for_controller_lock(context):
+    x = context
+    browser = AuthBrowser([page('email')])
+    entered, gate = asyncio.Event(), asyncio.Event()
+
+    async def status(_target=''):
+        entered.set()
+        await gate.wait()
+        return page('email')
+
+    async def close():
+        browser.running = False
+
+    browser.sportsnet_status = status
+    browser.close = AsyncMock(side_effect=close)
+    x.control.browser = browser
+    auth = SportsnetAuth(x.store, x.control, browser)
+    x.control.sportsnet_auth = auth
+    try:
+        await auth.request()
+        await asyncio.wait_for(entered.wait(), 1)
+        assert x.control.lock.locked() and auth.busy
+        await asyncio.wait_for(x.control.close_browser(), 1)
+        assert browser.running is False and not auth.busy
+        assert auth.operation.cancelled()
+        assert not browser.steps and not browser.autofills and not Stream.created
+    finally:
+        gate.set()
+        await auth.close()
         await x.control.close()

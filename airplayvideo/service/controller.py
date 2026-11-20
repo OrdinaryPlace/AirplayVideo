@@ -575,6 +575,8 @@ class Controller:
 
     async def close_browser(self):
         self.require_no_diagnostic()
+        if self.sportsnet_auth is not None:
+            self.sportsnet_auth.cancel_browser()
         if self.source and self.source["kind"] == "browser":
             await self.stop()
         async with self.lock:
