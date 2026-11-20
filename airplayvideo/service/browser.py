@@ -2,6 +2,7 @@
 from __future__ import annotations
 import asyncio
 import contextlib
+import math
 import os
 from pathlib import Path
 import secrets
@@ -40,6 +41,7 @@ class Browser:
         self.children = []
         self.running = False
         self.url = ""
+        self.navigation_generation = 0
         self.initial_navigation = "new"
         self.dimensions = (1920, 1080)
         self.lock = asyncio.Lock()
@@ -306,14 +308,19 @@ class Browser:
             self.youtube_task.cancel()
             self.youtube_task = None
 
-    async def navigate(self, url, setup, youtube=False, watch_later=False):
+    async def navigate(self, url, setup, youtube=False, watch_later=False, guard=None):
         url = browser_url(url)
+        if guard is not None:
+            guard()
         await self.start(setup, profile=browser_profile(url))
         self.cancel_youtube()
         self.youtube_status = ""
         async with self.control_lock:
+            if guard is not None:
+                guard()
             check(self.running and self.companion, "Open the browser first")
             check(self.initial_navigation != "uncertain", "Browser navigation did not finish; close and reopen the browser")
+            self.navigation_generation += 1
             # Chrome can accept navigation before its acknowledgement is lost.
             # An uncertain destination must never qualify for URL reuse.
             self.url = ""
@@ -327,6 +334,138 @@ class Browser:
             self.url = url
         if youtube or watch_later:
             self.youtube_task = asyncio.create_task(self.prepare_youtube(setup["browser"]["youtube_quality"], watch_later))
+
+    async def _sportsnet_call(self, action, target_url="", **arguments):
+        """Return an allowlisted projection, never page text or form values."""
+        check(self.running and self.profile == "sportsnet" and self.companion,
+              "Open Sportsnet in the browser first")
+        result = await self.companion.call(action, target_url=target_url, **arguments)
+        stages = {"loading", "signin_choice", "email", "password", "signed_in",
+                  "playing", "verification", "error", "unknown", "other", "permission"}
+        stage = result.get("stage")
+        check(stage in stages, "Sportsnet browser controls did not return a valid state")
+        value = {"stage": stage}
+        for key in ("filled", "target_matches", "paused", "muted", "fullscreen", "acted"):
+            value[key] = result.get(key) is not False if key in {"paused", "muted"} else result.get(key) is True
+        value["next"] = result.get("next") if result.get("next") in {
+            "signin_entry", "subscription", "autofill", "continue", "submit", "none"} else "none"
+        seconds = result.get("video_time")
+        value["video_time"] = (seconds if type(seconds) in {int, float}
+                               and math.isfinite(seconds) and 0 <= seconds <= 604800 else None)
+        rect = result.get("rect")
+        keys = ("x", "y", "width", "height", "viewport_width", "viewport_height")
+        if isinstance(rect, dict) and all(type(rect.get(key)) in {int, float}
+                                        and math.isfinite(rect[key]) for key in keys):
+            rect = {key: float(rect[key]) for key in keys}
+            if (0 <= rect["x"] < rect["viewport_width"] <= 16384
+                    and 0 <= rect["y"] < rect["viewport_height"] <= 16384
+                    and 0 < rect["width"] <= rect["viewport_width"] - rect["x"]
+                    and 0 < rect["height"] <= rect["viewport_height"] - rect["y"]):
+                value["rect"] = rect
+        return value
+
+    async def sportsnet_status(self, target_url=""):
+        async with self.control_lock:
+            return await self._sportsnet_call("sportsnet_status", target_url)
+
+    async def sportsnet_enable(self, guard=None):
+        async with self.control_lock:
+            if guard is not None:
+                guard()
+            check(self.running and self.profile == "sportsnet" and self.companion,
+                  "Open Sportsnet in the browser first")
+            await self.companion.call("sportsnet_enable")
+
+    async def sportsnet_step(self, stage, target_url="", operation="advance", guard=None):
+        check(stage in {"signin_choice", "email", "password"}
+              and operation in {"advance", "field"}, "Invalid Sportsnet sign-in step")
+        async with self.control_lock:
+            if guard is not None:
+                guard()
+            return await self._sportsnet_call("sportsnet_step", target_url,
+                                            expected_stage=stage, operation=operation)
+
+    async def sportsnet_autofill(self, stage, target_url="", guard=None):
+        """Choose Chrome's saved suggestion using trusted input, never its value."""
+        check(stage in {"email", "password"}, "Invalid Sportsnet autofill step")
+        def current():
+            if guard is not None:
+                guard()
+        async with self.control_lock:
+            current()
+            remote = ["x11vnc", "-display", self.environment["DISPLAY"], "-auth", self.environment["XAUTHORITY"]]
+            try:
+                guarded = await self.native_command(*remote, "-R", "viewonly", "-Q", "viewonly", "-sync")
+                check("viewonly:1" in guarded, "Preview input could not be paused for Sportsnet sign-in")
+                window = await self.native_command("xdotool", "getactivewindow")
+                check(window.isdigit() and self.chrome_process is not None,
+                      "Select the Sportsnet browser before signing in")
+                owner = await self.native_command("xdotool", "getwindowpid", window)
+                check(owner == str(self.chrome_process.pid), "Select the Sportsnet browser before signing in")
+                current()
+                result = await self._sportsnet_call("sportsnet_step", target_url,
+                                                   expected_stage=stage, operation="field")
+                if result["stage"] != stage or result["filled"]:
+                    return result
+                rect = result.get("rect")
+                check(rect is not None, "Select the saved Sportsnet login in the preview")
+                width, height = self.dimensions
+                # Native clicks qualify only the fullscreen desktop Chrome starts.
+                # A visible toolbar or a moved/resized window needs manual input.
+                geometry = await self.native_command("xdotool", "getwindowgeometry", "--shell", window)
+                fields = dict(line.split("=", 1) for line in geometry.splitlines() if "=" in line)
+                check(all(fields.get(key) == str(expected) for key, expected in
+                          (("X", 0), ("Y", 0), ("WIDTH", width), ("HEIGHT", height))),
+                      "Put the Sportsnet browser fullscreen before using saved sign-in")
+                scale_x, scale_y = width / rect["viewport_width"], height / rect["viewport_height"]
+                check(abs(scale_x - scale_y) <= min(scale_x, scale_y) * 0.01,
+                      "Put the Sportsnet browser fullscreen before using saved sign-in")
+                x = round((rect["x"] + rect["width"] / 2) * scale_x)
+                y = round((rect["y"] + rect["height"] / 2) * scale_y)
+                check(await self.native_command("xdotool", "getactivewindow") == window,
+                      "Sportsnet browser focus changed; use the preview")
+                current()
+                latest = await self._sportsnet_call("sportsnet_status", target_url)
+                current()
+                if latest["stage"] != stage or latest["filled"]:
+                    return latest
+                check(latest.get("rect") == rect, "Sportsnet form moved; use the browser preview")
+                await self.native_command("xdotool", "mousemove", "--sync", str(x), str(y), "click", "1")
+                # Chrome guards newly shown password suggestions against early
+                # acceptance, including Tab. Respect its visibility dwell time.
+                await asyncio.sleep(0.65)
+                current()
+                result = await self._sportsnet_call("sportsnet_status", target_url)
+                current()
+                if result["stage"] != stage or result["filled"]:
+                    return result
+                check(await self.native_command("xdotool", "getactivewindow") == window,
+                      "Sportsnet browser focus changed; use the preview")
+                current()
+                # Tab accepts an offered suggestion; absent a suggestion it just
+                # moves focus. Return could accidentally submit an empty form.
+                await self.native_command("xdotool", "key", "--clearmodifiers", "Down", "Tab")
+                for _ in range(10):
+                    result = await self._sportsnet_call("sportsnet_status", target_url)
+                    current()
+                    if result["stage"] != stage or result["filled"]:
+                        break
+                    await asyncio.sleep(0.1)
+                return result
+            finally:
+                restoring = asyncio.create_task(self.native_command(*remote, "-R", "noviewonly", "-sync"))
+                cancelled = False
+                while not restoring.done():
+                    try:
+                        await asyncio.shield(restoring)
+                    except asyncio.CancelledError:
+                        cancelled = True
+                    except (UserError, OSError):
+                        break
+                with contextlib.suppress(UserError, OSError):
+                    restoring.result()
+                if cancelled:
+                    raise asyncio.CancelledError
 
     async def prepare_youtube(self, quality, watch_later):
         async def prepare():
@@ -394,6 +533,7 @@ class Browser:
             self.cancel_youtube()
             self.youtube_status = ""
             async with self.control_lock:
+                self.navigation_generation += 1
                 if action in {"back", "forward"}:
                     # History changes the page without granting permission to
                     # inspect arbitrary page URLs through the companion.
@@ -450,6 +590,7 @@ class Browser:
             raise
 
     async def _close(self, *, graceful=False):
+        self.navigation_generation += 1
         self._graphics_launch = None
         self._chrome_identity = None
         self.cancel_youtube()

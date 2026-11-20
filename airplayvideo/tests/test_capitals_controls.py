@@ -146,7 +146,7 @@ def run_ui(script):
     if not node:
         pytest.skip("Node is required for browser controls checks")
     functions = []
-    for name in ("updateButtons", "renderCapitals", "act"):
+    for name in ("sportsnetAuthPresentation", "updateButtons", "renderCapitals", "act"):
         match = re.search(rf"^(?:async )?function {name}\([^\n]*\)\s*\{{.*?^\}}", SOURCE, re.M | re.S)
         assert match, name
         functions.append(match.group())

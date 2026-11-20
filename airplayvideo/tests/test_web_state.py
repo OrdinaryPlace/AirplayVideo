@@ -188,7 +188,7 @@ def run_recording_ui(script):
     if not node:
         pytest.skip('Node is required for browser state checks')
     functions = []
-    for name in ('cadenceNumber', 'frameStageBlockReason', 'frameStagesMarkup', 'renderFrameStages', 'pictureCadenceMarkup', 'stableMarkup', 'renderRecordings', 'updateButtons'):
+    for name in ('sportsnetAuthPresentation', 'cadenceNumber', 'frameStageBlockReason', 'frameStagesMarkup', 'renderFrameStages', 'pictureCadenceMarkup', 'stableMarkup', 'renderRecordings', 'updateButtons'):
         match = re.search(rf'^function {name}\([^\n]*\)\s*\{{.*?^\}}', SOURCE, re.M | re.S)
         assert match, name
         functions.append(match.group())

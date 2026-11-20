@@ -1,9 +1,10 @@
 {
   "manifest_version": 3,
   "name": "AirplayVideo Browser Controls",
-  "version": "1.0.4",
+  "version": "1.0.5",
   "description": "Private browser controls for the local AirplayVideo app.",
   "permissions": ["nativeMessaging", "scripting"],
   "host_permissions": ["https://www.youtube.com/*"],
+  "optional_host_permissions": ["https://watch.sportsnet.ca/*", "https://account.sportsnet.ca/*", "https://rogers-prd.transmit.security/*"],
   "background": {"service_worker": "background.js"}
 }

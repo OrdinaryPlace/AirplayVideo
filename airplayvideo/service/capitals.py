@@ -269,6 +269,10 @@ class CapitalsLauncher:
                                    for target in targets)
                     self.persist(last_attempted_game=event.game_key, error="")
                     if same and attached and (join or control.targets == set(targets)):
+                        if getattr(control, "sportsnet_auth", None) is not None:
+                            await control.sportsnet_auth.prepare(event.watch_url)
+                            self.manual_current(epoch, generation)
+                            check(self.fresh(catalog, event), "The live game check expired before playback could start")
                         self.persist(status="started", deadline=None, last_started_game=event.game_key,
                                      last_watch_url=event.watch_url)
                         return
