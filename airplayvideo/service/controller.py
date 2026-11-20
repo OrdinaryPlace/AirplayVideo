@@ -163,6 +163,7 @@ class Controller:
         self.recordings = None
         self.diagnostics = None
         self.frame_probe = None
+        self.sportsnet_auth = None
 
     def require_no_diagnostic(self):
         check(not self.diagnostics or not self.diagnostics.active, "Wait for the sync measurement to finish or cancel it")
@@ -381,6 +382,14 @@ class Controller:
                     await self.browser.navigate(source["url"], self.store.data["setup"], source["browser_source"] == "youtube", source["browser_source"] == "watch_later")
                 else:
                     await self.browser.start(self.store.data["setup"], profile=source["profile"])
+                if source["profile"] == "sportsnet" and self.sportsnet_auth is not None:
+                    before_auth_targets = self.pending_targets.copy()
+                    self.pending_targets |= target
+                    try:
+                        await self.sportsnet_auth.prepare(source["url"])
+                    finally:
+                        if generation == self.generation:
+                            self.pending_targets = before_auth_targets
                 input_config["display"] = self.browser.environment["DISPLAY"]
             check(generation == self.generation, "Playback was cancelled")
             if not same_source:
@@ -521,6 +530,8 @@ class Controller:
                 return
         self.generation += 1
         generation = self.generation
+        if self.sportsnet_auth is not None:
+            self.sportsnet_auth.playback_stopped()
         pending, self.pending = self.pending, None
         self.pending_targets.clear()
         stopping_active = not receiver_id or receiver_id in self.targets
@@ -564,6 +575,8 @@ class Controller:
 
     async def close_browser(self):
         self.require_no_diagnostic()
+        if self.sportsnet_auth is not None:
+            self.sportsnet_auth.cancel_browser()
         if self.source and self.source["kind"] == "browser":
             await self.stop()
         async with self.lock:

@@ -15,6 +15,7 @@ from .model import Store, VERSION, UserError, check, identifier, local_address, 
 from .browser import Browser
 from .browser_vpn import BrowserVPN
 from .capitals import CapitalsLauncher
+from .sportsnet_auth import SportsnetAuth
 from .supervisor_control import SupervisorControl
 from .frame_probe import FrameProbe
 from .controller import PairingEngine, Controller
@@ -75,10 +76,12 @@ class Application:
         self.ha.browser_vpn = self.browser_vpn
         self.capitals = CapitalsLauncher(store, self.controller, self.browser_vpn, self.configuration_lock, self.ha.publish_state)
         self.controller.capitals = self.ha.capitals = self.capitals
+        self.sportsnet_auth = SportsnetAuth(store, self.controller, self.browser, self.ha.publish_state)
+        self.controller.sportsnet_auth = self.ha.sportsnet_auth = self.sportsnet_auth
         self.supervisor_control = SupervisorControl(self.controller, self.capitals, frame_probe=self.frame_probe)
 
     def state(self):
-        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "browser_vpn": self.browser_vpn.state(), "capitals": self.capitals.state(), "recordings": self.recordings.state(), "diagnostics": self.diagnostics.state(), "frame_probe": self.frame_probe.state(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}
+        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "browser_vpn": self.browser_vpn.state(), "sportsnet_auth": self.sportsnet_auth.state(), "capitals": self.capitals.state(), "recordings": self.recordings.state(), "diagnostics": self.diagnostics.state(), "frame_probe": self.frame_probe.state(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}
 
     def require_idle(self):
         self.controller.require_no_diagnostic()
@@ -105,9 +108,11 @@ class Application:
         await self.ha.start()
         self.browser_vpn.start()
         self.capitals.start()
+        self.sportsnet_auth.start()
         await self.supervisor_control.start(enabled=os.environ.get("AIRPLAYVIDEO_STANDALONE") != "1")
 
     async def close(self):
+        await self.sportsnet_auth.close()
         if control := getattr(self, "supervisor_control", None):
             await control.close()
         await self.capitals.close()
@@ -130,6 +135,10 @@ class Application:
         controller = self.controller
         if action == "browser_vpn":
             await self.browser_vpn.set_enabled(data)
+        elif action == "sportsnet_sign_in":
+            await self.sportsnet_auth.request()
+        elif action == "sportsnet_enable":
+            await self.sportsnet_auth.enable()
         elif action == "capitals_live":
             await self.capitals.kick(data)
         elif action == "capitals_play":

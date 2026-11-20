@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.29
+
+- Detect expired Sportsnet sign-in in the dedicated browser and make one bounded
+  attempt using Chrome's existing saved login. Add a sign-in button and status
+  in the preview and Home Assistant. Verification, missing saved credentials,
+  and provider errors require attention in the preview instead of repeated submits.
+- After sign-in, return to the exact requested game and require advancing browser
+  video before attaching TVs. Stop and competing navigation cancel recovery.
+- Enable Sportsnet page access once through Chrome's normal permission prompt.
+  The existing companion remains usable before that opt-in; credentials, cookies,
+  account details and authentication URLs stay in Chrome.
+
 ## 0.2.28
 
 - Extend read-only Home Assistant app-input status with saved and running

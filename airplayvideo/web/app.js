@@ -384,6 +384,33 @@ function renderBrowserStatus(){
   $('browserVideoStatus').hidden=!$('browserVideoStatus').textContent;
 }
 
+function sportsnetAuthPresentation(auth={}){
+  const labels={
+    unavailable:'',checking:'Checking Sportsnet sign-in…',
+    sign_in_required:'Sportsnet needs sign-in. The saved browser login will be used.',
+    signing_in:'Signing in to Sportsnet with the saved browser login…',
+    signed_in:'Sportsnet is signed in.',playing:'Sportsnet video is playing in the browser.',
+    permission_required:'Enable Sportsnet sign-in once to use automatic saved-login recovery.',
+    verification_required:'Sportsnet needs verification. Finish it in the browser preview.',
+    saved_login_required:'Choose or save your Sportsnet login in the browser preview.',
+    failed:'Sportsnet sign-in could not finish. Check the preview before trying again.',
+  };
+  const status=Object.hasOwn(labels,auth.status)?auth.status:'unavailable';
+  const interaction=['verification_required','saved_login_required'].includes(status);
+  const enable=status==='permission_required';
+  return {visible:auth.available===true,status,text:labels[status],interaction,enable,
+    label:enable?'Enable Sportsnet sign-in':interaction?'Open Sportsnet sign-in':auth.busy?'Signing in…':status==='failed'?'Retry Sportsnet sign-in':'Sign in to Sportsnet',
+    disabled:auth.busy===true||['signed_in','playing'].includes(status)};
+}
+
+function renderSportsnetAuth(){
+  const auth=sportsnetAuthPresentation(state.sportsnet_auth);
+  $('sportsnetSignIn').hidden=!auth.visible;
+  $('sportsnetSignIn').textContent=auth.label;
+  $('sportsnetAuthStatus').hidden=!auth.visible||!auth.text;
+  $('sportsnetAuthStatus').textContent=auth.text;
+}
+
 function renderBrowserVpn(){
   const vpn=state.browser_vpn;
   $('browserVpnControl').hidden=!vpn?.configured;
@@ -557,6 +584,7 @@ function renderRecordings(){
 function renderPreview(){
   if(!state)return;
   renderBrowserStatus();
+  renderSportsnetAuth();
   const setup = !$('wizard').hidden;
   previewWanted = state.runtime.browser_open && (setup ? step===1 && (state.setup.complete || draft?.modes.browser) : mode==='browser');
   $('previewSection').hidden = !previewWanted;
@@ -598,6 +626,7 @@ function updateButtons(){
   const measuring=!!state.diagnostics?.active;
   const analyzing=state.recordings?.analysis?.status==='running';
   const probing=state.frame_probe?.status==='running';
+  $('sportsnetSignIn').disabled=busy||measuring||analyzing||probing||!!state.recordings?.active||sportsnetAuthPresentation(state.sportsnet_auth).disabled;
   $('measureFrameStages').disabled=busy||probing||!!frameStageBlockReason();
   $('cancelFrameStages').hidden=!probing;
   const analysisUnavailable=busy||measuring||analyzing||probing||!!state.recordings?.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase);
@@ -629,7 +658,7 @@ function updateButtons(){
   $('closeBrowser').disabled=busy||probing;
   $('openBrowser').textContent=busy&&busyAction==='open_browser'?'Opening browser…':'Open browser';
   $('closeBrowser').textContent=busy&&busyAction==='close_browser'?'Closing browser…':'Close browser';
-  $('stopAll').disabled=!measuring&&!(busy&&busyAction==='play')&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
+  $('stopAll').disabled=!measuring&&!state.sportsnet_auth?.busy&&!(busy&&busyAction==='play')&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
   if (draft && !$('wizard').hidden) settingsStatus();
 }
 
@@ -683,6 +712,7 @@ $('capitalsPlay').onclick=()=>act('capitals_play',{receivers:[...chosenTVs]});
 $('capitalsCheck').onclick=()=>act('capitals_live',{receivers:[...chosenTVs]});
 $('capitalsRefresh').onclick=()=>act('capitals_refresh');
 $('capitalsCancel').onclick=()=>act('capitals_cancel',{},true);
+$('sportsnetSignIn').onclick=()=>{const auth=sportsnetAuthPresentation(state.sportsnet_auth);return auth.enable?act('sportsnet_enable'):auth.interaction?expandPreview():act('sportsnet_sign_in');};
 $('closeBrowser').onclick=()=>act('close_browser');
 $('browserKind').onchange=browserKindChanged;
 $('youtubeDelivery').onchange=browserKindChanged;
@@ -693,12 +723,13 @@ $('refreshChannels').onclick=()=>act('refresh_channels');
 $('setupTab').onclick=()=>openSetup();$('tvSetup').onclick=()=>openSetup(2);
 $('playTab').onclick=()=>{location.hash=state.setup.complete?'#play':'#setup';route();};
 for(const button of document.querySelectorAll('[data-browser]'))button.onclick=()=>act('browser',{action:button.dataset.browser});
-$('expand').onclick=async()=>{
+async function expandPreview(){
   expandedState(true);
   // The large in-app layout also works when HA/the browser denies fullscreen.
   try{await $('previewSection').requestFullscreen();}catch{}
   $('returnPreview').focus();
-};
+}
+$('expand').onclick=expandPreview;
 $('returnPreview').onclick=collapsePreview;
 document.addEventListener('fullscreenchange',()=>{if(!document.fullscreenElement)expandedState(false);});
 document.addEventListener('keydown',event=>{if(event.key==='Escape'&&previewExpanded&&!$('pasteDialog').open){event.preventDefault();collapsePreview();}});

@@ -124,6 +124,8 @@ def test_signed_companion_identity_and_narrow_permissions_survive_reinstall(tmp_
     assert key.stat().st_mode & 0o777 == 0o600
     manifest = json.loads((Path(__file__).parent.parent/'companion/manifest.json').read_text())
     assert manifest['host_permissions'] == ['https://www.youtube.com/*']
+    assert manifest['optional_host_permissions'] == ['https://watch.sportsnet.ca/*',
+                                                   'https://account.sportsnet.ca/*', 'https://rogers-prd.transmit.security/*']
     assert set(manifest['permissions']) == {'nativeMessaging', 'scripting'}
     assert not any(k in manifest for k in ('externally_connectable', 'content_scripts'))
 

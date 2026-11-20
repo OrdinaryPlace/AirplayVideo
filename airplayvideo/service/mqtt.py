@@ -9,6 +9,21 @@ import paho.mqtt.client as mqtt
 from .model import VERSION, UserError, check, atomic_json, private_json
 
 
+SPORTSNET_AUTH_STATUSES = frozenset({
+    "unavailable", "checking", "sign_in_required", "signing_in", "signed_in",
+    "playing", "permission_required", "verification_required", "saved_login_required", "failed",
+})
+
+
+def sportsnet_auth_state(value):
+    """MQTT receives fixed status and booleans, never page/account details."""
+    status = value.get("status")
+    if not isinstance(status, str) or status not in SPORTSNET_AUTH_STATUSES:
+        return {"status": "unavailable", "busy": False, "available": False}
+    return {"status": status,
+            "busy": value.get("busy") is True, "available": value.get("available") is True}
+
+
 def discovery_documents(store, channels):
     installation = store.data["installation_id"]
     base = "airplayvideo/" + installation
@@ -26,6 +41,27 @@ def discovery_documents(store, channels):
         return json.dumps({"action": action, "receiver": receiver["id"], **values}, separators=(",", ":"))
 
     setup = store.data["setup"]
+    if setup["modes"]["browser"]:
+        sportsnet_id = "airplayvideo_" + installation + "_sportsnet"
+        sportsnet_state = base + "/sportsnet_auth/state"
+        sportsnet_device = {"identifiers": [sportsnet_id], "name": "AirplayVideo Sportsnet",
+                            "manufacturer": "OrdinaryPlace", "model": "AirplayVideo", "sw_version": VERSION}
+        documents[f"homeassistant/sensor/{sportsnet_id}/sign_in/config"] = {
+            "name": "Sign-in status", "unique_id": sportsnet_id + "_sign_in",
+            "icon": "mdi:account-check", "availability_topic": base + "/availability",
+            "state_topic": sportsnet_state, "value_template": "{{ value_json.status }}",
+            "json_attributes_topic": sportsnet_state, "device": sportsnet_device,
+        }
+        documents[f"homeassistant/button/{sportsnet_id}/sign_in/config"] = {
+            "name": "Sign in", "unique_id": sportsnet_id + "_sign_in_button", "icon": "mdi:login",
+            "command_topic": base + "/command", "payload_press": '{"action":"sportsnet_sign_in"}',
+            "qos": 0, "retain": False, "device": sportsnet_device,
+            "availability_mode": "all", "availability": [
+                {"topic": base + "/availability"},
+                {"topic": sportsnet_state,
+                 "value_template": "{{ 'online' if value_json.available and value_json.status != 'permission_required' else 'offline' }}"},
+            ],
+        }
     if setup["modes"]["browser"] and setup["browser"].get("http_proxy", ""):
         device_id = "airplayvideo_" + installation + "_browser_vpn"
         state = base + "/browser_vpn/state"
@@ -119,6 +155,7 @@ class HomeAssistant:
         self.closing = False
         self.browser_vpn = None
         self.capitals = None
+        self.sportsnet_auth = None
 
     async def start(self):
         self.closing = False
@@ -181,6 +218,11 @@ class HomeAssistant:
 
     async def command(self, value):
         try:
+            if value.get("action") == "sportsnet_sign_in":
+                check(self.sportsnet_auth is not None, "Sportsnet sign-in controls are unavailable")
+                await self.sportsnet_auth.request()
+                self.publish_state()
+                return
             if value.get("action") == "browser_vpn":
                 check(self.browser_vpn is not None, "Browser VPN controls are unavailable")
                 await self.browser_vpn.set_enabled(value)
@@ -267,6 +309,9 @@ class HomeAssistant:
             self.client.publish(self.base + "/browser_vpn/state", json.dumps(self.browser_vpn.state()), qos=1, retain=True)
         if self.capitals is not None:
             self.client.publish(self.base + "/capitals/state", json.dumps(self.capitals.state()), qos=1, retain=True)
+        if self.sportsnet_auth is not None:
+            self.client.publish(self.base + "/sportsnet_auth/state",
+                                json.dumps(sportsnet_auth_state(self.sportsnet_auth.state())), qos=1, retain=True)
         pages = {page["id"]: page["name"] for page in self.store.data["pages"]}
         channels = {row["id"]: row["label"] for row in self.channels.rows}
         for receiver in self.store.data["receivers"]:

@@ -18,6 +18,7 @@ from service.model import default_setup, UserError
 async def main():
     os.umask(0o077)
     os.environ['TZ'] = 'America/New_York'
+    current_companion_version = json.loads((Path(__file__).parents[1] / 'companion/manifest.json').read_text())['version']
     reports = asyncio.Queue()
     latest_video = {}
     async def report(request):
@@ -152,7 +153,7 @@ async def main():
                                 initial_version.enter_context(patch('service.browser.install_companion', lambda root: install_companion(root, source=old_companion)))
                                 initial_version.enter_context(patch('service.companion.SOURCE', old_companion))
                             await browser.navigate(base + f'/{number}/first', default_setup())
-                        expected_version = '1.0.1' if number == 0 else '1.0.4'
+                        expected_version = '1.0.1' if number == 0 else current_companion_version
                         assert (await browser.companion.call('ready'))['version'] == expected_version
                         await expect(f'/{number}/first')
                         argv = Path(f'/proc/{browser.chrome_process.pid}/cmdline').read_bytes().split(b'\0')
@@ -195,9 +196,9 @@ async def main():
                     await browsers[0].navigate(base + '/0/restored', default_setup())
                     assert (await expect('/0/restored'))['retained'] == 'yes'
                     assert browsers[0].companion.identity == identity
-                    assert (await browsers[0].companion.call('ready'))['version'] == '1.0.4', 'Retained profile did not run the updated companion'
+                    assert (await browsers[0].companion.call('ready'))['version'] == current_companion_version, 'Retained profile did not run the updated companion'
                     assert browsers[0].chrome_process.pid != previous_chrome.pid
-                    assert (await browsers[1].companion.call('ready'))['version'] == '1.0.4', 'Updating one profile interrupted the other browser'
+                    assert (await browsers[1].companion.call('ready'))['version'] == current_companion_version, 'Updating one profile interrupted the other browser'
                     # Adapt only the fixture URL's profile selection: no real
                     # Sportsnet navigation, accounts or imported browser state.
                     default_root = browsers[0].root

@@ -54,8 +54,9 @@ health, account eligibility or playback.
 ## Use Sportsnet+
 
 Save a page named **Sportsnet** for `https://watch.sportsnet.ca/`, open it through
-AirplayVideo, and sign in yourself. Use Sportsnet's own fullscreen player
-control; AirplayVideo's **Fullscreen video** helper is for YouTube.
+AirplayVideo, and complete the initial sign-in in the preview. Use Sportsnet's
+own fullscreen player control; AirplayVideo's **Fullscreen video** helper is for
+YouTube.
 
 Sportsnet opens in its own persistent browser session. The original browser
 session, including YouTube sign-ins, stays in place. The app selects Sportsnet
@@ -71,6 +72,44 @@ root remains `/data/browser`; Sportsnet uses `/data/browser-sportsnet`, with its
 own home, Chrome profile, display, audio and controls. Both use the existing
 parent-owned companion signing key. Setup's open preview preserves an already
 open sign-in instead of navigating it away.
+
+### Saved-login recovery
+
+Enable the helper once through **Enable Sportsnet sign-in** in the browser
+preview, then follow Chrome's Sportsnet access prompt yourself. This grants
+access only to Sportsnet's player/account pages and its Rogers sign-in page.
+Until enabled, normal manual sign-in and playback remain available. The app
+never approves a permission prompt for you.
+
+When Sportsnet needs sign-in again, the app detects its known sign-in screens
+and makes a bounded attempt using Chrome's existing saved login. The browser
+preview shows the current status and a **Sign in to Sportsnet** button for a
+manual retry. Credentials stay in Chrome; there are no account or password
+fields in app settings, MQTT commands or status messages.
+
+The helper stops for verification, missing saved credentials, an unrecognized
+page or a provider error. **Open Sportsnet sign-in** expands the existing preview
+so you can finish that step. It does not repeatedly submit a rejected password,
+change the password, purchase a subscription or solve a challenge. After you
+finish verification, retry the requested playback normally.
+
+A requested game must return to its actual player after sign-in. Sportsnet can
+redirect to its homepage while the app still remembers the requested game URL;
+receiver **Sending** and frame counters can therefore describe that homepage.
+Recovery verifies the requested game and advancing browser video before treating
+the player as ready. Physical TV picture and sound still need observation.
+
+Home Assistant exposes an **AirplayVideo Sportsnet** device with **Sign in** and
+**Sign-in status**. The button is available while the Sportsnet browser is open;
+enable the helper in the app preview first. It neither selects TVs nor starts a
+different browser session. Its command is non-retained, and its status contains
+only a fixed state plus availability and busy flags. These controls do not
+require a configured VPN gateway.
+
+Automated fixture tests exercise known page states and trusted native input
+with synthetic credentials. They do not establish acceptance of a real
+Sportsnet account or Chrome's actual saved-password popup. Confirm that flow
+in the installed preview before relying on unattended recovery.
 
 Check each Capitals game in the [NHL Game Finder](https://support.sportsnetplus.ca/hc/en-gb/articles/46381950833556-NHL-Game-Finder).
 Premium includes out-of-market hockey with regional restrictions; Wednesday
