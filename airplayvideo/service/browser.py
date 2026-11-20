@@ -430,7 +430,9 @@ class Browser:
                 if latest["stage"] != stage or latest["filled"]:
                     return latest
                 check(latest.get("rect") == rect, "Sportsnet form moved; use the browser preview")
-                await self.native_command("xdotool", "mousemove", "--sync", str(x), str(y), "click", "1")
+                # --sync waits for a MotionNotify event, which may never arrive
+                # when the next login field occupies the same screen position.
+                await self.native_command("xdotool", "mousemove", str(x), str(y), "click", "1")
                 # Chrome guards newly shown password suggestions against early
                 # acceptance, including Tab. Respect its visibility dwell time.
                 await asyncio.sleep(0.65)

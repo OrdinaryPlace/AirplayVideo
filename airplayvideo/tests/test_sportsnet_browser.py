@@ -52,7 +52,7 @@ def browser(tmp_path):
 async def test_native_saved_suggestion_uses_trusted_click_and_tab_without_submission(browser):
     result = await browser.sportsnet_autofill("email")
     assert result["filled"] is True
-    assert ("xdotool", "mousemove", "--sync", "500", "275", "click", "1") in browser.calls
+    assert ("xdotool", "mousemove", "500", "275", "click", "1") in browser.calls
     assert ("xdotool", "key", "--clearmodifiers", "Down", "Tab") in browser.calls
     assert not any("Return" in call for call in browser.calls)
     assert all(call.kwargs.get("operation") != "advance" for call in browser.companion.call.await_args_list)
