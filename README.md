@@ -7,9 +7,9 @@
 [Sportsnet+ and the optional isolated Surfshark gateway](docs/sportsnet-vpn.md).
 [Live Capitals game checks from Home Assistant](docs/capitals-live-events.md).
 
-Send browser pages, HDHomeRun channels, or generated videos to your Apple TVs from Home Assistant.
-One source and one C++/FFmpeg encoder supply the same content to the selected TVs.
-Each TV has its own AirPlay pairing and connection.
+Play browser pages, HDHomeRun channels, or generated videos through a Home
+Assistant camera, on your Apple TVs, or both. One shared source supplies the
+selected outputs. Each TV has its own AirPlay pairing and connection.
 
 **Experimental, version 0.2.31.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
@@ -17,9 +17,10 @@ it does not contain Double Take source or its Git history.
 
 ## Install
 
-Requires Home Assistant OS or Supervised on **amd64/x86-64**, and an Apple TV
-that supports the implemented AirPlay 2 mirroring path. Browser rendering and
-encoding run inside the app's Linux container.
+Requires Home Assistant OS or Supervised on **amd64/x86-64**. An Apple TV that
+supports the implemented AirPlay 2 mirroring path is needed only for TV playback;
+no TV is required for camera-only viewing. Browser rendering and encoding run
+inside the app's Linux container.
 
 [![Add this app repository to Home Assistant](https://my.home-assistant.io/badges/supervisor_addon_repository.svg)](https://my.home-assistant.io/redirect/supervisor_addon_repository/?repository_url=https%3A%2F%2Fgithub.com%2FOrdinaryPlace%2FAirplayVideo)
 
@@ -37,15 +38,17 @@ The separate five-step **Setup** wizard handles:
    enter its LAN IPv4 address. The app uses host networking for
    LAN discovery. Across VLANs, multicast/broadcast forwarding may still be
    needed; both tuner and TV discovery also have a manual address fallback.
-3. Pair each TV using the fresh four-digit PIN shown on that TV. Pairings and
-   browser sign-ins are private app data and survive restarts.
+3. For TV playback, pair each TV using the fresh four-digit PIN shown on that
+   TV. Pairing is optional for camera-only viewing. Pairings and browser sign-ins
+   are private app data and survive restarts.
 4. Choose resolution, frame rate, encoder, bitrate, stereo audio, and buffer.
    Defaults are **1080p, 30 fps, H.264, 8 Mbps** with a 1500 ms playback buffer.
    Hardware encoding is offered when VAAPI is available; OpenH264 provides
    software encoding. H.264 is the supported video codec in this release.
-5. Enable native Home Assistant controls. An available Home Assistant MQTT
-   service and the MQTT integration are required for these entities. The
-   authenticated app controls also work without MQTT.
+5. Enable native Home Assistant controls for the selected-video camera and
+   per-TV entities. The streaming camera uses the Home Assistant API and does
+   not require MQTT. The per-TV entities require Home Assistant's MQTT service
+   and MQTT integration. The authenticated app controls also work without MQTT.
 
 Setup changes require playback to be stopped. Settings do not start playback.
 Use **Manage pages** on the playback page to add named browser shortcuts.
@@ -57,12 +60,28 @@ values. Picture, sound and browser-default edits keep the browser session open;
 changing output resolution or disabling browser mode closes it. Settings are
 applied to the next playback session.
 
+## Watch the selected source in Home Assistant
+
+Native Home Assistant controls create one **AirplayVideo selected video**
+streaming camera after the first playable source starts. Use it in HA camera
+cards, snapshots and native HLS viewing with or without a TV. No custom
+integration or manual Core configuration edit is required. See [selected video
+camera setup and media behavior](docs/selected-video-camera.md).
+
 ## Use every day
 
-Choose a saved page, YouTube video, Watch Later, web address, channel, or generated video.
-Select the TVs and press **Play on selected TVs**. Use **Stop** for one TV or
-**Stop all**. A TV joining the same source shares the existing encoder. Stopping
-the last TV closes the source and releases its tuner.
+Choose a saved page, YouTube video, Watch Later, web address, **Capitals game**,
+channel, or generated video. **Capitals game** is in **Web browser → Source**
+and uses the same Play/Stop controls as the other sources.
+
+With Home Assistant controls enabled, TVs are optional: leave them unselected
+and press **Play in Home Assistant** to watch through the selected-video camera.
+To include TVs, select them and press **Play on selected TVs**. A TV joining the
+same browser, tuner or generated source shares the existing encoder. Use
+**Stop** for one TV or **Stop all** to end the source and camera output. With
+the camera enabled, stopping the last TV leaves its source available through
+the camera; without it, the last TV's Stop closes the source and releases any
+tuner.
 
 The browser preview lets you navigate, sign in, paste text, and operate the
 container browser. In **Settings → Source defaults** (or **Setup → Configure**
@@ -100,14 +119,16 @@ The app never resumes playback automatically after a restart.
 ## Generated videos and automations
 Choose **Generated video**, enter a title, optional tagline and length in seconds,
 and select **Time**, **Countdown**, or **Neither**. Preview the first frame before
-selecting TVs. The app renders plain Unicode text, an animated background/accent,
+pressing Play. The app renders plain Unicode text, an animated background/accent,
 and the chosen timer directly in C++, then encodes it through the shared FFmpeg
 pipeline. It does not open Chrome or use a tuner. Generated videos are silent.
 
-Length accepts **1–86400 seconds**. Countdown starts when the first TV connects;
-connection setup does not consume its duration. All selected TVs share that
-countdown. Playback ends automatically after the final frame has reached its
-presentation deadline. Every new Play, including identical automation messages,
+Length accepts **1–86400 seconds**. With TVs selected, countdown starts when the
+first TV connects; the passive camera output does not consume its duration
+during TV connection setup. With no TV selected, countdown starts immediately
+for camera-only playback. All selected TVs and the camera share that countdown.
+Playback ends automatically after the final frame has reached its presentation
+deadline. Every new Play, including identical automation messages,
 starts a fresh duration. Stop cancels it immediately. Clock mode uses the configured
 IANA time zone (including daylight saving time), initially the app's `TZ` or UTC,
 and displays 24-hour time. Neither hides the timer but retains animation.
