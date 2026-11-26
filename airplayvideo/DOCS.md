@@ -6,7 +6,7 @@ tuner and generated sources share one encoder across selected outputs. Direct
 YouTube video uses one TV's native media player or supports camera-only viewing.
 Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.31.** This is an independent implementation in a new
+**Experimental, version 0.2.32.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 

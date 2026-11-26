@@ -67,3 +67,18 @@ with `gzip.compress(data, mtime=0)`.
 
 The uncompressed fixture SHA-256 is
 `331892eb3708a312bd7edc32d83de629379e47fd1d32e360c2f2ee3a3893c76d`.
+
+# AC-3 trailing-header recovery
+
+`ac3-recovery-tests` reuses the synthetic broadcast fixture above and builds its
+packet-preserving Matroska cases in a temporary directory at runtime. It appends
+32 zero bytes after a valid AC-3 frame in selected packets. FFmpeg 8.0.1's AC-3
+decoder examines that trailing data as a possible dependent-frame header and
+returns its private sync error `-16976906`; a corrupt first header instead
+returns the already-supported `AVERROR_INVALIDDATA`.
+
+Matroska's complete-frame packet boundaries preserve the bad trailer through
+the parser. The test separately proves the exact raw decoder error, recovery
+with the following valid tone frame, H.264/AAC camera decoding after sparse
+corruption, and the existing 256-packet failure limit for permanent corruption.
+No broadcast recording or additional production encoder is required.
