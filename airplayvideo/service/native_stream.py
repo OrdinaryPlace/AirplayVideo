@@ -284,7 +284,7 @@ def playlist_durations(directory):
 class NativeHLSStream:
     def __init__(self, *, output_dir, ffmpeg, ffprobe, startup_timeout=120, session_timeout=14400,
                  disk_limit=512 * 1024 * 1024, video_encoder=None, vaapi_device=None, allow_gpl=False,
-                 managed_lifecycle=False):
+                 managed_lifecycle=False, force_h264=False):
         if not 10 <= startup_timeout <= 180 or not 30 <= session_timeout <= 14400:
             raise StreamError("Choose bounded startup and session timeouts")
         if isinstance(disk_limit, bool) or not isinstance(disk_limit, int) or not 16 * 1024 * 1024 <= disk_limit <= 2 * 1024**3:
@@ -293,6 +293,8 @@ class NativeHLSStream:
             raise StreamError("The experimental GPL encoder choice must be an explicit boolean")
         if not isinstance(managed_lifecycle, bool):
             raise StreamError("The managed lifecycle choice must be an explicit boolean")
+        if not isinstance(force_h264, bool):
+            raise StreamError("The camera codec choice must be an explicit boolean")
         self.root = Path(output_dir).resolve()
         if not self.root.is_dir():
             raise StreamError("Choose an existing media output directory")
@@ -300,6 +302,7 @@ class NativeHLSStream:
         self.startup_timeout, self.session_timeout, self.disk_limit = startup_timeout, session_timeout, disk_limit
         self.requested_encoder, self.vaapi_device, self.allow_gpl = video_encoder, vaapi_device, allow_gpl
         self.managed_lifecycle = managed_lifecycle
+        self.force_h264 = force_h264
         self.directory = None
         self.plan = None
         self.encoder = None
@@ -604,6 +607,15 @@ class NativeHLSStream:
                                timeout=45, payload=url.encode()), self._capabilities())
         self._preparation_stage = "plan"
         self.plan = plan_direct_media(metadata, receiver_model, max_resolution=max_resolution)
+        if self.force_h264 and self.plan["target"]["video_codec"] != "h264":
+            self.plan["copy_video"] = False
+            self.plan["target"]["video_codec"] = "h264"
+            self.plan["required_codecs"] = {
+                "decoders": sorted({self.plan["video"]["codec"]} |
+                                   ({self.plan["audio"]["codec"]} if not self.plan["copy_audio"] else set())),
+                "encoders": ["h264"] + ([] if self.plan["copy_audio"] else ["aac"]),
+            }
+            self.plan["reasons"].append("The Home Assistant camera requires H.264 video")
         try:
             duration = float(metadata.get("duration", 0))
             # This is an all-in lifetime, including worst-case startup and the

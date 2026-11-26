@@ -191,12 +191,15 @@ class CapitalsLauncher:
     async def play_current(self, request):
         """One explicit launch, including retries; never clear automatic history."""
         check(isinstance(request, dict), "Choose the TVs for the live game")
-        targets = self.receivers(request.get("receivers"))
+        camera = request.get("camera", False)
+        check(type(camera) is bool, "Invalid Home Assistant camera choice")
+        targets = ([] if request.get("receivers") == [] and camera and self.controller.camera_enabled
+                   else self.receivers(request.get("receivers")))
         join = request.get("join", False)
         check(type(join) is bool, "Choose whether to join the current live game")
         epoch, generation = self.manual_epoch, self.controller.generation
         check(not self.closing, "Live game controls are shutting down")
-        key = (tuple(targets), join, epoch, generation,
+        key = (tuple(targets), join, epoch, generation, camera,
                tuple(repr(request.get(field)) for field in ("expected_http_proxy", "expected_http_proxy_enabled")))
         # Register before the first await so a targeted Stop can see even an
         # intent still waiting for command_lock, before any TV is attached.
@@ -247,7 +250,7 @@ class CapitalsLauncher:
                     check(setup["browser"].get("http_proxy"), "Set a VPN gateway before playing the live game")
                     check(self.fresh(catalog, event), "The live game check is stale; no TVs were changed")
                     play = {"mode": "browser", "browser_source": "url", "url": event.watch_url, "receivers": targets}
-                    for key in ("expected_http_proxy", "expected_http_proxy_enabled"):
+                    for key in ("expected_http_proxy", "expected_http_proxy_enabled", "camera"):
                         if key in request:
                             play[key] = request[key]
                     _, input_config = control.requested_source(play)

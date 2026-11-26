@@ -38,7 +38,11 @@ int main(int argc,char **argv) {
       if(frames==0)require(p->video.keyframe,"First connected frame is independently decodable");
       last=p->pts_us;++frames;
     }
-    require(media.completed()&&!media.failed()&&frames>=10,"Generated stream completes naturally");
+    std::cerr<<"Generated completion: completed="<<media.completed()<<" failed="<<media.failed()
+             <<" frames="<<frames<<" last_pts_us="<<last<<'\n';
+    require(!media.failed(),"Generated source does not fail after a subscriber joins");
+    require(media.completed(),"Generated source completes its duration naturally");
+    require(frames>=10,"Generated subscriber receives at least ten frames before completion");
     require(Clock::now()-joined>=std::chrono::milliseconds(1500),"Duration plus receiver buffer is honored");
     stop=true;media.close();std::cout<<"Generated text, timers, time zones, animation, late connection, keyframe and natural completion passed\n";return 0;
   }catch(const std::exception &e){std::cerr<<e.what()<<'\n';return 1;}

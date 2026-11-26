@@ -46,7 +46,7 @@ class VideoEncoder {
   AVFilterContext *filter_in_ = nullptr, *filter_out_ = nullptr;
   Bytes sps_, pps_, avcc_;
   int fps_, width_, height_;
-  FrameRateGate frame_rate_;
+  VideoFrameGate frame_rate_;
   bool deinterlace_;
   std::function<void(std::shared_ptr<MediaPacket>)> output_;
   std::shared_ptr<FrameProbe> probe_;
@@ -84,9 +84,9 @@ class VideoEncoder {
     out.avcc=avcc_;
   }
   void encode(AVFrame *input, int64_t us) {
-    const bool accepted=frame_rate_.accept(us);
-    if(probe_)probe_->gate(accepted,frame_probe_now());
-    if(!accepted)return;
+    const auto decision=frame_rate_.accept(us,input->pict_type==AV_PICTURE_TYPE_I);
+    if(probe_)probe_->gate(decision.accepted,frame_probe_now());
+    if(!decision.accepted)return;
     const auto conversion_start=probe_?frame_probe_now():0;
     auto converted=frame();
     auto *v=codec_.get();
@@ -122,7 +122,7 @@ class VideoEncoder {
       }
     }
     converted->pts=av_rescale_q(us,micros,v->time_base);
-    converted->pict_type=input->pict_type;
+    converted->pict_type=decision.keyframe?AV_PICTURE_TYPE_I:input->pict_type;
     converted->color_range=AVCOL_RANGE_MPEG; converted->colorspace=AVCOL_SPC_BT709;
     converted->color_primaries=AVCOL_PRI_BT709; converted->color_trc=AVCOL_TRC_BT709;
     int64_t encode_start=0;
@@ -539,7 +539,7 @@ void Media::start() {
   int count=(kind=="browser"||kind=="synthetic")&&config.value("audio",true)?2:1;
   for(int i=0;i<count;++i) impl_->workers.emplace_back([this,i]{impl_->capture(i);});
 }
-std::shared_ptr<Subscriber> Media::subscribe() { auto s=std::make_shared<Subscriber>(); std::lock_guard lock(impl_->mutex); impl_->subscribers.push_back(s); impl_->joined=true; return s; }
+std::shared_ptr<Subscriber> Media::subscribe(bool starts_presentation) { auto s=std::make_shared<Subscriber>(); std::lock_guard lock(impl_->mutex); impl_->subscribers.push_back(s); if(starts_presentation)impl_->joined=true; return s; }
 void Media::close() { if(impl_) impl_->close(); }
 bool Media::failed() const { return impl_->failure; }
 bool Media::completed() const { return impl_->completed; }

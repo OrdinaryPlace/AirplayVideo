@@ -14,8 +14,10 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
+import zlib
 
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -28,6 +30,49 @@ def command(*args):
     if result.returncode:
         raise RuntimeError("Dependency command failed: " + Path(args[0]).name)
     return result.stdout
+
+
+def verify_png_pipe():
+    # Inventory alone missed a requested PNG encoder disabled by its zlib
+    # dependency. Exercise the exact PNG-over-pipe output used by snapshots.
+    result = subprocess.run([
+        "ffmpeg", "-hide_banner", "-loglevel", "error", "-nostdin",
+        "-f", "lavfi", "-i", "color=c=red:s=32x24:r=2", "-frames:v", "2", "-an",
+        "-pix_fmt", "rgb24", "-c:v", "png", "-f", "image2pipe", "pipe:1",
+    ], stdin=subprocess.DEVNULL, capture_output=True, timeout=30, check=False)
+    if result.returncode or not 0 < len(result.stdout) <= 1024 * 1024:
+        raise RuntimeError("PNG image2pipe encoding did not produce bounded output")
+    data, position = result.stdout, 0
+    for _ in range(2):
+        if data[position:position + 8] != b"\x89PNG\r\n\x1a\n":
+            raise RuntimeError("PNG image2pipe did not produce two PNG frames")
+        position += 8
+        dimensions, pixels = None, bytearray()
+        while True:
+            if position + 12 > len(data):
+                raise RuntimeError("PNG image2pipe returned an incomplete frame")
+            length = struct.unpack_from(">I", data, position)[0]
+            kind = data[position + 4:position + 8]
+            end = position + 12 + length
+            if length > 128 * 1024 or end > len(data):
+                raise RuntimeError("PNG image2pipe returned an invalid chunk")
+            payload = data[position + 8:end - 4]
+            crc = struct.unpack_from(">I", data, end - 4)[0]
+            if zlib.crc32(kind + payload) & 0xFFFFFFFF != crc:
+                raise RuntimeError("PNG image2pipe returned a corrupt chunk")
+            if kind == b"IHDR":
+                if length != 13 or payload[8:10] != b"\x08\x02":
+                    raise RuntimeError("PNG image2pipe returned an unexpected pixel format")
+                dimensions = struct.unpack_from(">II", payload)
+            elif kind == b"IDAT":
+                pixels.extend(payload)
+            position = end
+            if kind == b"IEND":
+                if length or dimensions != (32, 24) or len(zlib.decompress(pixels)) != 24 * (1 + 32 * 3):
+                    raise RuntimeError("PNG image2pipe did not retain complete RGB pictures")
+                break
+    if position != len(data):
+        raise RuntimeError("PNG image2pipe returned unexpected trailing data")
 
 
 def check():
@@ -70,7 +115,7 @@ def check():
     # FFmpeg writes its configuration banner to stderr, so query with -L as
     # well and use the retained build-time configuration for policy checks.
     configuration = Path("/opt/dependency-sources/ffmpeg-buildconf.txt").read_text()
-    if not all(option in configuration for option in ("--disable-gpl", "--disable-nonfree", "--enable-gnutls", "--enable-libdav1d")):
+    if not all(option in configuration for option in ("--disable-gpl", "--disable-nonfree", "--enable-gnutls", "--enable-libdav1d", "--enable-zlib")):
         raise RuntimeError("The required LGPL-preserving FFmpeg configuration is missing")
     if re.search(r"--enable-(?:gpl|nonfree|libx264|libx265)\b", configuration):
         raise RuntimeError("A disallowed FFmpeg dependency was enabled")
@@ -78,9 +123,9 @@ def check():
         raise RuntimeError("FFmpeg does not report its expected LGPL license")
 
     required = {"protocols": {"file", "pipe", "http", "https", "tcp", "tls", "crypto"},
-                "muxers": {"hls", "mp4", "null"},
+                "muxers": {"hls", "mp4", "null", "image2pipe"},
                 "decoders": {"h264", "hevc", "vp9", "av1", "aac", "opus"},
-                "encoders": {"libopenh264", "h264_vaapi", "hevc_vaapi", "aac"},
+                "encoders": {"libopenh264", "h264_vaapi", "hevc_vaapi", "aac", "png"},
                 "filters": {"color", "hwupload", "format", "scale", "aresample", "bwdif"}}
     inventory = {}
     for kind, expected_names in required.items():
@@ -94,6 +139,8 @@ def check():
     probe_protocols = parse_capabilities(command("ffprobe", "-hide_banner", "-protocols"), "protocols")
     if not required["protocols"] <= probe_protocols:
         raise RuntimeError("FFprobe lacks required media input protocols")
+
+    verify_png_pipe()
 
     with tempfile.TemporaryDirectory(prefix="native-dependencies-") as directory:
         root = Path(directory)
@@ -121,6 +168,7 @@ def check():
             raise RuntimeError("HLS output did not preserve the requested video and audio properties")
     return {"python_executable": sys.executable, "resolver_packages": expected, "node": node_version,
             "ffmpeg": inventory, "h264_aac_fmp4_hls_encode_verified": True,
+            "png_image2pipe_encode_verified": True,
             "hardware_encode_verified": False, "gpl_encoders_enabled": False}
 
 

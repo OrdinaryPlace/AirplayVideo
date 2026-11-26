@@ -36,7 +36,7 @@
               <div class="vpn-control-row"><label class="check-row"><input id="browserVpnEnabled" type="checkbox" role="switch" aria-describedby="browserVpnHelp"><span id="browserVpnName">Browser VPN</span></label><span id="browserVpnRoute" class="badge">Off</span></div>
               <p id="browserVpnHelp" class="muted tight" role="status"></p>
             </div>
-            <label for="browserKind">Source</label><select id="browserKind"><option value="page">Saved page</option><option value="youtube">YouTube video</option><option value="watch_later">Watch Later</option><option value="url">Web address</option></select>
+            <label for="browserKind">Source</label><select id="browserKind"><option value="page">Saved page</option><option value="youtube">YouTube video</option><option value="watch_later">Watch Later</option><option value="url">Web address</option><option value="capitals">Capitals game</option></select>
             <div id="savedPageFields"><div class="label-row"><label for="pageSelect">Page</label><button id="managePages" class="text-button">Manage pages</button></div><select id="pageSelect"></select></div>
             <div id="urlFields" hidden><label id="urlLabel" for="sourceUrl">Video link</label><input id="sourceUrl" type="url" autocomplete="off" placeholder="https://www.youtube.com/watch?v=…"></div>
             <p id="watchLaterHelp" class="muted" hidden>Uses the YouTube account signed in through the browser preview.</p>
@@ -45,13 +45,12 @@
               <div id="nativeQualityFields"><label for="nativeQuality">Video quality</label><select id="nativeQuality"><option value="best">Best available for the TV</option><option value="1080p">Up to 1080p</option><option value="720p">Up to 720p</option></select><p class="muted">Public videos play directly on one TV, from the beginning, at the source frame rate. Use Play and Stop here; seeking and long pauses are not supported yet.</p></div>
             </div>
             <button id="openBrowser" class="secondary">Open browser</button>
-            <details id="capitalsControl">
-              <summary>Live Capitals games</summary>
+            <div id="capitalsControl" hidden>
+              <div class="label-row"><span>Current Capitals game</span><button id="capitalsRefresh" class="text-button">Refresh games</button></div>
               <p id="capitalsStatus" class="muted" role="status">Ready to check Sportsnet.</p>
               <p id="capitalsGame" class="muted tight"></p>
-              <div class="play-actions"><button id="capitalsPlay">Play current game</button><button id="capitalsCheck">Check live game on selected TVs</button><button id="capitalsRefresh" class="text-button">Refresh games</button><button id="capitalsCancel" hidden>Stop checking</button></div>
-              <p class="muted">Play current game checks Sportsnet once and starts a live Capitals broadcast on the selected TVs, with the browser VPN on. If no game is live, playback stays unchanged. A live-game check waits up to 20 minutes. Scheduled games and replays are skipped.</p>
-            </details>
+              <p id="capitalsHelp" class="muted">Use Play below to check Sportsnet once and start the live game with the browser VPN on. If no game is live, playback stays unchanged. Scheduled games and replays are skipped.</p>
+            </div>
           </div>
           <div id="channelSource" hidden>
             <div class="label-row"><label for="channelSearch">Find a channel</label><button id="refreshChannels" class="text-button">Refresh</button></div>
@@ -70,7 +69,7 @@
         </section>
         <section class="card tv-card"><div class="card-header"><h2>Where to play</h2><button id="tvSetup" class="text-button">Manage TVs</button></div><p id="tvSelectionHelp" class="muted tight">The same source plays on every selected TV.</p><div id="tvList"></div></section>
       </div>
-      <div class="card playback-footer"><p id="selectionHint" class="muted" aria-live="polite">Choose one or more TVs above.</p><div class="play-actions"><button id="play" class="primary" aria-describedby="selectionHint">Play on selected TVs</button><button id="stopAll" class="danger-outline">Stop all</button></div><p id="nowPlaying" class="muted" aria-live="polite">Choose a source and one or more TVs.</p><p id="nativePlaybackStatus" class="muted" aria-live="polite" hidden></p><a id="nativePlaybackReport" href="api/native-report" download hidden>Download direct playback report</a></div>
+      <div class="card playback-footer"><p id="selectionHint" class="muted" aria-live="polite">Choose one or more TVs above.</p><div class="play-actions"><button id="play" class="primary" aria-describedby="selectionHint">Play on selected TVs</button><button id="stopAll" class="danger-outline">Stop all</button></div><p id="nowPlaying" class="muted" aria-live="polite">Choose a source and one or more TVs.</p><p id="cameraStatus" class="muted tight" role="status" hidden></p><p id="nativePlaybackStatus" class="muted" aria-live="polite" hidden></p><a id="nativePlaybackReport" href="api/native-report" download hidden>Download direct playback report</a></div>
       <details class="card" id="recordingPanel"><summary>Troubleshoot audio and video sync</summary>
         <p class="muted">Measure a generated 1080p flash-and-beep reference using this host's encoder and a temporary browser. Close the browser and stop playback first. Saved settings, sign-ins and recordings are preserved. The test takes about a minute.</p>
         <div class="play-actions"><button id="measureSync">Measure sync without a TV</button><button id="measureSyncTV">Measure sync and test selected TVs</button><button id="cancelSync" hidden>Cancel measurement</button></div>

@@ -15,6 +15,8 @@ jobs:
         run: docker build --progress=plain -t airplayvideo:test airplayvideo
       - name: Verify configuration, API boundaries, and playback lifecycle
         run: docker run --rm airplayvideo:test python3 -m pytest tests -q -p no:cacheprovider
+      - name: Verify selected-camera HLS and snapshots without network or TVs
+        run: docker run --rm --network none airplayvideo:test python3 tests/camera-container.py
       - name: Verify app-input lifecycle without network or TVs
         run: >-
           printf '%s' '{"action":"status","request_id":"container-smoke"}' |

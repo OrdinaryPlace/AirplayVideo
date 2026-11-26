@@ -43,12 +43,12 @@ RUN curl -fL https://ffmpeg.org/releases/ffmpeg-8.0.1.tar.xz -o ffmpeg.tar.xz \
     --disable-gpl --disable-nonfree --disable-autodetect --disable-everything \
     --disable-doc --disable-debug --enable-ffmpeg --enable-ffprobe \
     --enable-libopenh264 --enable-libpulse --enable-libxcb --enable-libxcb-shm --enable-vaapi \
-    --enable-gnutls --enable-libdav1d \
+    --enable-gnutls --enable-libdav1d --enable-zlib \
     --enable-protocol=file,pipe,http,https,tcp,tls,crypto --enable-indev=xcbgrab,pulse,lavfi \
     --enable-demuxer=mpegts,mov,matroska,h264,hevc,hls,wav \
     --enable-decoder=wrapped_avframe,rawvideo,h264,hevc,vp9,libdav1d,mpeg2video,aac,opus,ac3,mp2,mp3,alac,pcm_s16le,pcm_s16be,pcm_f32le \
     --enable-encoder=libopenh264,h264_vaapi,hevc_vaapi,aac,pcm_s16le,pcm_s16be,png \
-    --enable-muxer=mpegts,mp4,hls,matroska,h264,wav,image2,rawvideo,null \
+    --enable-muxer=mpegts,mp4,hls,matroska,h264,wav,image2,image2pipe,rawvideo,null \
     --enable-parser=h264,hevc,vp9,av1,opus,mpegvideo,aac,ac3,mpegaudio \
     --enable-bsf=h264_mp4toannexb,aac_adtstoasc \
     --enable-filter=testsrc2,color,sine,aresample,format,scale,hwupload,null,anull,bwdif,buffer,buffersink,abuffer,abuffersink,setpts,asetpts \
@@ -117,5 +117,5 @@ ENV PATH="/opt/airplayvideo/venv/bin:${PATH}"
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 RUN python3 tests/native-dependencies.py --write-report /opt/dependency-sources/native-capabilities.json
 EXPOSE 8099 18200-18215/udp
-LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.29"
+LABEL io.hass.name="AirplayVideo" io.hass.description="Browser, live TV and generated video over AirPlay" io.hass.type="addon" io.hass.arch="amd64" io.hass.version="0.2.30"
 CMD ["python3", "-m", "service.main"]

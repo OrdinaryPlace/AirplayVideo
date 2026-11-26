@@ -146,19 +146,20 @@ def run_ui(script):
     if not node:
         pytest.skip("Node is required for browser controls checks")
     functions = []
-    for name in ("sportsnetAuthPresentation", "updateButtons", "renderCapitals", "act"):
+    for name in ("sportsnetAuthPresentation", "requestSource", "browserKindChanged", "updateButtons", "renderCapitals", "act"):
         match = re.search(rf"^(?:async )?function {name}\([^\n]*\)\s*\{{.*?^\}}", SOURCE, re.M | re.S)
         assert match, name
         functions.append(match.group())
     handlers = "\n".join(re.search(rf"^\$\('{name}'\)\.onclick=[^\n]+", SOURCE, re.M).group()
-                         for name in ("capitalsPlay", "capitalsCheck", "capitalsRefresh", "capitalsCancel"))
+                         for name in ("play", "stopAll", "capitalsRefresh"))
     harness = r"""
 const assert=require('node:assert/strict');
 const nodes=new Map(),$=id=>{if(!nodes.has(id))nodes.set(id,{value:'',textContent:'',hidden:false,disabled:false,dataset:{}});return nodes.get(id);};
 const document={querySelectorAll(){return [];}};
 let busy=false,busyAction='',draft=null,mode='browser',selectionDirty=true;
 let chosenTVs=new Set(['aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','cccccccccccccccccccccccccccccccc']);
-let state={setup:{complete:true,modes:{browser:true}},runtime:{phase:'idle',targets:[],source:null,browser_open:true},
+$('browserKind').value='capitals';
+let state={setup:{complete:true,modes:{browser:true},browser:{http_proxy:'',http_proxy_enabled:false},home_assistant:{enabled:false}},runtime:{phase:'idle',targets:[],source:null,browser_open:true},
  receivers:[],browser_vpn:{configured:true},capitals:{status:'idle',catalog:null},diagnostics:{active:false},
  recordings:{active:null,analysis:{status:'idle'}},frame_probe:{status:'idle'}};
 let calls=[],refreshes=0,fail='',messages=[],pendingPlay=null;
@@ -176,19 +177,19 @@ async function api(path,body){calls.push({path,body:structuredClone(body)});if(f
     assert result.returncode == 0, result.stderr
 
 
-def test_manual_ui_button_submits_only_selected_tvs_once_and_never_arms_a_check_window():
+def test_selected_capitals_uses_shared_play_and_only_selected_tvs_without_a_check_window():
     run_ui("""
-updateButtons();assert.equal($('capitalsPlay').disabled,false);
+updateButtons();assert.equal($('play').disabled,false);
 const selected=[...chosenTVs];
-await $('capitalsPlay').onclick();
+await $('play').onclick();
 assert.deepEqual(calls,[{path:'api/actions/capitals_play',body:{receivers:selected}}]);
 assert.equal(selectionDirty,false);
 assert.equal(calls[0].body.receivers.includes('dddddddddddddddddddddddddddddddd'),false);
 """)
     markup = (WEB / "index.html").read_text()
-    assert '<button id="capitalsPlay">Play current game</button>' in markup
-    assert "checks Sportsnet once" in markup and "If no game is live, playback stays unchanged" in markup
-    assert 'id="capitalsCheck"' in markup and "up to 20 minutes" in markup
+    assert '<option value="capitals">Capitals game</option>' in markup
+    assert "check Sportsnet once" in markup and "If no game is live, playback stays unchanged" in markup
+    assert 'id="capitalsPlay"' not in markup and 'id="capitalsCheck"' not in markup
 
 
 @pytest.mark.parametrize("condition", [
@@ -198,13 +199,13 @@ assert.equal(calls[0].body.receivers.includes('dddddddddddddddddddddddddddddddd'
     "state.frame_probe.status='running'", "busy=true",
 ])
 def test_manual_ui_requires_explicit_ready_targets_and_no_exclusive_measurement(condition):
-    run_ui(condition + ";updateButtons();assert.equal($('capitalsPlay').disabled,true);assert.deepEqual(calls,[]);")
+    run_ui(condition + ";updateButtons();assert.equal($('play').disabled,true);assert.deepEqual(calls,[]);")
 
 
 def test_manual_ui_error_does_not_retry_or_start_the_old_twenty_minute_worker():
     run_ui("""
 fail='No live Capitals broadcast was found';
-await $('capitalsPlay').onclick();
+await $('play').onclick();
 assert.equal(calls.length,1);assert.equal(calls[0].path,'api/actions/capitals_play');
 assert.equal(refreshes,1);assert.equal(busy,false);
 assert.equal(messages.at(-1),fail);
@@ -212,20 +213,68 @@ assert.equal(messages.at(-1),fail);
 
 
 @pytest.mark.parametrize("prior_status", ["idle", "started", "error"])
-def test_manual_ui_can_cancel_before_first_status_poll_and_keeps_existing_check_controls(prior_status):
+def test_shared_stop_cancels_capitals_before_first_status_poll(prior_status):
     run_ui("state.capitals.status=" + json.dumps(prior_status) + ";" + """
-updateButtons();assert.equal($('capitalsCancel').hidden,true);
+updateButtons();assert.equal($('stopAll').disabled,true);
 let finish;pendingPlay=new Promise(resolve=>{finish=resolve;});
-const starting=$('capitalsPlay').onclick();
-assert.equal($('capitalsCancel').hidden,false);assert.equal($('capitalsCancel').disabled,false);
-assert.equal($('capitalsPlay').textContent,'Starting…');
-await $('capitalsCancel').onclick();
+const starting=$('play').onclick();
+assert.equal($('stopAll').disabled,false);
+assert.equal($('play').textContent,'Starting…');
+await $('stopAll').onclick();
 assert.equal(busy,true);assert.equal(busyAction,'capitals_play');
-assert.deepEqual(calls.map(call=>call.path),['api/actions/capitals_play','api/actions/capitals_cancel']);
+assert.deepEqual(calls.map(call=>call.path),['api/actions/capitals_play','api/actions/stop']);
 finish(state);await starting;assert.equal(busy,false);
-assert.equal($('capitalsCancel').hidden,true);assert.equal($('capitalsPlay').textContent,'Play current game');
-await $('capitalsCheck').onclick();await $('capitalsRefresh').onclick();
-assert.deepEqual(calls.slice(-2).map(call=>call.path),['api/actions/capitals_live','api/actions/capitals_refresh']);
+assert.equal($('play').textContent,'Play on selected TVs');
+await $('capitalsRefresh').onclick();
+assert.equal(calls.at(-1).path,'api/actions/capitals_refresh');
+""")
+
+
+def test_shared_stop_remains_available_while_camera_drains_final_media():
+    run_ui("""
+state.runtime={...state.runtime,phase:'idle',media_busy:false,targets:[],source:null};
+state.camera={active:true,ready:true};
+updateButtons();assert.equal($('stopAll').disabled,false);
+await $('stopAll').onclick();assert.equal(calls.at(-1).path,'api/actions/stop');
+state.camera.active=false;
+updateButtons();assert.equal($('stopAll').disabled,true);
+""")
+
+
+def test_capitals_selection_replaces_other_fields_and_has_no_separate_play_controls():
+    run_ui("""
+browserKindChanged();
+for(const id of ['savedPageFields','urlFields','watchLaterHelp','youtubePlayback','openBrowser'])assert.equal($(id).hidden,true,id);
+assert.equal($('capitalsControl').hidden,false);
+$('browserKind').value='url';browserKindChanged();
+assert.equal($('capitalsControl').hidden,true);assert.equal($('urlFields').hidden,false);
+assert.equal($('openBrowser').hidden,false);
+""")
+
+
+@pytest.mark.parametrize("kind", ["capitals", "url", "youtube"])
+def test_home_assistant_camera_can_play_without_selected_tvs(kind):
+    run_ui("$('browserKind').value=" + json.dumps(kind) + ";" + """
+state.setup.home_assistant.enabled=true;chosenTVs.clear();
+$('youtubeDelivery').value='native';$('sourceUrl').value='https://example.invalid/video';
+updateButtons();assert.equal($('play').disabled,false);
+assert.equal($('play').textContent,'Play in Home Assistant');
+await $('play').onclick();
+assert.equal(calls.length,1);assert.deepEqual(calls[0].body.receivers,[]);
+assert.equal(calls[0].body.camera,true);
+assert.equal(calls[0].path,$('browserKind').value==='capitals'?'api/actions/capitals_play':'api/actions/play');
+state.runtime.media_busy=true;updateButtons();assert.equal($('stopAll').disabled,false);
+await $('stopAll').onclick();assert.equal(calls.at(-1).path,'api/actions/stop');
+""")
+
+
+def test_home_assistant_camera_mirrors_selected_tvs_and_preserves_direct_video_limit():
+    run_ui("""
+state.setup.home_assistant.enabled=true;
+await $('play').onclick();assert.equal(calls[0].body.camera,true);assert.equal(calls[0].body.receivers.length,3);
+$('browserKind').value='youtube';$('youtubeDelivery').value='native';
+chosenTVs=new Set(['a','b']);updateButtons();assert.equal($('play').disabled,true);
+chosenTVs=new Set(['a']);updateButtons();assert.equal($('play').disabled,false);
 """)
 
 

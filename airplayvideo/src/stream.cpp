@@ -1,5 +1,6 @@
 #include "stream.hpp"
 #include "recording.hpp"
+#include "camera_hls.hpp"
 #include <iostream>
 #include <poll.h>
 #include <regex>
@@ -17,6 +18,11 @@ int run_stream(const Json &config,const std::filesystem::path &directory,
   };
   std::map<std::string,std::unique_ptr<Session>> sessions;
   std::unique_ptr<Recording> recording;
+  std::unique_ptr<CameraHls> camera;
+  if(config.contains("camera_directory")) {
+    try { camera=std::make_unique<CameraHls>(media,config.at("camera_directory").get<std::string>(),note); }
+    catch(const std::exception &) { note("camera_error",{{"message","The Home Assistant camera could not start"}}); }
+  }
   media.start();
   std::jthread commands([&](std::stop_token ending) {
     std::string buffer;
@@ -72,8 +78,16 @@ int run_stream(const Json &config,const std::filesystem::path &directory,
     }
   });
   while(!stop&&!media.failed()&&!media.completed()) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  const bool natural_completion=media.completed()&&!media.failed()&&!stop;
   stop=true; commands.request_stop(); commands.join();
   recording.reset();
+  if(camera&&natural_completion) {
+    // Let a finite source's camera consume its remaining queued packets and
+    // publish the final playlist. Stop/error paths do not wait for this drain.
+    const auto deadline=Clock::now()+std::chrono::seconds(2);
+    while(!camera->done()&&Clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  camera.reset();
   for(auto &[id,s]:sessions) s->stop=true;
   media.close(); sessions.clear();
   if(media.completed()) note("source_finished",Json::object());
