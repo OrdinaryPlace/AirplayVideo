@@ -125,7 +125,8 @@ class NativeCameraSession:
 class CameraOutput:
     def __init__(self, store, controller, session, *, bind_address=None):
         self.store, self.controller, self.session = store, controller, session
-        self.bind_address = bind_address or ("127.0.0.1" if os.environ.get("AIRPLAYVIDEO_STANDALONE") == "1" else "172.30.32.1")
+        supervised = bool(os.environ.get("SUPERVISOR_TOKEN")) and os.environ.get("AIRPLAYVIDEO_STANDALONE") != "1"
+        self.bind_address = bind_address or ("172.30.32.1" if supervised else "127.0.0.1")
         self.runner = self.task = self.transcoder = None
         self.directory = self.owner = None
         self.selected_producer = None

@@ -25,6 +25,22 @@ def source(directory, *, native=None):
     return SimpleNamespace(config={"camera_directory": str(directory)})
 
 
+@pytest.mark.parametrize("token,standalone,expected", [
+    (None, None, "127.0.0.1"), (None, "1", "127.0.0.1"),
+    ("", None, "127.0.0.1"), ("fixture-token", None, "172.30.32.1"),
+    ("fixture-token", "0", "172.30.32.1"), ("fixture-token", "1", "127.0.0.1"),
+])
+def test_default_camera_listener_uses_supervisor_bridge_only_in_supervised_runtime(tmp_path, monkeypatch, token, standalone, expected):
+    for name, value in (("SUPERVISOR_TOKEN", token), ("AIRPLAYVIDEO_STANDALONE", standalone)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    store, controller = Store(tmp_path), SimpleNamespace(stream=None)
+    assert CameraOutput(store, controller, None).bind_address == expected
+    assert CameraOutput(store, controller, None, bind_address="192.168.1.20").bind_address == "192.168.1.20"
+
+
 @pytest_asyncio.fixture
 async def output(tmp_path):
     store = Store(tmp_path / "data")
