@@ -230,6 +230,17 @@ assert.equal(calls.at(-1).path,'api/actions/capitals_refresh');
 """)
 
 
+def test_shared_stop_remains_available_while_camera_drains_final_media():
+    run_ui("""
+state.runtime={...state.runtime,phase:'idle',media_busy:false,targets:[],source:null};
+state.camera={active:true,ready:true};
+updateButtons();assert.equal($('stopAll').disabled,false);
+await $('stopAll').onclick();assert.equal(calls.at(-1).path,'api/actions/stop');
+state.camera.active=false;
+updateButtons();assert.equal($('stopAll').disabled,true);
+""")
+
+
 def test_capitals_selection_replaces_other_fields_and_has_no_separate_play_controls():
     run_ui("""
 browserKindChanged();

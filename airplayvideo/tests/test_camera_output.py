@@ -2,6 +2,7 @@
 import asyncio
 import json
 from pathlib import Path
+import shutil
 import stat
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, Mock
@@ -226,12 +227,14 @@ async def test_native_h264_shares_producer_but_hevc_gets_independent_h264_conver
     assert args[args.index("-c:a") + 1] == "copy"
     assert "min(1920,iw)" in args[args.index("-vf") + 1]
     epoch = x.camera.identity["epoch"]
-    await x.camera.select(SimpleNamespace(producer=hevc.producer))
+    transferred = hevc.producer
+    hevc.producer = None
+    await x.camera.select(SimpleNamespace(producer=transferred))
     assert x.camera.directory == converted and x.camera.identity["epoch"] == epoch
     assert spawn.await_count == 1 and not process.terminated
     await x.camera.select(None)
     assert not converted.exists() and process.terminated
-    assert h264.producer.directory.exists() and hevc.producer.directory.exists()
+    assert h264.producer.directory.exists() and transferred.directory.exists()
 
 
 @pytest.mark.asyncio
@@ -352,3 +355,78 @@ async def test_native_camera_stop_interrupts_production_wait_or_final_drain(tmp_
     await native.close()
     await asyncio.wait_for(watching, 1)
     assert native.closed.is_set()
+
+
+def complete_stream(stream):
+    directory = Path(stream.config["camera_directory"])
+    with (directory / "index.m3u8").open("a") as playlist:
+        playlist.write("#EXT-X-ENDLIST\n")
+    stream.close = AsyncMock(side_effect=lambda: shutil.rmtree(directory))
+    return stream
+
+
+@pytest.mark.asyncio
+async def test_completed_camera_tail_serves_final_playlist_and_segments_until_global_stop(output):
+    x = output
+    stream = complete_stream(x.controller.stream)
+    assert x.camera.retain_completed(stream)
+    assert 19 < x.camera.drain_deadline - module.time.monotonic() <= 20
+    x.controller.stream = None
+    # Wait beyond one monitor cycle: a cleared Controller source must retain
+    # completed files, without keeping a decoder, tuner or engine alive.
+    await asyncio.sleep(0.6)
+    assert x.camera.owner is stream and x.camera.state()["draining"]
+    async with x.client.get(x.camera.base_url + "/stream.m3u8") as response:
+        assert response.status == 200 and "#EXT-X-ENDLIST" in await response.text()
+    async with x.client.get(x.camera.base_url + "/generation-one/segment000000001.ts") as response:
+        assert response.status == 200 and await response.read() == b"transport-stream"
+    stream.close.assert_not_awaited()
+    await asyncio.wait_for(x.camera.cancel_drain(), 1)
+    stream.close.assert_awaited_once()
+    assert not Path(stream.config["camera_directory"]).exists() and not x.camera.state()["active"]
+    async with x.client.get(x.camera.base_url + "/stream.m3u8") as response:
+        assert response.status == 503
+
+
+@pytest.mark.asyncio
+async def test_new_source_immediately_replaces_retained_tail_and_denies_old_generation(output):
+    x = output
+    previous = complete_stream(x.controller.stream)
+    assert x.camera.retain_completed(previous)
+    x.controller.stream = replacement = source(x.root / "after-completed-source")
+    await asyncio.wait_for(x.camera.select(replacement), 1)
+    previous.close.assert_awaited_once()
+    assert not x.camera.state()["draining"] and x.camera.owner is replacement
+    async with x.client.get(x.camera.base_url + "/generation-one/segment000000001.ts") as response:
+        assert response.status == 404
+    async with x.client.get(x.camera.base_url + "/stream.m3u8") as response:
+        assert response.status == 200 and "/after-completed-source/" in await response.text()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stop", ["expiry", "close"])
+async def test_retained_tail_releases_files_on_deadline_or_app_close(output, stop):
+    x = output
+    stream = complete_stream(x.controller.stream)
+    assert x.camera.retain_completed(stream)
+    x.controller.stream = None
+    if stop == "expiry":
+        x.camera.drain_deadline = module.time.monotonic() - 1
+        async with asyncio.timeout(2):
+            while x.camera.owner is not None:
+                await asyncio.sleep(0.05)
+    else:
+        await asyncio.wait_for(x.camera.close(), 1)
+    stream.close.assert_awaited_once()
+    assert not x.camera.state()["active"] and not x.camera.state()["draining"]
+    assert not Path(stream.config["camera_directory"]).exists()
+
+
+@pytest.mark.asyncio
+async def test_completed_unselected_or_unready_sources_stay_with_controller_cleanup(output):
+    x = output
+    unrelated = complete_stream(source(x.root / "unselected"))
+    assert not x.camera.retain_completed(unrelated)
+    (x.camera.directory / "index.m3u8").unlink()
+    assert not x.camera.retain_completed(x.controller.stream)
+    assert x.camera.draining is None

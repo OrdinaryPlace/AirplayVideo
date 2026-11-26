@@ -667,7 +667,7 @@ function updateButtons(){
   $('closeBrowser').disabled=busy||probing;
   $('openBrowser').textContent=busy&&busyAction==='open_browser'?'Opening browser…':'Open browser';
   $('closeBrowser').textContent=busy&&busyAction==='close_browser'?'Closing browser…':'Close browser';
-  $('stopAll').disabled=!measuring&&!state.sportsnet_auth?.busy&&!(busy&&busyAction==='play')&&!capitalsStarting&&state.capitals?.status!=='checking'&&!state.runtime.media_busy&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
+  $('stopAll').disabled=!measuring&&!state.sportsnet_auth?.busy&&!(busy&&busyAction==='play')&&!capitalsStarting&&state.capitals?.status!=='checking'&&!state.runtime.media_busy&&!state.camera?.active&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
   if (draft && !$('wizard').hidden) settingsStatus();
 }
 

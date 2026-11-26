@@ -21,6 +21,7 @@ from .model import atomic_json, private_json
 TITLE = "AirplayVideo selected video"
 ENTITY_ID = "camera.airplayvideo_selected_video"
 _ID = re.compile(r"[A-Za-z0-9_-]{1,128}\Z")
+_RESPONSE_LIMIT = 2 * 1024 * 1024
 
 
 class RegistrationError(Exception):
@@ -55,9 +56,14 @@ class CameraRegistration:
                 raise RegistrationError("Home Assistant camera setup needs the app's Home Assistant API permission.")
             if response.status >= 400:
                 raise RegistrationError("Home Assistant could not finish camera setup. Try again while video is playing.")
-            data = await response.content.read(2 * 1024 * 1024 + 1)
-            if len(data) > 2 * 1024 * 1024:
-                raise RegistrationError("Home Assistant returned an oversized camera setup response.")
+            # A StreamReader.read(n) can return as soon as one network chunk
+            # arrives. Parse only after EOF, retaining the request's total
+            # timeout and checking the byte limit before buffering each chunk.
+            data = bytearray()
+            async for chunk in response.content.iter_chunked(64 * 1024):
+                if len(data) + len(chunk) > _RESPONSE_LIMIT:
+                    raise RegistrationError("Home Assistant returned an oversized camera setup response.")
+                data.extend(chunk)
             return json.loads(data)
 
     @staticmethod

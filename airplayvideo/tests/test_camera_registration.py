@@ -1,4 +1,5 @@
 """Generic camera API plumbing; encoded/native HA validation is separate."""
+import asyncio
 import json
 from types import SimpleNamespace
 
@@ -21,7 +22,8 @@ async def core(tmp_path, monkeypatch):
     monkeypatch.setenv("SUPERVISOR_TOKEN", "private-supervisor-token")
     state = SimpleNamespace(entries=[], entities=[], commands=[], requests=[],
                             created=0, updated=0, fail_validation=False,
-                            fail_confirmation=False, disabled=False, taken=False)
+                            fail_confirmation=False, disabled=False, taken=False,
+                            chunked_entries=False)
 
     async def api(request):
         assert request.headers["Authorization"] == "Bearer private-supervisor-token"
@@ -29,6 +31,16 @@ async def core(tmp_path, monkeypatch):
         payload = await request.json() if method == "POST" else None
         state.requests.append((method, path, payload))
         if path == "/api/config/config_entries/entry":
+            if state.chunked_entries:
+                response = web.StreamResponse(headers={"Content-Type": "application/json"})
+                await response.prepare(request)
+                data = json.dumps(state.entries).encode()
+                for offset in range(0, len(data), 16 * 1024):
+                    await response.write(data[offset:offset + 16 * 1024])
+                    # Force an observable partial body before the next chunk.
+                    await asyncio.sleep(0.001)
+                await response.write_eof()
+                return response
             return web.json_response(state.entries)
         if method == "DELETE":
             return web.json_response({})
@@ -179,3 +191,27 @@ async def test_missing_supervisor_and_disabled_setup_do_not_call_core(core, monk
     x.store.data["setup"]["home_assistant"]["enabled"] = False
     assert (await x.registration.ensure(STREAM, SNAPSHOT))["status"] == "disabled"
     assert not x.state.requests
+
+
+@pytest.mark.asyncio
+async def test_large_chunked_core_inventory_is_read_to_eof_before_registration(core):
+    x = core
+    x.state.entries.extend({"entry_id": "unrelated-" + str(index), "domain": "fixture",
+                            "title": "Unrelated integration " + str(index)} for index in range(2000))
+    assert len(json.dumps(x.state.entries).encode()) > 64 * 1024
+    x.state.chunked_entries = True
+    result = await x.registration.ensure(STREAM, SNAPSHOT)
+    assert result == {"status": "ready", "entity_id": ENTITY_ID, "error": ""}
+    assert x.state.created == 1 and len(x.state.entries) == 2001
+    # A later read must also find the owned entry beyond the early chunks.
+    assert (await x.registration.ensure(STREAM, SNAPSHOT))["status"] == "ready"
+    assert x.state.created == 1
+
+
+@pytest.mark.asyncio
+async def test_oversized_core_response_is_rejected_without_creating_camera(core):
+    x = core
+    x.state.entries.append({"entry_id": "unrelated", "domain": "fixture", "title": "x" * (2 * 1024 * 1024)})
+    result = await x.registration.ensure(STREAM, SNAPSHOT)
+    assert result["status"] == "pending" and "oversized" in result["error"]
+    assert x.state.created == 0 and x.state.updated == 0

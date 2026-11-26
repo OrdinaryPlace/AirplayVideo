@@ -271,7 +271,10 @@ class Controller:
                 self.receivers.clear()
                 self.source = None
                 self.stream = None
-                self.retire(stream)
+                retain = getattr(self.camera, "retain_completed", None)
+                retained = complete and retain and retain(stream)
+                if not retained:
+                    self.retire(stream)
             if event == "receiver_error" and not self.camera_enabled and self.targets and all(self.receivers.get(r, {}).get("state") == "error" for r in self.targets):
                 task = asyncio.create_task(self.stop_failed(stream))
                 self.cleanup_tasks.add(task)
@@ -543,6 +546,8 @@ class Controller:
 
     async def stop(self, receiver_id=None):
         # Deliberately does not acquire the start lock: Stop cancels decoder warmup.
+        if not receiver_id and (cancel_drain := getattr(self.camera, "cancel_drain", None)):
+            await cancel_drain()
         if self.diagnostics and self.diagnostics.active:
             if not receiver_id or receiver_id in self.diagnostics.targets:
                 await self.diagnostics.close()

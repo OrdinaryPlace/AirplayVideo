@@ -26,6 +26,7 @@ from .native_stream import NativeHLSStream, child_environment
 
 _FILE = re.compile(r"(?:segment[0-9]{9}\.ts|segment-[0-9]{8}\.m4s|init\.mp4)\Z")
 _SNAPSHOT_LIMIT = 16 * 1024 * 1024
+_DRAIN_SECONDS = 20
 
 
 async def stop_process(process):
@@ -110,7 +111,11 @@ class CameraOutput:
         self.bind_address = bind_address or ("127.0.0.1" if os.environ.get("AIRPLAYVIDEO_STANDALONE") == "1" else "172.30.32.1")
         self.runner = self.task = self.transcoder = None
         self.directory = self.owner = None
+        self.selected_producer = None
         self.owned_directory = False
+        self.selection_lock = asyncio.Lock()
+        self.draining = None
+        self.drain_deadline = 0
         self.snapshot_lock = asyncio.Lock()
         self.snapshot_process = None
         self.snapshot = None
@@ -141,7 +146,22 @@ class CameraOutput:
         return bool(self.enabled and self.directory and (self.directory / "index.m3u8").is_file() and not self.error)
 
     def state(self):
-        return {"active": bool(self.owner and self.enabled), "ready": self.ready, "error": self.error}
+        return {"active": bool(self.owner and self.enabled), "ready": self.ready, "error": self.error,
+                "draining": self.draining is not None}
+
+    def retain_completed(self, stream):
+        """Own a completed capture's final HLS files, never its live producer."""
+        if stream is not self.owner or not self.ready or self.selection_lock.locked():
+            return False
+        self.draining = stream
+        self.drain_deadline = time.monotonic() + _DRAIN_SECONDS
+        return True
+
+    async def cancel_drain(self):
+        """Global Stop discards a retained tail without waiting for its timer."""
+        async with self.selection_lock:
+            if self.draining is not None:
+                await self._select(None)
 
     @property
     def base_url(self):
@@ -175,25 +195,41 @@ class CameraOutput:
         self.task = asyncio.create_task(self.monitor())
 
     async def reset(self):
-        await stop_process(self.snapshot_process)
-        await stop_process(self.transcoder)
-        self.transcoder = None
-        if self.owned_directory and self.directory:
-            shutil.rmtree(self.directory, ignore_errors=True)
+        async with self.selection_lock:
+            await self._reset()
+
+    async def _reset(self):
+        draining, directory, owned_directory = self.draining, self.directory, self.owned_directory
+        self.draining = None
+        self.drain_deadline = 0
+        # Stop serving the old generation before awaiting process cleanup.
         self.directory = self.owner = self.snapshot = None
+        self.selected_producer = None
         self.owned_directory = False
         self.snapshot_at = 0
         self.error = ""
+        await stop_process(self.snapshot_process)
+        await stop_process(self.transcoder)
+        self.transcoder = None
+        if draining is not None:
+            await draining.close()
+        if owned_directory and directory:
+            shutil.rmtree(directory, ignore_errors=True)
 
     async def select(self, stream):
+        async with self.selection_lock:
+            await self._select(stream)
+
+    async def _select(self, stream):
         producer = getattr(stream, "producer", None)
-        if producer is not None and producer is getattr(self.owner, "producer", None) and self.directory:
+        if producer is not None and producer is self.selected_producer and self.directory:
             # Stopping a native TV can transfer its producer to the camera.
             # Its media, timeline and any HEVC conversion keep running.
             self.owner = stream
             return
-        await self.reset()
+        await self._reset()
         self.owner = stream
+        self.selected_producer = producer
         if stream is None:
             return
         self.identity["epoch"] += 1
@@ -229,6 +265,11 @@ class CameraOutput:
         try:
             while True:
                 stream = self.controller.stream if self.enabled else None
+                if stream is None and self.draining is not None:
+                    if self.enabled and time.monotonic() < self.drain_deadline:
+                        stream = self.draining
+                    else:
+                        await self.cancel_drain()
                 if stream is not self.owner:
                     # Registration owns a persistent HA config-flow identity.
                     # Finish an in-flight creation across source changes; all

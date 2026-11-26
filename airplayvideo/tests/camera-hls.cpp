@@ -61,10 +61,16 @@ void rolling(const std::filesystem::path &directory) {
   auto camera=std::make_unique<CameraHls>(media,directory,[&](const auto &event,const auto &){
     if(event=="camera_ready")ready=true;if(event=="camera_error")error=true;
   });
-  media.start();int peers=0;int64_t pts=0;
+  media.start();int peers=0;int64_t pts=0,last_peer_pts[2]={-1,-1};
+  auto observe_peer=[&](const std::shared_ptr<const MediaPacket> &p) {
+    if(!p)return;
+    const int track=p->audio?1:0;
+    require(p->pts_us>last_peer_pts[track],"Independent receiver timestamps remain monotonic");
+    last_peer_pts[track]=p->pts_us;++peers;pts=p->pts_us;
+  };
   auto deadline=Clock::now()+std::chrono::seconds(25);
   while(pts<18500000&&Clock::now()<deadline) {
-    auto p=peer->next(stop);if(p) {++peers;pts=p->pts_us;}
+    observe_peer(peer->next(stop));
     require(!media.failed()&&!error,"Camera and independent receiver stay healthy");
   }
   require(ready&&pts>=18500000&&peers>1800,"Camera is ready while another subscriber receives the source");
@@ -75,7 +81,22 @@ void rolling(const std::filesystem::path &directory) {
   size_t count=0;uintmax_t bytes=0;
   for(const auto &entry:std::filesystem::directory_iterator(directory)){++count;bytes+=entry.file_size();}
   require(count<=10&&bytes<128*1024*1024,"Old camera segments are deleted within bounded disk use");
-  decode(directory/"index.m3u8",true);
+  {
+    // Decoding twelve seconds of stored media can take longer than this live
+    // subscriber's bounded queue on a loaded CI runner. Keep the independent
+    // receiver consuming while the synchronous decoder checks the camera.
+    std::atomic<bool> drain_failed{false};
+    std::jthread drain([&](std::stop_token ending) {
+      try {
+        while(!ending.stop_requested()&&!stop)observe_peer(peer->next(stop));
+      } catch(...) {drain_failed=true;}
+    });
+    decode(directory/"index.m3u8",true);
+    drain.request_stop();drain.join();
+    require(!drain_failed&&!media.failed(),"Independent receiver continues while camera media is decoded");
+    // On a decoder exception jthread's destructor also stops and joins here,
+    // before either the failure-isolation test or Media teardown can run.
+  }
   // A camera output failure must not cancel the independent source or receiver.
   auto failed_directory=directory.parent_path()/"failure";
   std::filesystem::create_directory(failed_directory);chmod(failed_directory.c_str(),0700);
@@ -83,9 +104,9 @@ void rolling(const std::filesystem::path &directory) {
   CameraHls failing(media,failed_directory,[&](const auto &event,const auto &){if(event=="camera_error")error=true;});
   {std::ofstream large(failed_directory/"over-limit");large.seekp(128*1024*1024);large.put('x');}
   deadline=Clock::now()+std::chrono::seconds(5);
-  while(!error&&Clock::now()<deadline)peer->next(stop);
+  while(!error&&Clock::now()<deadline)observe_peer(peer->next(stop));
   require(error&&!media.failed(),"Camera disk-limit failure leaves the source running");
-  auto p=peer->next(stop);require(bool(p),"Another receiver continues after camera failure");
+  auto p=peer->next(stop);require(bool(p),"Another receiver continues after camera failure");observe_peer(p);
   stop=true;media.close();
 }
 void passive(const std::filesystem::path &directory) {
