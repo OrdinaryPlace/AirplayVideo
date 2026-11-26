@@ -156,14 +156,25 @@ class CameraRegistration:
             # Preserve names/IDs customized after initial registration.
             if not self.saved.get("named"):
                 await call("config_entries/update", entry_id=entry_id, title=TITLE)
-                changes = {"entity_id": current, "name": TITLE}
+                # HA composes the device and entity name. An empty entity part
+                # keeps the virtual device's title visible exactly once.
+                changes = {"entity_id": current, "name": ""}
                 if not any(item.get("entity_id") == ENTITY_ID for item in entities):
                     changes["new_entity_id"] = ENTITY_ID
                 result = await call("config/entity_registry/update", **changes)
                 current = result.get("entity_entry", {}).get("entity_id", changes.get("new_entity_id", current))
                 if entity.get("device_id"):
                     await call("config/device_registry/update", device_id=entity["device_id"], name_by_user=TITLE)
-                self.save(named=True)
+                self.save(named=True, naming_version=1)
+            elif "naming_version" not in self.saved:
+                # 0.2.30 originally assigned TITLE to both name parts. Change
+                # only that known automatic entity name; keep owner names,
+                # device names, and entity IDs. Persist after acknowledgment.
+                # If the reply is lost, the next read sees the empty part and
+                # completes the marker without sending another update.
+                if entity.get("name") == TITLE:
+                    await call("config/entity_registry/update", entity_id=current, name="")
+                self.save(naming_version=1)
             return current, False
 
     async def ensure(self, stream_url, snapshot_url):

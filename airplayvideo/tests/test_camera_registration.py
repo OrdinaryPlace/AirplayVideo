@@ -23,7 +23,7 @@ async def core(tmp_path, monkeypatch):
     state = SimpleNamespace(entries=[], entities=[], commands=[], requests=[],
                             created=0, updated=0, fail_validation=False,
                             fail_confirmation=False, disabled=False, taken=False,
-                            chunked_entries=False)
+                            chunked_entries=False, drop_entity_update_reply=False)
 
     async def api(request):
         assert request.headers["Authorization"] == "Bearer private-supervisor-token"
@@ -84,6 +84,10 @@ async def core(tmp_path, monkeypatch):
                 entity = next(item for item in state.entities if item["entity_id"] == command["entity_id"])
                 entity.update({"entity_id": command.get("new_entity_id", entity["entity_id"]), "name": command["name"]})
                 result = {"entity_entry": entity}
+                if state.drop_entity_update_reply:
+                    state.drop_entity_update_reply = False
+                    await ws.close()
+                    return ws
             elif command["type"] == "config_entries/update":
                 assert command["entry_id"] == "fixture-owned-camera" and command["title"] == TITLE
             else:
@@ -108,7 +112,8 @@ async def test_creates_native_stream_camera_once_and_preserves_customizations(co
     assert x.state.created == 1
     assert not any("mqtt" in path for _, path, _ in x.state.requests)
     saved = private_json(x.registration.path)
-    assert saved["entry_id"] == "fixture-owned-camera" and saved["named"]
+    assert saved["entry_id"] == "fixture-owned-camera" and saved["named"] and saved["naming_version"] == 1
+    assert x.state.entities[0]["name"] == ""
     assert STREAM not in json.dumps(saved) and "private-supervisor-token" not in json.dumps(saved)
     x.state.entities[0]["entity_id"] = "camera.custom_video"
     x.state.commands.clear()
@@ -246,3 +251,81 @@ async def test_large_home_registry_over_two_megabytes_can_register_camera(core):
     result = await x.registration.ensure(STREAM, SNAPSHOT)
     assert result == {"status": "ready", "entity_id": ENTITY_ID, "error": ""}
     assert x.state.created == 1 and len(x.state.entities) == 2501
+
+
+async def legacy_registration(core, *, name=TITLE, entity_id=ENTITY_ID, disabled_by=None):
+    await core.registration.ensure(STREAM, SNAPSHOT)
+    core.state.entities[0].update(name=name, entity_id=entity_id, disabled_by=disabled_by)
+    core.registration.saved.pop("naming_version")
+    core.registration.save()
+    core.state.commands.clear()
+    core.state.requests.clear()
+
+
+@pytest.mark.asyncio
+async def test_legacy_automatic_duplicate_name_is_migrated_once_without_changing_identity(core):
+    x = core
+    await legacy_registration(x, entity_id="camera.my_selected_video")
+    result = await x.registration.ensure(STREAM, SNAPSHOT)
+    assert result == {"status": "ready", "entity_id": "camera.my_selected_video", "error": ""}
+    updates = [command for command in x.state.commands if command["type"].endswith("/update")]
+    assert len(updates) == 1
+    assert {key: value for key, value in updates[0].items() if key != "id"} == {
+        "type": "config/entity_registry/update", "entity_id": "camera.my_selected_video", "name": ""}
+    assert x.state.entities[0]["name"] == "" and x.state.entities[0]["device_id"] == "fixture-device"
+    assert private_json(x.registration.path)["naming_version"] == 1
+    x.state.commands.clear()
+    await x.registration.ensure(STREAM, SNAPSHOT)
+    assert not any(command["type"].endswith("/update") for command in x.state.commands)
+    assert x.state.created == 1 and x.state.updated == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("name", ["My custom camera", "", None])
+async def test_legacy_custom_name_and_entity_id_are_preserved_and_migration_marked_complete(core, name):
+    x = core
+    await legacy_registration(x, name=name, entity_id="camera.my_custom_video")
+    assert (await x.registration.ensure(STREAM, SNAPSHOT))["entity_id"] == "camera.my_custom_video"
+    assert x.state.entities[0]["name"] == name and x.state.entities[0]["device_id"] == "fixture-device"
+    assert not any(command["type"].endswith("/update") for command in x.state.commands)
+    assert private_json(x.registration.path)["naming_version"] == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled_by", ["user", "device"])
+async def test_disabled_legacy_camera_is_not_migrated_or_marked_complete(core, disabled_by):
+    x = core
+    await legacy_registration(x, disabled_by=disabled_by)
+    result = await x.registration.ensure(STREAM, SNAPSHOT)
+    assert result["status"] == "disabled"
+    assert x.state.entities[0]["name"] == TITLE and x.state.entities[0]["disabled_by"] == disabled_by
+    assert not any(command["type"].endswith("/update") for command in x.state.commands)
+    assert "naming_version" not in private_json(x.registration.path)
+
+
+@pytest.mark.asyncio
+async def test_legacy_migration_recovers_lost_ack_without_duplicate_update(core):
+    x = core
+    await legacy_registration(x)
+    x.state.drop_entity_update_reply = True
+    assert (await x.registration.ensure(STREAM, SNAPSHOT))["status"] == "pending"
+    assert x.state.entities[0]["name"] == ""  # HA accepted the update before disconnecting.
+    assert "naming_version" not in private_json(x.registration.path)
+    x.state.commands.clear()
+    # Recreate the registrar to prove recovery depends on persisted identity,
+    # rather than an in-memory successful-operation flag.
+    x.registration = CameraRegistration(x.store, x.session, core_url=str(x.server.make_url("/")))
+    assert (await x.registration.ensure(STREAM, SNAPSHOT))["status"] == "ready"
+    assert not any(command["type"].endswith("/update") for command in x.state.commands)
+    assert private_json(x.registration.path)["naming_version"] == 1
+    assert x.state.created == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_legacy_migration_requests_serialize_one_update(core):
+    x = core
+    await legacy_registration(x)
+    results = await asyncio.gather(x.registration.ensure(STREAM, SNAPSHOT), x.registration.ensure(STREAM, SNAPSHOT))
+    assert all(result["status"] == "ready" for result in results)
+    assert sum(command["type"] == "config/entity_registry/update" for command in x.state.commands) == 1
+    assert private_json(x.registration.path)["naming_version"] == 1

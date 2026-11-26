@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.2.31
+
+- Show the selected-video camera name once in Home Assistant. Correct the
+  earlier automatic duplicate name while preserving custom names, entity IDs
+  and disabled cameras.
+- Describe generated video duration for both camera-only and TV playback.
+
 ## 0.2.30
 
 - Select Capitals game with the other Browser sources and use the shared Play
