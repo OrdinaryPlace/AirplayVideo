@@ -24,6 +24,8 @@ from .mqtt import HomeAssistant
 from .network import ingress_listener
 from .recordings import Recordings
 from .diagnostics import Diagnostics
+from .camera import CameraOutput
+from .camera_registration import CameraRegistration
 
 ROOT = Path(os.environ.get("AIRPLAYVIDEO_DATA", "/data"))
 WEB = Path(os.environ.get("AIRPLAYVIDEO_WEB", "/opt/airplayvideo/web"))
@@ -61,6 +63,9 @@ class Application:
         self.browser = Browser(store.root, session)
         self.channels = Channels(store, session)
         self.controller = Controller(store, self.pairing, self.browser, self.channels)
+        self.camera = CameraOutput(store, self.controller, session)
+        self.camera.registration = CameraRegistration(store, session)
+        self.controller.camera = self.camera
         self.recordings = Recordings(self.controller)
         self.controller.recordings = self.recordings
         self.diagnostics = Diagnostics(self.controller, session)
@@ -81,7 +86,7 @@ class Application:
         self.supervisor_control = SupervisorControl(self.controller, self.capitals, frame_probe=self.frame_probe)
 
     def state(self):
-        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "browser_vpn": self.browser_vpn.state(), "sportsnet_auth": self.sportsnet_auth.state(), "capitals": self.capitals.state(), "recordings": self.recordings.state(), "diagnostics": self.diagnostics.state(), "frame_probe": self.frame_probe.state(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command"}, "capabilities": self.controller.capabilities}
+        return {"version": VERSION, **self.store.public(), "runtime": self.controller.status(), "camera": self.camera.state(), "browser_vpn": self.browser_vpn.state(), "sportsnet_auth": self.sportsnet_auth.state(), "capitals": self.capitals.state(), "recordings": self.recordings.state(), "diagnostics": self.diagnostics.state(), "frame_probe": self.frame_probe.state(), "channels": self.channels.public(), "channel_error": self.channels.error, "home_assistant": {"connected": self.ha.connected, "error": self.ha.error, "command_topic": self.ha.base + "/command", "camera": self.camera.registration.state()}, "capabilities": self.controller.capabilities}
 
     def require_idle(self):
         self.controller.require_no_diagnostic()
@@ -90,6 +95,7 @@ class Application:
         check(not self.controller.tearing_down, "Wait for playback to finish stopping")
 
     async def start(self):
+        await self.camera.start()
         await self.pairing.start()
         self.controller.capabilities = await self.pairing.call("/capabilities")
         saved = await self.pairing.call("/receivers")
@@ -124,6 +130,8 @@ class Application:
         await self.diagnostics.close()
         await self.recordings.close()
         await self.controller.close()
+        await self.camera.close()
+        await self.camera.registration.close()
         await self.pairing.close()
 
     async def get_state(self, _request):

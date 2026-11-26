@@ -36,7 +36,11 @@ Each paired TV's Home Assistant device has **Play current Capitals game** when
 browser mode and a VPN gateway are configured. Press the buttons for the TVs
 you want to watch. These controls look up a fresh live game and open its exact
 Sportsnet watch page; they do not open the saved Sportsnet homepage. The app
-also has **Play current game** for its selected TVs.
+also lists **Capitals game** in the browser Source selector. Choose it, select
+any TVs, and use the same **Play** and **Stop all** controls as other sources.
+When Home Assistant is enabled, the selected game also appears as the
+AirplayVideo camera, and TVs are optional. **Play in Home Assistant** starts
+the game without a TV.
 
 This is one immediate check. If no single eligible live game is available,
 the app reports the result without starting a TV or waiting for a future game.

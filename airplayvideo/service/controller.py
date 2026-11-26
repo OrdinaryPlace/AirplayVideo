@@ -6,12 +6,14 @@ import json
 import os
 from pathlib import Path
 import signal
+import shutil
 import uuid
 from urllib.parse import parse_qs, urlsplit
 import aiohttp
 from .browser import BROWSER_VIDEO_STATUSES, child_environment
 from .model import UserError, check, atomic_json, browser_url, browser_profile, youtube_url, identifier, validate_generated, check_browser_connection
 from .native_session import NativeSession
+from .camera import NativeCameraSession
 
 
 class PairingEngine:
@@ -71,6 +73,7 @@ class Stream:
         self.ready = asyncio.get_running_loop().create_future()
         self.stopping = False
         self.completed = False
+        self.camera_error = ""
         self.write_lock = asyncio.Lock()
         self.close_lock = asyncio.Lock()
 
@@ -139,6 +142,8 @@ class Stream:
                 await self.reader
             if self.ready.done() and not self.ready.cancelled():
                 self.ready.exception()  # Observe a cancelled startup's exception.
+            if directory := self.config.get("camera_directory"):
+                shutil.rmtree(directory, ignore_errors=True)
 
 
 class Controller:
@@ -164,6 +169,11 @@ class Controller:
         self.diagnostics = None
         self.frame_probe = None
         self.sportsnet_auth = None
+        self.camera = None
+
+    @property
+    def camera_enabled(self):
+        return bool(self.camera and self.camera.enabled)
 
     def require_no_diagnostic(self):
         check(not self.diagnostics or not self.diagnostics.active, "Wait for the sync measurement to finish or cancel it")
@@ -239,6 +249,8 @@ class Controller:
             await self.recordings.event(stream, event, fields)
         if stream is not self.stream and stream is not self.pending:
             return
+        if event == "camera_error":
+            stream.camera_error = "The Home Assistant camera output stopped"
         receiver_id = fields.get("id")
         if receiver_id in self.targets:
             if event in {"connecting", "streaming", "stopped", "receiver_error"}:
@@ -259,7 +271,8 @@ class Controller:
                 self.receivers.clear()
                 self.source = None
                 self.stream = None
-            if event == "receiver_error" and self.targets and all(self.receivers.get(r, {}).get("state") == "error" for r in self.targets):
+                self.retire(stream)
+            if event == "receiver_error" and not self.camera_enabled and self.targets and all(self.receivers.get(r, {}).get("state") == "error" for r in self.targets):
                 task = asyncio.create_task(self.stop_failed(stream))
                 self.cleanup_tasks.add(task)
                 task.add_done_callback(self.cleanup_tasks.discard)
@@ -344,14 +357,17 @@ class Controller:
         check(not self.recordings or not self.recordings.current or not self.recordings.owned,
               "Wait for the diagnostic recording to finish")
         wanted = request.get("receivers", [])
-        check(isinstance(wanted, list) and 0 < len(wanted) <= 8, "Choose one or more TVs")
+        camera_requested = request.get("camera", False)
+        check(type(camera_requested) is bool, "Invalid Home Assistant camera choice")
+        check(isinstance(wanted, list) and len(wanted) <= 8 and
+              (len(wanted) > 0 or camera_requested and self.camera_enabled), "Choose one or more TVs")
         target = {self.store.receiver(r)["id"] for r in wanted}
         if add:
             target |= self.targets
         source, input_config = self.requested_source(request)
         self.require_browser_profile(source)
         if source["kind"] == "youtube":
-            check(len(target) == 1, "Direct YouTube video currently plays on one TV at a time")
+            check(len(target) <= 1, "Direct YouTube video currently plays on one TV at a time")
             check(self.store.data["setup"]["audio"]["enabled"],
                   "Direct video currently includes sound. Enable sound in Settings or choose Browser playback")
             check(not self.recordings or not self.recordings.current,
@@ -396,7 +412,11 @@ class Controller:
                 self.phase = "preparing"
                 self.notify()
                 environment = dict(self.browser.environment) if source["kind"] == "browser" else child_environment()
-                pending = Stream(self.store.root, self.source_config(input_config), environment, self.event)
+                config = self.source_config(input_config)
+                if self.camera_enabled:
+                    config["camera_directory"] = str(self.camera.allocate())
+                    config["camera_only"] = not target
+                pending = Stream(self.store.root, config, environment, self.event)
                 self.pending = pending
                 self.pending_targets = target.copy()
                 await pending.start()
@@ -416,7 +436,7 @@ class Controller:
                 self.receivers.clear()
                 self.metrics.clear()
             self.source = source
-            self.phase = "connecting"
+            self.phase = "connecting" if target else "playing"
             active = self.stream
             for receiver_id in target:
                 check(generation == self.generation and self.stream is active, "Playback was cancelled")
@@ -434,7 +454,7 @@ class Controller:
                     self.pending = None
                     self.pending_targets.clear()
             if generation == self.generation:
-                self.phase = "playing" if self.stream and self.targets else "idle"
+                self.phase = "playing" if self.stream and (self.targets or self.camera_enabled) else "idle"
             self.notify()
             raise
 
@@ -447,13 +467,15 @@ class Controller:
 
     async def play_native(self, source, target, generation):
         """Prepare before replacing playback; receiver commands start after teardown."""
-        receiver_id = next(iter(target))
-        receiver = dict(self.store.receiver(receiver_id))
+        receiver_id = next(iter(target), None)
+        receiver = dict(self.store.receiver(receiver_id)) if receiver_id else None
         limit = source["native_resolution"]
         config = {"max_resolution": None if limit == "best" else limit,
                   "vaapi_device": "/dev/dri/renderD128"}
-        pending = NativeSession(self.store.root, receiver, config=config,
-                                on_event=lambda status: self.native_event(pending, status))
+        pending = (NativeSession(self.store.root, receiver, config=config,
+                                 on_event=lambda status: self.native_event(pending, status)) if receiver else
+                   NativeCameraSession(self.store.root, config=config,
+                                       on_event=lambda status: self.native_event(pending, status)))
         self.pending = pending
         self.pending_targets = target.copy()
         self.phase = "preparing"
@@ -472,7 +494,7 @@ class Controller:
             check(generation == self.generation and self.pending is pending, "Playback was cancelled")
             self.source = source
             self.targets = target.copy()
-            self.receivers = {receiver_id: {"state": "connecting"}}
+            self.receivers = {receiver_id: {"state": "connecting"}} if receiver_id else {}
             self.phase = "connecting"
             self.notify()
             await pending.connect()
@@ -480,7 +502,7 @@ class Controller:
             self.stream, self.pending = pending, None
             self.pending_targets.clear()
             self.phase = "playing"
-            self.receivers = {receiver_id: {"state": "streaming"}}
+            self.receivers = {receiver_id: {"state": "streaming"}} if receiver_id else {}
             self.native_report = pending.status
             self.metrics = {"native": self.native_report}
             task = asyncio.create_task(self.watch_native(pending))
@@ -501,7 +523,7 @@ class Controller:
                     self.source = None
                     self.targets.clear()
                     self.receivers.clear()
-                self.phase = "playing" if self.stream and self.targets else "idle"
+                self.phase = "playing" if self.stream and (self.targets or self.camera_enabled) else "idle"
             self.notify()
             raise
 
@@ -535,7 +557,27 @@ class Controller:
         pending, self.pending = self.pending, None
         self.pending_targets.clear()
         stopping_active = not receiver_id or receiver_id in self.targets
-        if stopping_active and receiver_id and len(self.targets) > 1 and self.stream:
+        if stopping_active and receiver_id and self.camera_enabled and isinstance(self.stream, NativeSession):
+            # The TV transport and the HA viewer share a prepared producer.
+            # Transfer that producer before closing the scoped TV transport.
+            active = self.stream
+            camera_session = NativeCameraSession(self.store.root, producer=active.producer)
+            active.producer = None
+            self.stream = camera_session
+            self.targets.clear()
+            self.receivers.clear()
+            self.phase = "playing"
+            self.native_report = camera_session.status
+            self.retire(active)
+            if pending:
+                self.retire(pending)
+            task = asyncio.create_task(self.watch_native(camera_session))
+            self.cleanup_tasks.add(task)
+            task.add_done_callback(self.cleanup_tasks.discard)
+            self.notify()
+            await self.finish_teardown()
+            return
+        if stopping_active and receiver_id and (len(self.targets) > 1 or self.camera_enabled) and self.stream and not isinstance(self.stream, (NativeSession, NativeCameraSession)):
             active = self.stream
             if pending:
                 self.retire(pending)
@@ -543,6 +585,8 @@ class Controller:
             if generation == self.generation and self.stream is active:
                 self.targets.discard(receiver_id)
                 self.receivers.pop(receiver_id, None)
+                if not self.targets:
+                    self.phase = "playing"
                 self.notify()
             await self.finish_teardown()
             return
@@ -556,7 +600,7 @@ class Controller:
             self.phase = "idle"
             self.metrics.clear()
         else:
-            self.phase = "playing" if self.stream and self.targets else "idle"
+            self.phase = "playing" if self.stream and (self.targets or self.camera_enabled) else "idle"
         if pending:
             self.retire(pending)
         if active:

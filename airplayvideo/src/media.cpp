@@ -539,7 +539,7 @@ void Media::start() {
   int count=(kind=="browser"||kind=="synthetic")&&config.value("audio",true)?2:1;
   for(int i=0;i<count;++i) impl_->workers.emplace_back([this,i]{impl_->capture(i);});
 }
-std::shared_ptr<Subscriber> Media::subscribe() { auto s=std::make_shared<Subscriber>(); std::lock_guard lock(impl_->mutex); impl_->subscribers.push_back(s); impl_->joined=true; return s; }
+std::shared_ptr<Subscriber> Media::subscribe(bool starts_presentation) { auto s=std::make_shared<Subscriber>(); std::lock_guard lock(impl_->mutex); impl_->subscribers.push_back(s); if(starts_presentation)impl_->joined=true; return s; }
 void Media::close() { if(impl_) impl_->close(); }
 bool Media::failed() const { return impl_->failure; }
 bool Media::completed() const { return impl_->completed; }

@@ -608,6 +608,34 @@ async def test_public_nominal_fps_is_refined_before_encoder_probe_and_report(tmp
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize('camera', [False, True])
+async def test_camera_h264_contract_converts_hevc_even_when_receiver_can_copy(tmp_path, monkeypatch, camera):
+    from unittest.mock import AsyncMock
+    stream = session(tmp_path, force_h264=camera)
+    metadata = {'duration': 60, 'formats': [
+        {'format_id': 'v', 'vcodec': 'hvc1.1.6.L120.B0', 'acodec': 'none',
+         'width': 1920, 'height': 1080, 'fps': 30, 'dynamic_range': 'SDR',
+         'protocol': 'https', 'url': 'https://r1.googlevideo.com/videoplayback?v'},
+        {'format_id': 'a', 'vcodec': 'none', 'acodec': 'mp4a.40.2', 'asr': 44100,
+         'audio_channels': 2, 'abr': 128, 'protocol': 'https',
+         'url': 'https://r1.googlevideo.com/videoplayback?a'},
+    ]}
+    monkeypatch.setattr(stream, '_json_command', AsyncMock(return_value=metadata))
+    monkeypatch.setattr(stream, '_capabilities', AsyncMock(return_value={}))
+    # Inspect the selected plan at the next boundary, before private network I/O.
+    monkeypatch.setattr(stream, '_probe', AsyncMock(side_effect=StreamError('plan inspected')))
+    monkeypatch.setattr(stream, '_initial_pts', AsyncMock(return_value=Fraction(0)))
+    with pytest.raises(StreamError, match='plan inspected'):
+        await stream.start('https://youtu.be/abcdefghijk', 'AppleTV5,3')
+    assert stream.plan['video']['codec'] == 'hevc'
+    assert stream.plan['target']['video_codec'] == ('h264' if camera else 'hevc')
+    assert stream.plan['copy_video'] is not camera
+    assert stream.plan['copy_audio'] is True
+    assert stream.plan['required_codecs'] == ({'decoders': ['hevc'], 'encoders': ['h264']} if camera else
+                                              {'decoders': [], 'encoders': []})
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize('video_duration,level,message', [
     ('4.004', 180, 'HEVC profile'),
     (None, 153, 'no valid video duration'),

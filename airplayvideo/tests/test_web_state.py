@@ -16,7 +16,7 @@ def run_ui(script):
     if not node:
         pytest.skip('Node is required for browser state checks')
     functions = []
-    for name in ('message', 'renderRuntimeError', 'stableMarkup', 'renderBrowserStatus', 'renderBrowserVpn', 'renderCapitals', 'browserKindChanged', 'renderUsage'):
+    for name in ('message', 'renderRuntimeError', 'stableMarkup', 'renderBrowserStatus', 'renderBrowserVpn', 'renderCapitals', 'renderCameraStatus', 'browserKindChanged', 'renderUsage'):
         match = re.search(rf'^function {name}\([^\n]*\)\s*\{{.*?^\}}', SOURCE, re.M | re.S)
         assert match, name
         functions.append(match.group())
@@ -64,6 +64,20 @@ renderRuntimeError('');
 assert.equal($('error').textContent, 'Choose a valid URL');
 renderRuntimeError('Receiver disconnected');
 assert.equal($('error').textContent, 'Choose a valid URL');
+""")
+
+
+def test_camera_status_distinguishes_idle_preparing_ready_and_registration_errors():
+    run_ui("""
+state.setup.home_assistant={enabled:true};renderCameraStatus();
+assert.equal($('cameraStatus').hidden,false);assert.match($('cameraStatus').textContent,/available after Play/);
+state.camera={active:true,ready:false,error:''};renderCameraStatus();
+assert.match($('cameraStatus').textContent,/preparing/);
+state.camera.ready=true;state.home_assistant={camera:{status:'ready'}};renderCameraStatus();
+assert.equal($('cameraStatus').textContent,'AirplayVideo selected video · Camera ready');
+state.home_assistant.camera.error='Home Assistant camera setup needs attention.';renderCameraStatus();
+assert.match($('cameraStatus').textContent,/Camera needs attention/);
+state.setup.home_assistant.enabled=false;renderCameraStatus();assert.equal($('cameraStatus').hidden,true);
 """)
 
 
@@ -281,7 +295,7 @@ assert.deepEqual(calls,[['cancel_recording_analysis',{id:sample.id},true]]);
 assert.match(list.innerHTML,/No TVs are started/);
 assert.equal(document.querySelectorAll('[data-remove-recording]')[0].disabled,true);
 updateButtons();
-for(const id of ['play','recordCapture','openBrowser','browserVpnEnabled','capitalsCheck','measureSync'])assert.equal($(id).disabled,true,id);
+for(const id of ['play','recordCapture','openBrowser','browserVpnEnabled','measureSync'])assert.equal($(id).disabled,true,id);
 assert.equal($('cancelSync').hidden,true);
 """)
 
@@ -356,7 +370,7 @@ assert.match($('frameStagesStatus').textContent,/No TVs are started and no recor
 $('cancelFrameStages').onclick();
 assert.deepEqual(calls,[['measure_frame_stages'],['cancel_frame_stages',{},true]]);
 updateButtons();
-for(const id of ['play','recordCapture','openBrowser','closeBrowser','browserVpnEnabled','capitalsCheck','measureSync'])assert.equal($(id).disabled,true,id);
+for(const id of ['play','recordCapture','openBrowser','closeBrowser','browserVpnEnabled','measureSync'])assert.equal($(id).disabled,true,id);
 assert.equal($('cancelSync').hidden,true);
 """)
 

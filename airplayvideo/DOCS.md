@@ -5,7 +5,7 @@ to your Apple TVs from Home Assistant. Browser, tuner and generated sources shar
 one encoder across selected TVs. Direct YouTube video uses one TV's native media
 player. Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.29.** This is an independent implementation in a new
+**Experimental, version 0.2.30.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 
@@ -67,12 +67,22 @@ values. Picture, sound and browser-default edits keep the browser session open;
 changing output resolution or disabling browser mode closes it. Settings are
 applied to the next playback session.
 
+## Watch the selected source in Home Assistant
+
+Native Home Assistant controls also create one **AirplayVideo selected video**
+streaming camera after the first playable source starts. It supports HA camera
+cards, snapshots and native HLS viewing, including camera-only playback with no
+TV selected. Browser, Capitals, tuner and generated sources reuse their existing
+H.264 encode. Native HEVC playback gets a separate H.264 camera output while the
+TV keeps its original quality. See [selected video camera setup and media
+behavior](https://github.com/OrdinaryPlace/AirplayVideo/blob/main/docs/selected-video-camera.md).
+
 ## Use every day
 
 Choose a saved page, YouTube video, Watch Later, web address, channel, or generated video.
 Select the TVs and press **Play on selected TVs**. Use **Stop** for one TV or
 **Stop all**. Browser, tuner and generated sources can share their encoder with
-additional TVs. Direct YouTube video currently requires exactly one TV.
+additional TVs. Direct YouTube video supports one TV or camera-only playback.
 Stopping the last TV releases the source and any tuner.
 
 For **YouTube video**, **Direct video** is the default. Paste one public video

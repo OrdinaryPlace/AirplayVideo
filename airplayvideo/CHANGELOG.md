@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.2.30
+
+- Select Capitals game with the other Browser sources and use the shared Play
+  and Stop controls.
+- Expose the selected source as a native Home Assistant streaming camera and
+  virtual device, with H.264 video, AAC audio where enabled, and snapshots.
+- Play through the Home Assistant camera with no TV selected. Browser, tuner
+  and generated video share their existing encode; native HEVC gets a separate
+  H.264 camera conversion while retaining the TV's direct source.
+- Keep camera output private to the Supervisor bridge with authenticated media
+  requests, bounded rolling storage and source-specific segment identities.
+
 ## 0.2.29
 
 - Detect expired Sportsnet sign-in in the dedicated browser and make one bounded

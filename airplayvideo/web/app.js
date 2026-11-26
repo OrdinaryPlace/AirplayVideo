@@ -275,7 +275,7 @@ function renderStep() {
     updateRateFields();
   } else {
     const connected = state.home_assistant.connected;
-    $('stepContent').innerHTML = `<label class="check-row"><input id="enableHA" type="checkbox" ${checked(draft.home_assistant.enabled)}> Create TV controls in Home Assistant</label><p class="muted">Each paired TV gets Play and Stop buttons, saved-page shortcuts, channel selection, generated video, and status for your dashboards and automations. For custom text, use Generated video in Playback and expand Use in a Home Assistant automation.</p><div class="integration"><strong>${connected ? 'Home Assistant connection ready' : 'Home Assistant connection needs attention'}</strong><p class="muted">${connected ? 'The app found the MQTT service automatically. Controls appear for paired TVs when enabled.' : escape(state.home_assistant.error || 'Enable MQTT in Home Assistant to create playback entities. You can still use the app directly.')}</p><button type="button" id="retryHA" class="text-button">Check connection again</button></div><dl class="review"><dt>Modes</dt><dd>${Object.entries(draft.modes).filter(([,enabled])=>enabled).map(([key])=>modeNames[key]).join(' + ')}</dd><dt>Paired TVs</dt><dd>${state.receivers.length ? escape(state.receivers.map(r=>r.name).join(', ')) : 'None yet — add them in Setup later'}</dd><dt>Picture</dt><dd>${draft.video.resolution} · ${draft.video.fps} fps · H.264</dd><dt>Sound</dt><dd>${draft.audio.enabled ? 'Stereo audio for browser and live TV' : 'Video only'}</dd><dt>After saving</dt><dd>Playback stays idle until you press Play.</dd></dl>`;
+    $('stepContent').innerHTML = `<label class="check-row"><input id="enableHA" type="checkbox" ${checked(draft.home_assistant.enabled)}> Create camera and TV controls in Home Assistant</label><p class="muted">The AirplayVideo camera shows the selected video, with or without a TV. Each paired TV gets Play and Stop buttons, saved-page shortcuts, channel selection, generated video, and status for your dashboards and automations. For custom text, use Generated video in Playback and expand Use in a Home Assistant automation.</p><div class="integration"><strong>${connected ? 'Home Assistant connection ready' : 'Home Assistant connection needs attention'}</strong><p class="muted">${connected ? 'The app found the MQTT service automatically. The camera and paired TV controls appear when enabled.' : escape(state.home_assistant.error || 'Enable MQTT in Home Assistant to create playback entities. You can still use the app directly.')}</p><button type="button" id="retryHA" class="text-button">Check connection again</button></div><dl class="review"><dt>Modes</dt><dd>${Object.entries(draft.modes).filter(([,enabled])=>enabled).map(([key])=>modeNames[key]).join(' + ')}</dd><dt>Paired TVs</dt><dd>${state.receivers.length ? escape(state.receivers.map(r=>r.name).join(', ')) : 'None yet — add them in Setup later'}</dd><dt>Picture</dt><dd>${draft.video.resolution} · ${draft.video.fps} fps · H.264</dd><dt>Sound</dt><dd>${draft.audio.enabled ? 'Stereo audio for browser and live TV' : 'Video only'}</dd><dt>After saving</dt><dd>Playback stays idle until you press Play.</dd></dl>`;
     $('retryHA').onclick = () => setupTask(async () => { await api('api/setup/home_assistant', {}); await refresh(); renderStep(); }, $('retryHA'));
   }
   settingsStatus();
@@ -433,12 +433,21 @@ function renderCapitals(){
   $('capitalsGame').textContent=description;
 }
 
+function renderCameraStatus(){
+  const enabled=!!state.setup.home_assistant?.enabled;
+  const output=state.camera || {}, registration=state.home_assistant?.camera || {};
+  const error=output.error || registration.error;
+  $('cameraStatus').hidden=!enabled;
+  $('cameraStatus').textContent=!enabled?'':error?'Camera needs attention: '+error:!output.active?'Home Assistant camera available after Play.':output.ready&&registration.status==='ready'?'AirplayVideo selected video · Camera ready':'Home Assistant camera preparing…';
+}
+
 function renderUsage(){
   if(!state)return;
   renderRecordings();
   renderFrameStages();
   renderBrowserVpn();
   renderCapitals();
+  renderCameraStatus();
   if(!state.setup.modes[mode])mode=Object.keys(state.setup.modes).find(key=>state.setup.modes[key]) || 'browser';
   stableMarkup($('modeSwitch'),Object.entries(state.setup.modes).filter(([,enabled])=>enabled).map(([kind])=>`<button class="${mode===kind?'selected':''}" data-mode="${kind}">${modeNames[kind]}</button>`).join(''));
   $('modeSwitch').hidden=Object.values(state.setup.modes).filter(Boolean).length<2;
@@ -456,7 +465,8 @@ function renderUsage(){
   const runtime=state.runtime;
   const label={idle:'Idle',preparing:'Preparing',connecting:'Connecting',playing:'Sending',stopping:'Stopping',error:'Needs attention'}[runtime.phase]||runtime.phase;
   $('runtimeBadge').textContent=label;
-  $('nowPlaying').textContent=runtime.source?`${runtime.source.label} · ${runtime.targets.length} TV${runtime.targets.length===1?'':'s'}`:'Choose a source and one or more TVs.';
+  const destinations=[...(runtime.targets.length?[`${runtime.targets.length} TV${runtime.targets.length===1?'':'s'}`]:[]),...(runtime.source&&state.setup.home_assistant?.enabled?['Home Assistant camera']:[])];
+  $('nowPlaying').textContent=runtime.source?`${runtime.source.label} · ${destinations.join(' · ')}`:state.setup.home_assistant?.enabled?'Choose a source to watch in Home Assistant or on your TVs.':'Choose a source and one or more TVs.';
   const native=runtime.native, quality=native?.quality;
   $('nativePlaybackStatus').hidden=!native;
   $('nativePlaybackReport').hidden=!native;
@@ -482,7 +492,7 @@ function renderUsage(){
     const status=runtime.receivers[receiver.id]||{};
     const description=status.message || ({streaming:'Sending',connecting:'Connecting…',stopped:'Stopped',error:'Needs attention'}[status.state]||'Ready');
     return `<div class="tv-row"><input type="checkbox" id="tv-${receiver.id}" data-tv="${receiver.id}" ${checked(chosenTVs.has(receiver.id))}><label for="tv-${receiver.id}">${escape(receiver.name)}<small>${escape(description)}</small></label>${runtime.targets.includes(receiver.id)?`<button data-stop="${receiver.id}">Stop</button>`:''}</div>`;
-  }).join(''):'<p class="empty">Choose Manage TVs to add a TV, then select where to play.</p>');
+  }).join(''):state.setup.home_assistant?.enabled?'<p class="empty">TVs are optional. Use Manage TVs to add one.</p>':'<p class="empty">Choose Manage TVs to add a TV, then select where to play.</p>');
   for(const checkbox of document.querySelectorAll('[data-tv]'))checkbox.onchange=()=>{selectionDirty=true;checkbox.checked?chosenTVs.add(checkbox.dataset.tv):chosenTVs.delete(checkbox.dataset.tv);updateButtons();};
   for(const button of document.querySelectorAll('[data-stop]'))button.onclick=()=>act('stop',{receiver:button.dataset.stop},true);
   renderPreview();
@@ -615,14 +625,16 @@ function browserKindChanged(){
   $('urlLabel').textContent=kind==='youtube'?'YouTube video link':'Web address';
   $('sourceUrl').placeholder=kind==='youtube'?'https://www.youtube.com/watch?v=…':'https://…';
   $('youtubePlayback').hidden=kind!=='youtube';
+  $('capitalsControl').hidden=kind!=='capitals';
   const direct=kind==='youtube'&&$('youtubeDelivery').value==='native';
   $('nativeQualityFields').hidden=!direct;
-  $('openBrowser').hidden=direct;
+  $('openBrowser').hidden=direct||kind==='capitals';
   updateButtons();
 }
 
 function updateButtons(){
   if(!state)return;
+  const cameraEnabled=!!state.setup.home_assistant?.enabled;
   const measuring=!!state.diagnostics?.active;
   const analyzing=state.recordings?.analysis?.status==='running';
   const probing=state.frame_probe?.status==='running';
@@ -633,32 +645,29 @@ function updateButtons(){
   for(const button of document.querySelectorAll('[data-analyze-recording]'))button.disabled=analysisUnavailable;
   for(const button of document.querySelectorAll('[data-remove-recording]'))button.disabled=busy||(analyzing&&button.dataset.removeRecording===state.recordings.analysis.id);
   $('browserVpnEnabled').disabled=busy||measuring||analyzing||probing||!!state.recordings?.active||!!state.runtime.targets.length||['preparing','connecting','playing','stopping'].includes(state.runtime.phase)||!state.setup.complete;
-  const capitalsUnavailable=busy||measuring||analyzing||probing||!!state.recordings?.active||!chosenTVs.size||!state.setup.complete||!state.setup.modes?.browser||!state.browser_vpn?.configured;
+  const capitalsSelected=mode==='browser'&&$('browserKind').value==='capitals';
+  const capitalsUnavailable=!state.setup.modes?.browser||!state.browser_vpn?.configured;
   const capitalsStarting=busy&&busyAction==='capitals_play';
-  $('capitalsPlay').disabled=capitalsUnavailable;
-  $('capitalsPlay').textContent=capitalsStarting?'Starting…':'Play current game';
-  $('capitalsCheck').disabled=capitalsUnavailable;
   $('capitalsRefresh').disabled=busy;
-  $('capitalsCancel').hidden=state.capitals?.status!=='checking'&&!capitalsStarting;
-  $('capitalsCancel').disabled=busy&&busyAction!=='capitals_play';
+  $('capitalsHelp').textContent=capitalsUnavailable?'Configure a browser VPN gateway in Settings to play Capitals games.':'Use Play below to check Sportsnet once and start the live game with the browser VPN on. If no game is live, playback stays unchanged. Scheduled games and replays are skipped.';
   const unavailable=busy||measuring||analyzing||probing||!!state.recordings?.active||state.runtime.browser_open||!!state.runtime.targets.length||['preparing','connecting','stopping'].includes(state.runtime.phase)||!state.setup.complete;
   $('measureSync').disabled=unavailable;
   $('measureSyncTV').disabled=unavailable||!chosenTVs.size;
   $('testNativeVideo').disabled=unavailable||chosenTVs.size!==1;
   $('cancelSync').hidden=!measuring;
   const direct=mode==='browser'&&$('browserKind').value==='youtube'&&$('youtubeDelivery').value==='native';
-  $('tvSelectionHelp').textContent=direct?'Choose one TV for direct video.':'The same source plays on every selected TV.';
+  $('tvSelectionHelp').textContent=direct?(cameraEnabled?'Choose up to one TV. Video is also available as the Home Assistant camera.':'Choose one TV for direct video.'):(cameraEnabled?'Video is available as the Home Assistant camera and on any selected TVs.':'The same source plays on every selected TV.');
   $('recordCapture').disabled=busy||measuring||analyzing||probing||!!state.recordings?.active||state.runtime.source?.kind==='youtube';
-  $('play').disabled=busy||measuring||analyzing||probing||!chosenTVs.size||!state.setup.complete||(direct&&chosenTVs.size!==1);
-  $('play').textContent=busy&&busyAction==='play'?'Starting…':'Play on selected TVs';
+  $('play').disabled=busy||measuring||analyzing||probing||(!chosenTVs.size&&!cameraEnabled)||!state.setup.complete||(direct&&(chosenTVs.size>1||(!cameraEnabled&&chosenTVs.size!==1)))||(capitalsSelected&&(capitalsUnavailable||!!state.recordings?.active));
+  $('play').textContent=busy&&(busyAction==='play'||capitalsStarting)?'Starting…':!chosenTVs.size&&cameraEnabled?'Play in Home Assistant':'Play on selected TVs';
   const names = state.receivers.filter(receiver=>chosenTVs.has(receiver.id)).map(receiver=>receiver.name);
-  $('selectionHint').textContent = direct&&names.length!==1?'Choose exactly one TV above.':names.length ? 'Play on: ' + names.join(', ') : 'Choose one or more TVs above.';
+  $('selectionHint').textContent = direct&&(names.length>1||(!cameraEnabled&&names.length!==1))?(cameraEnabled?'Choose up to one TV above.':'Choose exactly one TV above.'):names.length ? 'Play on: ' + names.join(', ')+(cameraEnabled?' · Home Assistant camera':'') : cameraEnabled?'Play through the Home Assistant camera. TVs are optional.':'Choose one or more TVs above.';
   automationExample();
   $('openBrowser').disabled=busy||measuring||analyzing||probing;
   $('closeBrowser').disabled=busy||probing;
   $('openBrowser').textContent=busy&&busyAction==='open_browser'?'Opening browser…':'Open browser';
   $('closeBrowser').textContent=busy&&busyAction==='close_browser'?'Closing browser…':'Close browser';
-  $('stopAll').disabled=!measuring&&!state.sportsnet_auth?.busy&&!(busy&&busyAction==='play')&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
+  $('stopAll').disabled=!measuring&&!state.sportsnet_auth?.busy&&!(busy&&busyAction==='play')&&!capitalsStarting&&state.capitals?.status!=='checking'&&!state.runtime.media_busy&&!state.runtime.targets.length&&!['preparing','connecting'].includes(state.runtime.phase);
   if (draft && !$('wizard').hidden) settingsStatus();
 }
 
@@ -688,7 +697,7 @@ async function connectPreview(){
   finally{previewConnecting=false;}
 }
 
-$('play').onclick=()=>act('play',{...requestSource(),receivers:[...chosenTVs]});
+$('play').onclick=()=>{const capitals=mode==='browser'&&$('browserKind').value==='capitals';return act(capitals?'capitals_play':'play',{...(capitals?{}:requestSource()),receivers:[...chosenTVs],...(state.setup.home_assistant?.enabled?{camera:true}:{})});};
 $('previewGenerated').onclick=()=>setupTask(async()=>{
   const settings=readGenerated('generated');
   const result=await api('api/actions/preview_generated',{generated:settings});
@@ -708,10 +717,7 @@ $('testNativeVideo').onclick=()=>act('test_native_video',{receivers:[...chosenTV
 $('cancelSync').onclick=()=>act('cancel_sync',{},true);
 $('openBrowser').onclick=()=>act('open_browser',requestSource());
 $('browserVpnEnabled').onchange=()=>act('browser_vpn',{enabled:$('browserVpnEnabled').checked,expected_http_proxy:state.setup.browser.http_proxy || '',expected_http_proxy_enabled:!!state.setup.browser.http_proxy_enabled});
-$('capitalsPlay').onclick=()=>act('capitals_play',{receivers:[...chosenTVs]});
-$('capitalsCheck').onclick=()=>act('capitals_live',{receivers:[...chosenTVs]});
 $('capitalsRefresh').onclick=()=>act('capitals_refresh');
-$('capitalsCancel').onclick=()=>act('capitals_cancel',{},true);
 $('sportsnetSignIn').onclick=()=>{const auth=sportsnetAuthPresentation(state.sportsnet_auth);return auth.enable?act('sportsnet_enable'):auth.interaction?expandPreview():act('sportsnet_sign_in');};
 $('closeBrowser').onclick=()=>act('close_browser');
 $('browserKind').onchange=browserKindChanged;

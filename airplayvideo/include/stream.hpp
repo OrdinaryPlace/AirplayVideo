@@ -38,7 +38,7 @@ public:
   Media(Json config, std::atomic<bool> &stop, Note note,
         std::shared_ptr<FrameProbe> probe = {});
   ~Media();
-  std::shared_ptr<Subscriber> subscribe();
+  std::shared_ptr<Subscriber> subscribe(bool starts_presentation = true);
   void start();
   void close();
   bool failed() const;
