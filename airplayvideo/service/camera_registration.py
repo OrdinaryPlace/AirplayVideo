@@ -111,7 +111,7 @@ class CameraRegistration:
     async def registry(self, token, entry_id):
         async with self.session.ws_connect(
             self.core_url + "/api/websocket", timeout=10,
-            max_msg_size=2 * 1024 * 1024,
+            max_msg_size=8 * 1024 * 1024,
         ) as ws:
             async def receive():
                 value = await asyncio.wait_for(ws.receive_json(), 15)
@@ -135,7 +135,6 @@ class CameraRegistration:
                     raise RegistrationError("Home Assistant could not name the camera. Check its device settings.")
                 return result.get("result")
 
-            await call("config_entries/update", entry_id=entry_id, title=TITLE)
             entity = None
             for attempt in range(10):
                 entities = await call("config/entity_registry/list")
@@ -149,8 +148,14 @@ class CameraRegistration:
             if entity is None:
                 raise RegistrationError("The camera device is configured; Home Assistant is still loading its entity.")
             current = entity["entity_id"]
+            if entity.get("disabled_by"):
+                # HA also marks the entity disabled when its device is disabled.
+                # Preserve that owner choice, including an unfinished first
+                # naming pass, without issuing any registry update command.
+                return current, True
             # Preserve names/IDs customized after initial registration.
             if not self.saved.get("named"):
+                await call("config_entries/update", entry_id=entry_id, title=TITLE)
                 changes = {"entity_id": current, "name": TITLE}
                 if not any(item.get("entity_id") == ENTITY_ID for item in entities):
                     changes["new_entity_id"] = ENTITY_ID
@@ -159,7 +164,7 @@ class CameraRegistration:
                 if entity.get("device_id"):
                     await call("config/device_registry/update", device_id=entity["device_id"], name_by_user=TITLE)
                 self.save(named=True)
-            return current
+            return current, False
 
     async def ensure(self, stream_url, snapshot_url):
         """Call once both private endpoints are ready; repeat safely on retries.
@@ -197,9 +202,10 @@ class CameraRegistration:
                 if not entry_id or self.saved.get("endpoint_digest") != digest:
                     entry_id = await self.configure(token, stream_url, snapshot_url, entry_id)
                     self.save(endpoint_digest=digest)
-                self.entity_id = await self.registry(token, entry_id)
+                self.entity_id, disabled = await self.registry(token, entry_id)
                 self.save(entity_id=self.entity_id)
-                self.status, self.error = "ready", ""
+                self.status, self.error = (("disabled", "The camera entity or device is disabled in Home Assistant.")
+                                           if disabled else ("ready", ""))
             except RegistrationError as exc:
                 self.status, self.error = "pending", str(exc)
             except (aiohttp.ClientError, asyncio.TimeoutError, ValueError, TypeError, KeyError):

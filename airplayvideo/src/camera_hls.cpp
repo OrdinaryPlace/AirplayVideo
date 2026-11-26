@@ -108,6 +108,30 @@ struct Mux {
     av_packet_free(&packet);
   }
 };
+bool playlist_ready(const std::filesystem::path &directory) {
+  std::ifstream playlist(directory/"index.m3u8",std::ios::binary);
+  if(!playlist)return false;
+  std::array<char,65537> buffer{};playlist.read(buffer.data(),buffer.size());
+  const auto count=playlist.gcount();
+  if(count<=0||count>65536)return false;
+  const std::string text(buffer.data(),size_t(count));
+  if(!text.starts_with("#EXTM3U\n")||text.find("\n#EXTINF:")==std::string::npos)return false;
+  // The HLS muxer publishes its playlist atomically after renaming complete
+  // segments. Readiness requires actual media, including a short final segment.
+  size_t position=0;
+  while(position<text.size()) {
+    const auto end=text.find('\n',position);
+    const auto name=text.substr(position,end==std::string::npos?end:end-position);
+    if(!name.empty()&&name[0]!='#') {
+      if(!name.starts_with("segment")||!name.ends_with(".ts")||name.find('/')!=std::string::npos)return false;
+      const auto path=directory/name;
+      return std::filesystem::is_regular_file(path)&&!std::filesystem::is_symlink(path)&&std::filesystem::file_size(path)>0;
+    }
+    if(end==std::string::npos)break;
+    position=end+1;
+  }
+  return false;
+}
 void check_size(const std::filesystem::path &directory) {
   uintmax_t total=0;
   for(const auto &entry:std::filesystem::directory_iterator(directory)) {
@@ -128,28 +152,34 @@ CameraHls::CameraHls(Media &media,const std::filesystem::path &directory,Note no
   subscription_=media.subscribe(media.config.value("camera_only",false));
   worker_=std::jthread([this,&media,directory,note] {
     int64_t origin=-1,last_check=-1;bool ready=false;
+    auto announce_ready=[&] {
+      if(!ready&&playlist_ready(directory)) {
+        ready=true;note("camera_ready",{{"video_codec","h264"},{"audio_codec",media.config.value("audio",true)?"aac":"none"}});
+      }
+    };
     try {
-      Mux mux;
-      while(!stop_) {
-        auto packet=subscription_->next(stop_);
-        if(!packet) {
-          require(!media.failed(),"The camera source ended");
-          if(media.completed())break;
-          continue;
-        }
-        if(origin<0) {
-          if(packet->audio||!packet->video.keyframe)continue;
-          origin=packet->pts_us;mux.open(directory,media.config,*packet);
-        }
-        if(packet->pts_us<origin)continue;
-        mux.write(*packet,origin,media.config.at("fps"));
-        if(packet->pts_us-last_check>=500000) {
-          check_size(directory);last_check=packet->pts_us;
-          if(!ready&&std::filesystem::exists(directory/"index.m3u8")) {
-            ready=true;note("camera_ready",{{"video_codec","h264"},{"audio_codec",media.config.value("audio",true)?"aac":"none"}});
+      {
+        Mux mux;
+        while(!stop_) {
+          auto packet=subscription_->next(stop_);
+          if(!packet) {
+            require(!media.failed(),"The camera source ended");
+            if(media.completed())break;
+            continue;
+          }
+          if(origin<0) {
+            if(packet->audio||!packet->video.keyframe)continue;
+            origin=packet->pts_us;mux.open(directory,media.config,*packet);
+          }
+          if(packet->pts_us<origin)continue;
+          mux.write(*packet,origin,media.config.at("fps"));
+          if(packet->pts_us-last_check>=500000) {
+            check_size(directory);last_check=packet->pts_us;
+            announce_ready();
           }
         }
-      }
+      } // Finalize HLS before announcing a first, shorter-than-GOP segment.
+      announce_ready();
     } catch(const std::exception &) {
       // Never forward muxer details, paths, input URLs, or credentials.
       std::error_code ignored;std::filesystem::remove(directory/"index.m3u8",ignored);

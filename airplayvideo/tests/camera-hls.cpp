@@ -10,7 +10,7 @@ extern "C" {
 }
 using namespace lab;
 namespace {
-void decode(const std::filesystem::path &playlist,bool sound) {
+void decode(const std::filesystem::path &playlist,bool sound,double expected_seconds=0) {
   AVFormatContext *input=nullptr;
   require(avformat_open_input(&input,playlist.c_str(),nullptr,nullptr)>=0,"Camera HLS opens");
   try {
@@ -19,6 +19,7 @@ void decode(const std::filesystem::path &playlist,bool sound) {
     std::vector<AVCodecContext*> decoders(input->nb_streams,nullptr);
     std::vector<int> frames(input->nb_streams,0);
     std::vector<int64_t> previous(input->nb_streams,AV_NOPTS_VALUE);
+    int64_t first_decoded_video=AV_NOPTS_VALUE,last_decoded_video=AV_NOPTS_VALUE;
     AVPacket *packet=av_packet_alloc();AVFrame *frame=av_frame_alloc();
     require(packet&&frame,"Camera decode allocation");
     try {
@@ -26,19 +27,43 @@ void decode(const std::filesystem::path &playlist,bool sound) {
         const auto *par=input->streams[i]->codecpar;
         require(par->codec_id==(i==0?AV_CODEC_ID_H264:AV_CODEC_ID_AAC),"Camera HLS codecs are H.264 and AAC");
         decoders[i]=avcodec_alloc_context3(avcodec_find_decoder(par->codec_id));
-        require(decoders[i]&&avcodec_parameters_to_context(decoders[i],par)>=0&&
-                avcodec_open2(decoders[i],decoders[i]->codec,nullptr)>=0,"Camera decoder opens");
+        require(decoders[i]&&avcodec_parameters_to_context(decoders[i],par)>=0,"Camera decoder format");
+        decoders[i]->pkt_timebase=input->streams[i]->time_base;
+        require(avcodec_open2(decoders[i],decoders[i]->codec,nullptr)>=0,"Camera decoder opens");
       }
+      auto receive_frames=[&](unsigned i) {
+        for(;;) {
+          const int result=avcodec_receive_frame(decoders[i],frame);
+          if(result==AVERROR(EAGAIN)||result==AVERROR_EOF)break;
+          require(result>=0,"Camera output frame decodes without an error");
+          if(i==0) {
+            const auto pts=frame->best_effort_timestamp;
+            require(pts!=AV_NOPTS_VALUE&&(last_decoded_video==AV_NOPTS_VALUE||pts>last_decoded_video),
+                    "Decoded camera video has advancing presentation timestamps");
+            if(first_decoded_video==AV_NOPTS_VALUE)first_decoded_video=pts;
+            last_decoded_video=pts;
+          }
+          ++frames[i];av_frame_unref(frame);
+        }
+      };
       while(av_read_frame(input,packet)>=0) {
         unsigned i=packet->stream_index;require(i<decoders.size(),"Camera stream index");
         require(packet->pts!=AV_NOPTS_VALUE&&(previous[i]==AV_NOPTS_VALUE||packet->pts>previous[i]),"Camera track PTS are monotonic");
         if(previous[i]==AV_NOPTS_VALUE&&i==0) require(packet->flags&AV_PKT_FLAG_KEY,"Rolling camera playlist starts with a keyframe");
         previous[i]=packet->pts;
         require(avcodec_send_packet(decoders[i],packet)>=0,"Camera packet decodes");
-        while(avcodec_receive_frame(decoders[i],frame)>=0) {++frames[i];av_frame_unref(frame);}
+        receive_frames(i);
         av_packet_unref(packet);
       }
-      require(frames[0]>=30,"Camera HLS yields decoded video frames");
+      for(unsigned i=0;i<decoders.size();++i) {
+        require(avcodec_send_packet(decoders[i],nullptr)>=0,"Camera decoder flushes its final frames");
+        receive_frames(i);
+      }
+      if(expected_seconds>0) {
+        require(frames[0]>=2,"Finite camera clip yields advancing decoded video");
+        const double span=(last_decoded_video-first_decoded_video)*av_q2d(input->streams[0]->time_base);
+        require(span>=expected_seconds-0.15,"Finite camera decodes the complete requested presentation span");
+      } else require(frames[0]>=30,"Camera HLS yields decoded video frames");
       if(sound)require(frames[1]>=40,"Camera HLS yields decoded AAC audio");
     } catch(...) {
       for(auto *&decoder:decoders)avcodec_free_context(&decoder);
@@ -125,12 +150,12 @@ void passive(const std::filesystem::path &directory) {
           "Generated duration begins when an actual TV subscribes");
   stop=true;media.close();
 }
-void generated(const std::filesystem::path &directory) {
+void generated(const std::filesystem::path &directory,int seconds) {
   std::filesystem::create_directory(directory);chmod(directory.c_str(),0700);
   auto config=options(false);
   config["camera_only"]=true;
   config["source"]={{"kind","generated"},{"generated",{{"title","Camera"},{"tagline",""},
-    {"duration_seconds",3},{"display","countdown"},{"timezone","UTC"}}}};
+    {"duration_seconds",seconds},{"display","countdown"},{"timezone","UTC"}}}};
   std::atomic<bool> stop{false},ready{false},error{false};
   Media media(config,stop,[](const auto &,const auto &){});
   auto camera=std::make_unique<CameraHls>(media,directory,[&](const auto &event,const auto &){
@@ -138,8 +163,13 @@ void generated(const std::filesystem::path &directory) {
   });
   media.start();auto deadline=Clock::now()+std::chrono::seconds(8);
   while(!media.completed()&&!media.failed()&&Clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
-  require(ready&&!error&&!media.failed()&&media.completed(),"Camera-only generated playback starts its duration and completes without TVs or audio");
-  camera.reset();stop=true;media.close();decode(directory/"index.m3u8",false);
+  require(!media.failed(),"Camera-only generated source does not fail");
+  require(media.completed(),"Camera-only generated source finishes its duration without a TV");
+  while(!camera->done()&&Clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  require(camera->done(),"Finite camera drains its queued media and finalizes HLS");
+  require(!error,"Finite camera finalizes without an output error");
+  require(ready,"Finite camera announces ready, including clips shorter than the HLS segment target");
+  camera.reset();stop=true;media.close();decode(directory/"index.m3u8",false,seconds);
 }
 }
 int main() {
@@ -147,7 +177,7 @@ int main() {
   try {
     avdevice_register_all();av_log_set_level(AV_LOG_QUIET);
     std::filesystem::create_directory(root);chmod(root.c_str(),0700);
-    rolling(root/"rolling");passive(root/"passive");generated(root/"generated");std::filesystem::remove_all(root);
+    rolling(root/"rolling");passive(root/"passive");generated(root/"generated",3);generated(root/"short",1);std::filesystem::remove_all(root);
     std::cout<<"Camera H.264/AAC decode, rolling retention, independent subscriber, isolated failure and camera-only generated duration passed\n";
     return 0;
   } catch(const std::exception &e) {std::cerr<<e.what()<<'\n';std::filesystem::remove_all(root);return 1;}

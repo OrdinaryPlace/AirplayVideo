@@ -27,4 +27,22 @@ public:
     return true;
   }
 };
+
+// A presentation can request an immediate independently decodable picture when
+// a subscriber joins. Rate limiting may reject that particular captured frame;
+// retain its request for the next accepted frame without changing the FPS gate.
+class VideoFrameGate {
+  FrameRateGate rate_;
+  bool pending_keyframe_ = false;
+public:
+  struct Decision { bool accepted = false, keyframe = false; };
+  VideoFrameGate(int fps, bool source_paced):rate_(fps,source_paced) {}
+  Decision accept(int64_t pts_us, bool keyframe_requested) {
+    pending_keyframe_ = pending_keyframe_ || keyframe_requested;
+    if(!rate_.accept(pts_us))return {};
+    const bool keyframe = pending_keyframe_;
+    pending_keyframe_ = false;
+    return {true,keyframe};
+  }
+};
 }

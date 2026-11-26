@@ -13,7 +13,7 @@ import pytest_asyncio
 
 from service import camera as module
 from service.camera import CameraOutput, NativeCameraSession
-from service.model import Store, private_json
+from service.model import Store, UserError, private_json
 
 
 def source(directory, *, native=None):
@@ -430,3 +430,200 @@ async def test_completed_unselected_or_unready_sources_stay_with_controller_clea
     (x.camera.directory / "index.m3u8").unlink()
     assert not x.camera.retain_completed(x.controller.stream)
     assert x.camera.draining is None
+
+
+def pending_camera(x, stream):
+    x.controller.pending = stream
+    x.controller.generation = getattr(x.controller, "generation", 0) + 1
+    return stream
+
+
+@pytest.mark.asyncio
+async def test_prewarm_keeps_old_camera_serving_until_complete_candidate_is_atomically_activated(output):
+    x = output
+    old = x.camera.owner
+    directory = x.root / "prewarming-source"
+    directory.mkdir()
+    candidate = pending_camera(x, SimpleNamespace(config={"camera_directory": str(directory)}))
+    preparing = asyncio.create_task(x.camera.prepare(candidate))
+    async with asyncio.timeout(1):
+        while not x.camera.has_prepared(candidate):
+            await asyncio.sleep(0.01)
+    # A playlist alone is insufficient; the advertised final segment must exist.
+    (directory / "index.m3u8").write_text("#EXTM3U\n#EXTINF:2,\nsegment000000001.ts\n")
+    await asyncio.sleep(0.1)
+    assert not preparing.done() and x.camera.owner is old
+    async with x.client.get(x.camera.base_url + "/stream.m3u8") as response:
+        assert response.status == 200 and "/generation-one/" in await response.text()
+    (directory / "segment000000001.ts").write_bytes(b"new-media")
+    await asyncio.wait_for(preparing, 1)
+    assert x.camera.owner is old, "Successful prewarm does not commit playback"
+    await x.camera.activate(candidate)
+    # During Controller's old-TV teardown, activated pending owns the camera.
+    await asyncio.sleep(0.6)
+    assert x.camera.owner is candidate and not x.camera.has_prepared(candidate)
+    async with x.client.get(x.camera.base_url + "/stream.m3u8") as response:
+        assert response.status == 200 and "/prewarming-source/" in await response.text()
+    async with x.client.get(x.camera.base_url + "/generation-one/segment000000001.ts") as response:
+        assert response.status == 404
+    x.controller.stream, x.controller.pending = candidate, None
+
+
+@pytest.mark.asyncio
+async def test_cancelling_hevc_prewarm_reaps_only_staging_converter_promptly_and_preserves_current(output, monkeypatch):
+    x = output
+    old = x.camera.owner
+    process = Process()
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", AsyncMock(return_value=process))
+    candidate = pending_camera(x, source(x.root / "prewarm-hevc", native="hevc"))
+    preparing = asyncio.create_task(x.camera.prepare(candidate))
+    async with asyncio.timeout(1):
+        while not x.camera.has_prepared(candidate) or x.camera.prepared[id(candidate)].transcoder is None:
+            await asyncio.sleep(0.01)
+    staged_directory = x.camera.prepared[id(candidate)].directory
+    x.controller.pending = None
+    x.controller.generation += 1
+    with pytest.raises(UserError, match="cancelled"):
+        await asyncio.wait_for(preparing, 0.3)
+    assert process.terminated and not staged_directory.exists()
+    assert candidate.producer.directory.is_dir()
+    assert x.camera.owner is old and x.camera.ready and not x.camera.prepared
+    async with x.client.get(x.camera.base_url + "/stream.m3u8") as response:
+        assert response.status == 200 and "/generation-one/" in await response.text()
+
+
+@pytest.mark.asyncio
+async def test_prewarm_timeout_preserves_served_camera_and_stream_owned_directory(output, monkeypatch):
+    x = output
+    monkeypatch.setattr(module, "_PREPARE_SECONDS", 0)
+    directory = x.root / "unready-camera"
+    directory.mkdir()
+    candidate = pending_camera(x, SimpleNamespace(config={"camera_directory": str(directory)}))
+    with pytest.raises(UserError, match="did not produce video in time"):
+        await x.camera.prepare(candidate)
+    assert directory.is_dir() and x.camera.owner is x.controller.stream and x.camera.ready
+    assert not x.camera.prepared
+
+
+@pytest.mark.asyncio
+async def test_cancel_before_activation_lock_commit_keeps_old_output_until_explicit_discard(output):
+    x = output
+    old = x.camera.owner
+    candidate = pending_camera(x, source(x.root / "ready-but-cancelled"))
+    await x.camera.prepare(candidate)
+    await x.camera.selection_lock.acquire()
+    activating = asyncio.create_task(x.camera.activate(candidate))
+    await asyncio.sleep(0)
+    x.controller.pending = None
+    x.controller.generation += 1
+    x.camera.selection_lock.release()
+    with pytest.raises(UserError, match="cancelled"):
+        await activating
+    assert x.camera.owner is old and x.camera.ready
+    await x.camera.discard_prepared(candidate)
+    assert not x.camera.prepared and Path(candidate.config["camera_directory"]).is_dir()
+
+
+@pytest.mark.asyncio
+async def test_hevc_prewarm_activation_and_producer_adoption_keep_converter_and_generation(output, monkeypatch):
+    x = output
+    process = Process()
+
+    async def spawn(*args, **options):
+        source(Path(args[-1]).parent)
+        return process
+
+    create = AsyncMock(side_effect=spawn)
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", create)
+    candidate = pending_camera(x, source(x.root / "new-native-hevc", native="hevc"))
+    old = x.camera.owner
+    await x.camera.prepare(candidate)
+    assert x.camera.owner is old and x.camera.ready
+    await x.camera.activate(candidate)
+    converted, epoch = x.camera.directory, x.camera.identity["epoch"]
+    assert converted != candidate.producer.directory and x.camera.owned_directory
+    transferred, candidate.producer = candidate.producer, None
+    adopted = SimpleNamespace(producer=transferred)
+    await x.camera.select(adopted)
+    x.controller.stream, x.controller.pending = adopted, None
+    assert x.camera.directory == converted and x.camera.transcoder is process
+    assert x.camera.identity["epoch"] == epoch and create.await_count == 1
+    assert not process.terminated and x.camera.ready
+
+
+@pytest.mark.asyncio
+async def test_app_close_discards_prepared_hevc_resources_without_deleting_stream_owned_media(output, monkeypatch):
+    x = output
+    process = Process()
+
+    async def spawn(*args, **options):
+        source(Path(args[-1]).parent)
+        return process
+
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", AsyncMock(side_effect=spawn))
+    candidate = pending_camera(x, source(x.root / "staged-native", native="hevc"))
+    await x.camera.prepare(candidate)
+    staged = x.camera.prepared[id(candidate)].directory
+    await x.camera.close()
+    assert process.terminated and not staged.exists() and not x.camera.prepared
+    assert candidate.producer.directory.is_dir()
+
+
+@pytest.mark.asyncio
+async def test_completed_candidate_final_playlist_can_be_activated_after_engine_exit(output):
+    x = output
+    candidate = pending_camera(x, complete_stream(source(x.root / "already-completed")))
+    candidate.process = SimpleNamespace(returncode=0)
+    await x.camera.prepare(candidate)
+    await x.camera.activate(candidate)
+    assert x.camera.retain_completed(candidate)
+    x.controller.stream, x.controller.pending = None, None
+    async with x.client.get(x.camera.base_url + "/stream.m3u8") as response:
+        assert response.status == 200 and "#EXT-X-ENDLIST" in await response.text()
+    await x.camera.cancel_drain()
+    candidate.close.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_cancel_borrowed_unready_candidate_cancels_stage_without_closing_shared_producer(output):
+    x = output
+    active = source(x.root / "borrowed-native", native="h264")
+    x.controller.stream = active
+    await x.camera.select(active)
+    (active.producer.directory / "index.m3u8").unlink()
+    adopted = pending_camera(x, SimpleNamespace(producer=active.producer))
+    preparing = asyncio.create_task(x.camera.prepare(adopted))
+    async with asyncio.timeout(1):
+        while not x.camera.has_prepared(adopted) or x.camera.prepared[id(adopted)].task is None:
+            await asyncio.sleep(0.01)
+    candidate = x.camera.prepared[id(adopted)]
+    assert candidate.borrowed
+    x.controller.pending = None
+    x.controller.generation += 1
+    with pytest.raises(UserError, match="cancelled"):
+        await asyncio.wait_for(preparing, 0.3)
+    assert candidate.task.done() and candidate.task.cancelled()
+    assert x.camera.owner is active and active.producer.directory.is_dir()
+    assert x.camera.selected_producer is active.producer and not x.camera.prepared
+
+
+@pytest.mark.asyncio
+async def test_hevc_clean_converter_eof_preserves_ready_final_buffer(output, monkeypatch):
+    x = output
+    process = Process()
+    process.returncode = 0
+
+    async def spawn(*args, **options):
+        directory = Path(args[-1]).parent
+        complete_stream(source(directory))
+        return process
+
+    monkeypatch.setattr(module.asyncio, "create_subprocess_exec", AsyncMock(side_effect=spawn))
+    candidate = pending_camera(x, source(x.root / "finished-native", native="hevc"))
+    await x.camera.prepare(candidate)
+    await x.camera.activate(candidate)
+    x.controller.stream, x.controller.pending = candidate, None
+    await asyncio.sleep(0.6)
+    assert x.camera.ready and not x.camera.error
+    async with x.client.get(x.camera.base_url + "/stream.m3u8") as response:
+        assert response.status == 200 and "#EXT-X-ENDLIST" in await response.text()

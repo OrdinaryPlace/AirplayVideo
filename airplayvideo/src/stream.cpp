@@ -78,8 +78,15 @@ int run_stream(const Json &config,const std::filesystem::path &directory,
     }
   });
   while(!stop&&!media.failed()&&!media.completed()) std::this_thread::sleep_for(std::chrono::milliseconds(50));
+  const bool natural_completion=media.completed()&&!media.failed()&&!stop;
   stop=true; commands.request_stop(); commands.join();
   recording.reset();
+  if(camera&&natural_completion) {
+    // Let a finite source's camera consume its remaining queued packets and
+    // publish the final playlist. Stop/error paths do not wait for this drain.
+    const auto deadline=Clock::now()+std::chrono::seconds(2);
+    while(!camera->done()&&Clock::now()<deadline)std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
   camera.reset();
   for(auto &[id,s]:sessions) s->stop=true;
   media.close(); sessions.clear();

@@ -74,6 +74,7 @@ class Stream:
         self.stopping = False
         self.completed = False
         self.camera_error = ""
+        self.exit_result = None
         self.write_lock = asyncio.Lock()
         self.close_lock = asyncio.Lock()
 
@@ -117,7 +118,8 @@ class Stream:
             code = await self.process.wait()
             if not self.ready.done():
                 self.ready.set_exception(UserError("Playback was cancelled" if self.stopping else "The media process exited during startup"))
-            await self.callback(self, "process_exit", {"code": code, "requested": self.stopping, "completed": self.completed})
+            self.exit_result = {"code": code, "requested": self.stopping, "completed": self.completed}
+            await self.callback(self, "process_exit", self.exit_result)
 
     async def command(self, command):
         check(self.process and self.process.returncode is None and not self.stopping, "Playback is no longer running")
@@ -424,6 +426,11 @@ class Controller:
                 self.pending_targets = target.copy()
                 await pending.start()
                 check(generation == self.generation and self.pending is pending, "Playback was cancelled")
+                if self.camera_enabled:
+                    await self.camera.prepare(pending)
+                    check(generation == self.generation and self.pending is pending, "Playback was cancelled")
+                    await self.camera.activate(pending)
+                    check(generation == self.generation and self.pending is pending, "Playback was cancelled")
                 if self.stream:
                     old, self.stream = self.stream, None
                     self.targets.clear()
@@ -441,6 +448,14 @@ class Controller:
             self.source = source
             self.phase = "connecting" if target else "playing"
             active = self.stream
+            if (exit_result := getattr(active, "exit_result", None)) is not None:
+                # A short camera-only clip may finalize while its first HLS
+                # playlist is warming up. Replay the already-owned exit once
+                # the camera is active, so its complete final buffer can drain.
+                await self.event(active, "process_exit", exit_result)
+                if self.stream is not active:
+                    self.notify()
+                    return
             for receiver_id in target:
                 check(generation == self.generation and self.stream is active, "Playback was cancelled")
                 receiver = self.store.receiver(receiver_id)
@@ -452,6 +467,8 @@ class Controller:
             self.notify()
         except BaseException:
             if pending and pending is not self.stream:
+                if self.camera:
+                    await self.camera.discard_prepared(pending)
                 await pending.close()
                 if self.pending is pending:
                     self.pending = None
@@ -487,6 +504,11 @@ class Controller:
         try:
             await pending.prepare(source["url"])
             check(generation == self.generation and self.pending is pending, "Playback was cancelled")
+            if self.camera_enabled:
+                await self.camera.prepare(pending)
+                check(generation == self.generation and self.pending is pending, "Playback was cancelled")
+                await self.camera.activate(pending)
+                check(generation == self.generation and self.pending is pending, "Playback was cancelled")
             old, self.stream = self.stream, None
             replaced = True
             if old:
@@ -513,6 +535,8 @@ class Controller:
             task.add_done_callback(self.cleanup_tasks.discard)
             self.notify()
         except BaseException as exc:
+            if self.camera:
+                await self.camera.discard_prepared(pending)
             await pending.close()
             self.native_report = pending.status
             if self.pending is pending:

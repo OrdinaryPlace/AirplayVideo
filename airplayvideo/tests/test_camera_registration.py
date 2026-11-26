@@ -114,7 +114,7 @@ async def test_creates_native_stream_camera_once_and_preserves_customizations(co
     x.state.commands.clear()
     assert (await x.registration.ensure(STREAM, SNAPSHOT))["entity_id"] == "camera.custom_video"
     assert x.state.created == 1 and x.state.updated == 0
-    assert not any(command["type"] == "config/entity_registry/update" for command in x.state.commands)
+    assert not any(command["type"].endswith("/update") for command in x.state.commands)
 
 
 @pytest.mark.asyncio
@@ -134,6 +134,25 @@ async def test_disabled_camera_is_not_enabled_or_replaced(core):
     x.state.entries[0]["disabled_by"] = "user"
     x.state.requests.clear()
     assert (await x.registration.ensure(STREAM, SNAPSHOT))["status"] == "disabled"
+    assert x.state.created == 1 and x.state.updated == 0
+    assert all(method == "GET" for method, _, _ in x.state.requests)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disabled_by", ["user", "device"])
+async def test_disabled_entity_or_device_is_reported_and_never_renamed(core, disabled_by):
+    x = core
+    await x.registration.ensure(STREAM, SNAPSHOT)
+    x.state.entities[0].update(disabled_by=disabled_by, entity_id="camera.custom_disabled_video", name="My video")
+    # Even if first-time naming was interrupted, never rename a disabled entity.
+    x.registration.save(named=False)
+    x.state.commands.clear()
+    x.state.requests.clear()
+    result = await x.registration.ensure(STREAM, SNAPSHOT)
+    assert result["status"] == "disabled" and result["entity_id"] == "camera.custom_disabled_video"
+    assert x.state.entities[0]["disabled_by"] == disabled_by
+    assert x.state.entities[0]["name"] == "My video"
+    assert not any(command["type"].endswith("/update") for command in x.state.commands)
     assert x.state.created == 1 and x.state.updated == 0
     assert all(method == "GET" for method, _, _ in x.state.requests)
 
@@ -215,3 +234,15 @@ async def test_oversized_core_response_is_rejected_without_creating_camera(core)
     result = await x.registration.ensure(STREAM, SNAPSHOT)
     assert result["status"] == "pending" and "oversized" in result["error"]
     assert x.state.created == 0 and x.state.updated == 0
+
+
+@pytest.mark.asyncio
+async def test_large_home_registry_over_two_megabytes_can_register_camera(core):
+    x = core
+    x.state.entities.extend({"entity_id": "sensor.unrelated_" + str(index),
+                             "config_entry_id": "unrelated", "name": "x" * 1000} for index in range(2500))
+    size = len(json.dumps(x.state.entities).encode())
+    assert 2 * 1024 * 1024 < size < 8 * 1024 * 1024
+    result = await x.registration.ensure(STREAM, SNAPSHOT)
+    assert result == {"status": "ready", "entity_id": ENTITY_ID, "error": ""}
+    assert x.state.created == 1 and len(x.state.entities) == 2501

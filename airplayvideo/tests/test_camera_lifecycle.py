@@ -2,7 +2,7 @@
 import asyncio
 import copy
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 import pytest
 
@@ -12,6 +12,11 @@ from service.model import UserError
 from test_capitals import context as game_context
 from test_lifecycle import A, B, Stream, request, setup
 from test_native_controller import native
+
+
+def camera_output(allocate):
+    return SimpleNamespace(enabled=True, allocate=allocate, prepare=AsyncMock(),
+                           activate=AsyncMock(), discard_prepared=AsyncMock(), cancel_drain=AsyncMock())
 
 
 @pytest.fixture
@@ -25,7 +30,7 @@ def camera(setup, tmp_path):
         directories.append(directory)
         return directory
 
-    control.camera = SimpleNamespace(enabled=True, allocate=allocate)
+    control.camera = camera_output(allocate)
     return SimpleNamespace(store=store, control=control, directories=directories)
 
 
@@ -223,7 +228,7 @@ async def test_direct_camera_warmup_is_cancelled_by_global_stop(native_camera):
 @pytest.mark.asyncio
 async def test_targeted_native_tv_stop_preserves_selected_camera_source(native, tmp_path):
     _, c, _, _ = native
-    c.camera = SimpleNamespace(enabled=True, allocate=lambda: tmp_path / "camera")
+    c.camera = camera_output(lambda: tmp_path / "camera")
     await c.play({"mode": "browser", "browser_source": "youtube", "url": "https://youtu.be/aqz-KE-bpKQ",
                   "receivers": [A], "camera": True})
     source = copy.deepcopy(c.source)
@@ -240,7 +245,7 @@ async def test_targeted_native_tv_stop_preserves_selected_camera_source(native, 
 @pytest.mark.asyncio
 async def test_stop_pending_native_tv_keeps_prior_camera_only_source_playing(native, tmp_path):
     _, c, Session, _ = native
-    c.camera = SimpleNamespace(enabled=True, allocate=lambda: tmp_path / "camera")
+    c.camera = camera_output(lambda: tmp_path / "camera")
     await c.play(only_camera(mode="hdhomerun", channel="ABCDEF12:4.1"))
     old = c.stream
     Session.gate = asyncio.Event()
@@ -260,7 +265,7 @@ async def test_stop_pending_native_tv_keeps_prior_camera_only_source_playing(nat
 @pytest.mark.asyncio
 async def test_capitals_manual_play_can_select_camera_without_a_tv(game_context, tmp_path):
     x = game_context
-    x.control.camera = SimpleNamespace(enabled=True, allocate=lambda: tmp_path / "camera")
+    x.control.camera = camera_output(lambda: tmp_path / "camera")
     await x.launcher.play_current({"receivers": [], "camera": True})
     assert x.launcher.state()["status"] == "started"
     assert x.control.source["profile"] == "sportsnet" and x.control.phase == "playing"
@@ -280,3 +285,161 @@ async def test_adopted_native_camera_does_not_restart_producer_and_close_interru
     await session.close()
     await asyncio.wait_for(waiting, 1)
     assert producer.closed and session.closed.is_set()
+
+
+def replacement_request(kind):
+    if kind == "native":
+        return {"mode": "browser", "browser_source": "youtube", "url": "https://youtu.be/aqz-KE-bpKQ",
+                "receivers": [B], "camera": True}
+    return request(B, channel="ABCDEF12:4.2")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["broadcast", "native"])
+async def test_camera_prewarm_must_finish_before_replacing_current_source_and_tv(camera, native, kind):
+    c = camera.control
+    assert native[1] is c
+    await c.play(request())
+    old, source = c.stream, copy.deepcopy(c.source)
+    await c.event(old, "streaming", {"id": A})
+    warming, release = asyncio.Event(), asyncio.Event()
+    order = []
+
+    async def prepare(_stream):
+        warming.set()
+        await release.wait()
+        order.append("camera_ready")
+
+    async def activate(_stream):
+        order.append("activate")
+
+    original_close = old.close
+
+    async def close_old():
+        order.append("old_close")
+        await original_close()
+
+    old.close = close_old
+    c.camera.prepare.side_effect = prepare
+    c.camera.activate.reset_mock()
+    c.camera.activate.side_effect = activate
+    starting = asyncio.create_task(c.play(replacement_request(kind)))
+    try:
+        await asyncio.wait_for(warming.wait(), 1)
+        assert c.stream is old and not old.closed and c.source == source and c.targets == {A}
+        assert c.receivers[A]["state"] == "streaming" and c.pending is not old
+        c.camera.activate.assert_not_awaited()
+        assert not order
+    finally:
+        release.set()
+    await starting
+    assert order == ["camera_ready", "activate", "old_close"]
+    assert old.closed and c.stream is not old and c.targets == {B}
+    await c.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["broadcast", "native"])
+async def test_camera_prewarm_error_preserves_previous_source_and_tv(camera, native, kind):
+    c = camera.control
+    await c.play(request())
+    old, source = c.stream, copy.deepcopy(c.source)
+    c.camera.activate.reset_mock()
+    c.camera.discard_prepared.reset_mock()
+    pending = []
+
+    async def unavailable(stream):
+        pending.append(stream)
+        raise UserError("Fixture camera prewarm failed")
+
+    c.camera.prepare.side_effect = unavailable
+    with pytest.raises(UserError, match="camera prewarm failed"):
+        await c.play(replacement_request(kind))
+    assert c.stream is old and not old.closed and c.source == source and c.targets == {A}
+    assert c.phase == "playing" and c.pending is None and c.status()["media_busy"]
+    assert len(pending) == 1 and pending[0].closed
+    c.camera.activate.assert_not_awaited()
+    c.camera.discard_prepared.assert_awaited_once_with(pending[0])
+    await c.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["broadcast", "native"])
+async def test_scoped_stop_during_camera_prewarm_cancels_new_source_and_keeps_old_camera(camera, native, kind):
+    c = camera.control
+    await c.play(only_camera(mode="hdhomerun", channel="ABCDEF12:4.1"))
+    old, source = c.stream, copy.deepcopy(c.source)
+    warming, release = asyncio.Event(), asyncio.Event()
+
+    async def prepare(_stream):
+        warming.set()
+        await release.wait()
+
+    c.camera.prepare.side_effect = prepare
+    c.camera.activate.reset_mock()
+    c.camera.discard_prepared.reset_mock()
+    starting = asyncio.create_task(c.play(replacement_request(kind)))
+    try:
+        await asyncio.wait_for(warming.wait(), 1)
+        pending = c.pending
+        assert c.pending_targets == {B}
+        await c.stop(B)
+        assert pending.closed and c.stream is old and not old.closed
+        assert c.source == source and c.phase == "playing" and not c.targets
+        c.camera.activate.assert_not_awaited()
+    finally:
+        release.set()
+    with pytest.raises(UserError, match="cancelled"):
+        await starting
+    assert c.stream is old and not old.closed and c.source == source and c.phase == "playing"
+    assert not c.targets and not c.pending_targets and c.pending is None
+    c.camera.activate.assert_not_awaited()
+    c.camera.discard_prepared.assert_awaited_once_with(pending)
+    await c.close()
+
+
+@pytest.mark.asyncio
+async def test_short_camera_clip_completed_during_prewarm_is_replayed_once_after_activation(camera, monkeypatch):
+    c = camera.control
+    order, retained = [], []
+    original_start, original_event = Stream.start, c.event
+    completed = {"code": 0, "requested": False, "completed": True}
+
+    async def event(stream, name, fields):
+        if name == "process_exit":
+            order.append("pending_exit" if stream is c.pending else "active_exit")
+        await original_event(stream, name, fields)
+
+    async def short_clip(stream):
+        await original_start(stream)
+        stream.exit_result = completed.copy()
+        await c.event(stream, "process_exit", stream.exit_result)
+
+    async def activate(stream):
+        assert stream.exit_result == completed and stream is c.pending
+        order.append("activate")
+
+    def retain(stream):
+        order.append("retain")
+        retained.append(stream)
+        return True
+
+    async def cancel_drain():
+        for stream in retained:
+            await stream.close()
+
+    c.event = event
+    monkeypatch.setattr(Stream, "start", short_clip)
+    c.camera.activate.side_effect = activate
+    c.camera.retain_completed = Mock(side_effect=retain)
+    c.camera.cancel_drain.side_effect = cancel_drain
+    await c.play(only_camera(mode="generated", generated={"title": "Short fixture", "duration_seconds": 1}))
+    finished = Stream.created[0]
+    assert order == ["pending_exit", "activate", "active_exit", "retain"]
+    c.camera.retain_completed.assert_called_once_with(finished)
+    assert retained == [finished] and not finished.closed
+    runtime = c.status()
+    assert runtime["phase"] == "idle" and runtime["source"] is None and not runtime["media_busy"]
+    assert c.stream is None and c.pending is None and not c.targets and not c.error
+    await c.close()
+    assert finished.closed
