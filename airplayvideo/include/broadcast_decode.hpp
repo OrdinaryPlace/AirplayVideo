@@ -1,4 +1,5 @@
 #pragma once
+#include <cstdint>
 extern "C" {
 #include <libavcodec/codec_id.h>
 #include <libavutil/error.h>
