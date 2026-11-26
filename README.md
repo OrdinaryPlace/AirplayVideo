@@ -11,7 +11,7 @@ Play browser pages, HDHomeRun channels, or generated videos through a Home
 Assistant camera, on your Apple TVs, or both. One shared source supplies the
 selected outputs. Each TV has its own AirPlay pairing and connection.
 
-**Experimental, version 0.2.31.** This is an independent implementation in a new
+**Experimental, version 0.2.32.** This is an independent implementation in a new
 repository. It builds on our C++ mirroring and container capture experiments;
 it does not contain Double Take source or its Git history.
 

@@ -2,6 +2,7 @@
 #include "stream.hpp"
 #include "generated.hpp"
 #include "frame_rate.hpp"
+#include "broadcast_decode.hpp"
 #include "video_rate.hpp"
 #include "vaapi_rate.hpp"
 #include "frame_probe.hpp"
@@ -417,14 +418,14 @@ struct Media::Impl {
       std::mutex origin_mutex;
       struct DecoderProgress { Clock::time_point last_frame=Clock::now(); unsigned invalid=0; };
       auto decode=[&](int index,AVPacket *packet,DecoderProgress &state,std::stop_token ending) {
+        auto *decoder=decoders.at(index).get();
         auto recover=[&](int error) {
-          if(!network||error!=AVERROR_INVALIDDATA) return false;
+          if(!network||!recoverable_broadcast_decode_error(decoder->codec_id,error)) return false;
           // A broadcast can begin between sequence headers/keyframes. Keep
           // decoder state until usable data arrives, with a finite loss limit.
           require(++state.invalid<=256,"Channel has too much damaged data; check reception and reconnect");
           return true;
         };
-        auto *decoder=decoders.at(index).get();
         int decoded=avcodec_send_packet(decoder,packet);
         if(recover(decoded)) return;
         check(decoded,"Decode source packet");

@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.32
+
+- Recover from bounded AC-3 audio synchronization errors in live tuner input
+  instead of stopping playback immediately. Retain the damaged-packet limit
+  and usable-frame timeout so persistent reception failures still stop safely.
+
 ## 0.2.31
 
 - Show the selected-video camera name once in Home Assistant. Correct the
